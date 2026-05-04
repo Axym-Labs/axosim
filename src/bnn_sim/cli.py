@@ -26,12 +26,14 @@ from bnn_sim.experiments import (
     resolve_registry_path,
 )
 from bnn_sim.evaluate import evaluate_dataset, write_metrics
+from bnn_sim.mamba_lite import BranchMambaLite, BranchMambaLiteConfig
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.neuronio_raw import convert_neuronio_pickles
 from bnn_sim.official import create_official_elm, load_official_elm_config, load_official_state_dict
 from bnn_sim.train import train_and_save
 
 DEFAULT_OFFICIAL_MODEL_CONFIG = "configs/branch_elm_30_official.json"
+DEFAULT_MAMBA_LITE_MODEL_CONFIG = "configs/branch_mamba_lite_45x64.json"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument("--input-dim", type=int, default=1278)
     evaluate.add_argument("--memory-units", type=int, default=30)
     evaluate.add_argument("--branches", type=int, default=32)
-    evaluate.add_argument("--model-kind", choices=["baseline", "official"], default="baseline", help="use 'official' for the paper-style model; 'baseline' is legacy/debug")
+    evaluate.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite"], default="baseline", help="use 'official' for the paper-style model, 'mamba-lite' for the parallel temporal experiment; 'baseline' is legacy/debug")
     evaluate.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     evaluate.add_argument("--batch-size", type=int, default=8)
     evaluate.add_argument("--seed", type=int, default=0)
@@ -98,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--input-dim", type=int, default=1278)
     train.add_argument("--memory-units", type=int, default=30)
     train.add_argument("--branches", type=int, default=32)
-    train.add_argument("--model-kind", choices=["baseline", "official"], default="baseline", help="use 'official' for the paper-style model; 'baseline' is legacy/debug")
+    train.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite"], default="baseline", help="use 'official' for the paper-style model, 'mamba-lite' for the parallel temporal experiment; 'baseline' is legacy/debug")
     train.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     train.add_argument("--epochs", type=int, default=1)
     train.add_argument("--batch-size", type=int, default=8)
@@ -152,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--input-dim", type=int, default=1278)
     benchmark.add_argument("--memory-units", type=int, default=30)
     benchmark.add_argument("--branches", type=int, default=32)
-    benchmark.add_argument("--model-kind", choices=["baseline", "official"], default="baseline", help="use 'official' for the paper-style model; 'baseline' is legacy/debug")
+    benchmark.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite"], default="baseline", help="use 'official' for the paper-style model, 'mamba-lite' for the parallel temporal experiment; 'baseline' is legacy/debug")
     benchmark.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     benchmark.add_argument("--batch-size", type=int, default=1)
     benchmark.add_argument("--time-steps", type=int, default=500)
@@ -422,6 +424,9 @@ def _build_dataset(
 def _build_model_from_args(args):
     if args.model_kind == "official":
         return create_official_elm(load_official_elm_config(args.model_config))
+    if args.model_kind == "mamba-lite":
+        config_path = args.model_config if args.model_config != DEFAULT_OFFICIAL_MODEL_CONFIG else DEFAULT_MAMBA_LITE_MODEL_CONFIG
+        return BranchMambaLite(BranchMambaLiteConfig(**load_official_elm_config(config_path)))
     config = BranchELMConfig(input_dim=args.input_dim, memory_units=args.memory_units, num_branches=args.branches)
     return BranchELM(config)
 
