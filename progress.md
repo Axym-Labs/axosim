@@ -43,3 +43,26 @@ Concise record of runs and decisions. Metrics JSON paths are the source of truth
 - **Default validation semantics updated**: training validation now defaults to full-trace evaluation when `--val-window-size` is unset, ignores original `<500 ms` for metrics, and enables official-style soma affine calibration. Smoke check on all 5 full-trace val shards completed end-to-end. Metrics: `/workspace/runs/full_trace_replication_smoke.json`.
 - **Started bounded full-trace replication run**: 3 epochs x 5,000 batches x batch 8 = `120,000` presentations (`4.39%` of paper `2,736,000`). Training samples random 500-step windows with starts `>=500` from all full-trace train shards, using shard reuse 64 and one-step prefetch; validation uses all full-trace val shards with default full-context metric semantics. Run dir: `/workspace/runs/full_trace_replication_3x5000_b8_reuse64_20260503_170636`.
 - **Started paper-like long full-trace run**: stopped the burn-in-0 launch after confirming paper Appendix B says NeuronIO loss was calculated after a `150 ms` burn-in. Relaunched 10 epochs x 10,000 batches x batch 8 = `800,000` presentations (`29.24%` of paper-style `2,736,000`; `28.57%` of repo `35*10000*8`) to use the 16-20h budget. Uses 500-step random windows with starts `>=500`, Adam LR `5e-4`, cosine full horizon, training loss after `burn_in=150`, and shard reuse 58 to approximate official `file_load_fraction=0.3` for 128-simulation files. Run dir: `/workspace/runs/paper_like_fulltrace_10x10000_b8_reuse58_burn150_20260503_202435`.
+
+## 2026-05-04
+
+- **Paper-like long run finished**: `/workspace/runs/paper_like_fulltrace_10x10000_b8_reuse58_burn150_20260503_202435/metrics.json`. Best epoch `10`; best val RMSE `0.7620 mV`; best val AUC `0.99095`; total runtime `16.35 h`; total compute `800,000` presentations. This is materially closer to paper (`0.628`, `0.9927`) but still leaves a real RMSE gap.
+- **Official-style sampler added**: new `official-full-trace` mode groups by original raw source file and approximates official `file_load_fraction` sampling semantics while keeping deterministic rebuilt full-trace shards. Code paths: `src/bnn_sim/data.py`, `src/bnn_sim/cli.py`; smoke-tested successfully.
+- **Official-style sampler probe underperformed early**: `/workspace/runs/official_fulltrace_probe_4x2500_b8_burn150_20260504_130016/metrics.json`. At `80,000` presentations, best val RMSE `0.9681`, AUC `0.9826`, clearly worse than the earlier `random-full-trace` curve at matched compute.
+- **Official repo compatibility probe matched our local implementation**: cloned repo at `/workspace/elmneuron`; compatibility runner uses official `ELM` + `NeuronioLoss` with our rebuilt full-trace data. Run `/workspace/runs/elmneuron_repo_probe_4x2500_b8_burn150_progress_20260504_164234/out/metrics.json` reproduced the same per-epoch RMSE/AUC as our `official-full-trace` probe. Main insight: model/loss port is not the reason for the poorer official-style convergence.
+- **Working defaults after replication checks**:
+  - training sampler default: `random-full-trace`
+  - training burn-in: `150 ms`
+  - validation: full-trace recurrence, ignore original `<500 ms`, affine soma calibration
+  - official-style sampler remains a reference path, not the default, unless a longer run shows it overtakes `random-full-trace`
+- **Low-compute replication evidence saved in-repo**: [notes/low_compute_replication_success.md](/workspace/bnn_sim/notes/low_compute_replication_success.md) records that our local official-style implementation and the official repo compatibility runner matched exactly on the same `80,000`-presentation probe. This is the main evidence that model/loss porting is not the source of the official-style convergence gap.
+- **Architecture / efficiency ideas queued for next phase**:
+  - replace or hybridize the recurrent memory core with a more parallelizable state-space / Mamba-style core
+  - learn memory time constants instead of fixing them
+  - replace the simple memory-update MLP with a more structured gated update block
+  - revisit activation choices and other lightweight inductive-bias improvements in the update rule
+  - explore a small engram-style latent memory mechanism
+  - learn branch routing instead of relying only on fixed morphology-based routing
+  - try multi-scale memory with explicit short / medium / long latent groups
+  - consider separate spike and voltage heads earlier in the network
+  - keep event-driven / sparse computation ideas on the efficiency track
