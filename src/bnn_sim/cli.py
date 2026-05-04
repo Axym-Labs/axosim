@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -17,6 +18,13 @@ from bnn_sim.data import (
     repack_shards_as_npy,
     write_demo_shards,
 )
+from bnn_sim.experiments import (
+    append_registry_entry,
+    apply_preset,
+    build_registry_entry,
+    list_presets,
+    resolve_registry_path,
+)
 from bnn_sim.evaluate import evaluate_dataset, write_metrics
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.neuronio_raw import convert_neuronio_pickles
@@ -27,6 +35,7 @@ DEFAULT_OFFICIAL_MODEL_CONFIG = "configs/branch_elm_30_official.json"
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(prog="bnn-sim")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -51,13 +60,16 @@ def main(argv: list[str] | None = None) -> int:
     repack.add_argument("--output", required=True)
     repack.add_argument("--input-dtype", choices=["int8", "float32"], default="int8")
 
-    evaluate = subparsers.add_parser("evaluate", help="evaluate an untrained Branch-ELM smoke baseline")
+    preset_list = subparsers.add_parser("list-presets", help="list named train/evaluate presets")
+
+    evaluate = subparsers.add_parser("evaluate", help="evaluate a model with the corrected full-trace metric path")
+    evaluate.add_argument("--preset", choices=sorted(list_presets()["evaluate"]))
     evaluate.add_argument("--data", required=True)
     evaluate.add_argument("--output", required=True)
     evaluate.add_argument("--input-dim", type=int, default=1278)
     evaluate.add_argument("--memory-units", type=int, default=30)
     evaluate.add_argument("--branches", type=int, default=32)
-    evaluate.add_argument("--model-kind", choices=["baseline", "official"], default="baseline")
+    evaluate.add_argument("--model-kind", choices=["baseline", "official"], default="baseline", help="use 'official' for the paper-style model; 'baseline' is legacy/debug")
     evaluate.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     evaluate.add_argument("--batch-size", type=int, default=8)
     evaluate.add_argument("--seed", type=int, default=0)
@@ -69,21 +81,24 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument("--cache-shards", type=int, default=1)
     evaluate.add_argument("--soma-units", choices=["millivolts", "normalized"], default="millivolts")
     evaluate.add_argument("--metric-ignore-start", type=int, default=0)
-    evaluate.add_argument("--metric-mask-mode", choices=["ignore-start", "official-overlap"], default="ignore-start")
-    evaluate.add_argument("--metric-stitch-burn-in", type=int, default=150)
+    evaluate.add_argument("--metric-mask-mode", choices=["ignore-start", "official-overlap"], default="ignore-start", help=argparse.SUPPRESS)
+    evaluate.add_argument("--metric-stitch-burn-in", type=int, default=150, help=argparse.SUPPRESS)
     evaluate.add_argument("--soma-affine-calibration", action="store_true")
     evaluate.add_argument("--pin-memory", action="store_true")
     evaluate.add_argument("--blocking-transfer", action="store_false", dest="non_blocking")
+    evaluate.add_argument("--registry", help="append a one-line JSONL record; defaults to <output-dir>/experiment-registry.jsonl")
+    evaluate.add_argument("--no-registry", action="store_const", const="off", dest="registry")
     evaluate.set_defaults(non_blocking=True)
 
-    train = subparsers.add_parser("train", help="train a deterministic Branch-ELM baseline")
+    train = subparsers.add_parser("train", help="train a model with the current experiment workflow")
+    train.add_argument("--preset", choices=sorted(list_presets()["train"]))
     train.add_argument("--data", required=True)
     train.add_argument("--checkpoint", required=True)
     train.add_argument("--metrics", required=True)
     train.add_argument("--input-dim", type=int, default=1278)
     train.add_argument("--memory-units", type=int, default=30)
     train.add_argument("--branches", type=int, default=32)
-    train.add_argument("--model-kind", choices=["baseline", "official"], default="baseline")
+    train.add_argument("--model-kind", choices=["baseline", "official"], default="baseline", help="use 'official' for the paper-style model; 'baseline' is legacy/debug")
     train.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     train.add_argument("--epochs", type=int, default=1)
     train.add_argument("--batch-size", type=int, default=8)
@@ -97,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument(
         "--window-sampling",
         choices=["deterministic", "random-full-trace", "official-full-trace"],
-        default="deterministic",
+        default="random-full-trace",
     )
     train.add_argument("--epoch-samples", type=int)
     train.add_argument("--shard-reuse-batches", type=int, default=1)
@@ -113,8 +128,8 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--val-ignore-start", type=int, default=0)
     train.add_argument("--val-soma-units", choices=["millivolts", "normalized"], default="millivolts")
     train.add_argument("--val-metric-ignore-start", type=int, default=500)
-    train.add_argument("--val-metric-mask-mode", choices=["ignore-start", "official-overlap"], default="ignore-start")
-    train.add_argument("--val-metric-stitch-burn-in", type=int, default=150)
+    train.add_argument("--val-metric-mask-mode", choices=["ignore-start", "official-overlap"], default="ignore-start", help=argparse.SUPPRESS)
+    train.add_argument("--val-metric-stitch-burn-in", type=int, default=150, help=argparse.SUPPRESS)
     train.add_argument("--val-soma-affine-calibration", action="store_true", default=True)
     train.add_argument("--no-val-soma-affine-calibration", action="store_false", dest="val_soma_affine_calibration")
     train.add_argument("--best-checkpoint")
@@ -129,13 +144,15 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--prefetch-batches", type=int, default=0)
     train.add_argument("--pin-memory", action="store_true")
     train.add_argument("--blocking-transfer", action="store_false", dest="non_blocking")
+    train.add_argument("--registry", help="append a one-line JSONL record; defaults to <metrics-dir>/experiment-registry.jsonl")
+    train.add_argument("--no-registry", action="store_const", const="off", dest="registry")
     train.set_defaults(non_blocking=True)
 
-    benchmark = subparsers.add_parser("benchmark", help="time Branch-ELM forward passes on random input")
+    benchmark = subparsers.add_parser("benchmark", help="time model forward passes on random input")
     benchmark.add_argument("--input-dim", type=int, default=1278)
     benchmark.add_argument("--memory-units", type=int, default=30)
     benchmark.add_argument("--branches", type=int, default=32)
-    benchmark.add_argument("--model-kind", choices=["baseline", "official"], default="baseline")
+    benchmark.add_argument("--model-kind", choices=["baseline", "official"], default="baseline", help="use 'official' for the paper-style model; 'baseline' is legacy/debug")
     benchmark.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     benchmark.add_argument("--batch-size", type=int, default=1)
     benchmark.add_argument("--time-steps", type=int, default=500)
@@ -145,6 +162,13 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--output")
 
     args = parser.parse_args(argv)
+    explicit_dests = _explicit_option_dests(parser, argv, args.command)
+    if args.command in {"train", "evaluate"}:
+        apply_preset(args.command, getattr(args, "preset", None), args, explicit_dests)
+
+    if args.command == "list-presets":
+        print(json.dumps(list_presets(), indent=2, sort_keys=True))
+        return 0
 
     if args.command == "make-demo-data":
         write_demo_shards(
@@ -210,6 +234,19 @@ def main(argv: list[str] | None = None) -> int:
             non_blocking=args.non_blocking,
         )
         write_metrics(metrics, args.output)
+        registry_path = resolve_registry_path("evaluate", registry=args.registry, output_path=args.output)
+        if registry_path is not None:
+            append_registry_entry(
+                registry_path,
+                build_registry_entry(
+                    command="evaluate",
+                    preset=args.preset,
+                    args=args,
+                    metrics_path=args.output,
+                    metrics=metrics,
+                    checkpoint_path=args.checkpoint,
+                ),
+            )
         return 0
 
     if args.command == "train":
@@ -244,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         if validation_dataset is not None and best_checkpoint is None:
             checkpoint_path = Path(args.checkpoint)
             best_checkpoint = str(checkpoint_path.with_name(f"{checkpoint_path.stem}-best{checkpoint_path.suffix}"))
-        train_and_save(
+        metrics = train_and_save(
             model,
             dataset,
             checkpoint_path=args.checkpoint,
@@ -275,6 +312,19 @@ def main(argv: list[str] | None = None) -> int:
             pin_memory=args.pin_memory,
             non_blocking=args.non_blocking,
         )
+        registry_path = resolve_registry_path("train", registry=args.registry, output_path=args.metrics)
+        if registry_path is not None:
+            append_registry_entry(
+                registry_path,
+                build_registry_entry(
+                    command="train",
+                    preset=args.preset,
+                    args=args,
+                    metrics_path=args.metrics,
+                    metrics=metrics,
+                    checkpoint_path=args.checkpoint,
+                ),
+            )
         return 0
 
     if args.command == "benchmark":
@@ -387,6 +437,25 @@ def _load_checkpoint_for_evaluate(args):
         state_dict = load_official_state_dict(args.checkpoint, map_location=args.device)
         model.load_state_dict(state_dict, strict=True)
         return model
+
+
+def _explicit_option_dests(parser: argparse.ArgumentParser, argv: list[str], command: str) -> set[str]:
+    option_to_dest: dict[str, str] = {}
+    for action in parser._actions:
+        for option_string in getattr(action, "option_strings", ()):
+            option_to_dest[option_string] = action.dest
+    subparser_action = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
+    for action in subparser_action.choices[command]._actions:
+        for option_string in getattr(action, "option_strings", ()):
+            option_to_dest[option_string] = action.dest
+
+    explicit_dests: set[str] = set()
+    for token in argv:
+        option = token.split("=", 1)[0]
+        dest = option_to_dest.get(option)
+        if dest is not None:
+            explicit_dests.add(dest)
+    return explicit_dests
 
 
 if __name__ == "__main__":

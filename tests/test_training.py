@@ -14,6 +14,8 @@ def test_cli_train_writes_checkpoint_and_metrics(tmp_path):
     result = main(
         [
             "train",
+            "--preset",
+            "legacy-baseline-smoke",
             "--data",
             str(data_dir),
             "--input-dim",
@@ -53,6 +55,8 @@ def test_cli_train_with_validation_writes_best_checkpoint(tmp_path):
     result = main(
         [
             "train",
+            "--preset",
+            "legacy-baseline-smoke",
             "--data",
             str(data_dir),
             "--val-data",
@@ -136,6 +140,7 @@ def test_cli_train_with_validation_writes_best_checkpoint(tmp_path):
     assert metrics["history"][0]["validation_soma_affine_calibration"] is True
     assert metrics["history"][0]["validation_soma_rmse_units"] == "millivolts"
     assert "validation_soma_rmse" in metrics["history"][0]
+    assert (metrics_path.parent / "experiment-registry.jsonl").exists()
 
 
 def test_cli_train_supports_official_full_trace_sampling(tmp_path):
@@ -150,6 +155,8 @@ def test_cli_train_supports_official_full_trace_sampling(tmp_path):
             "train",
             "--data",
             str(data_dir),
+            "--registry",
+            "off",
             "--val-data",
             str(data_dir),
             "--input-dim",

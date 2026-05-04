@@ -30,7 +30,23 @@ def test_cli_smoke_data_and_evaluate(tmp_path):
     metrics_path = tmp_path / "metrics.json"
 
     assert main(["make-demo-data", "--output", str(data_dir), "--samples", "2", "--time-steps", "4", "--input-dim", "6"]) == 0
-    assert main(["evaluate", "--data", str(data_dir), "--input-dim", "6", "--memory-units", "4", "--branches", "2", "--output", str(metrics_path)]) == 0
+    assert main(
+        [
+            "evaluate",
+            "--preset",
+            "legacy-baseline-smoke",
+            "--data",
+            str(data_dir),
+            "--input-dim",
+            "6",
+            "--memory-units",
+            "4",
+            "--branches",
+            "2",
+            "--output",
+            str(metrics_path),
+        ]
+    ) == 0
 
     assert Path(metrics_path).exists()
 
@@ -44,6 +60,8 @@ def test_cli_evaluate_accepts_window_options(tmp_path):
     result = main(
         [
             "evaluate",
+            "--preset",
+            "legacy-baseline-smoke",
             "--data",
             str(data_dir),
             "--input-dim",
@@ -72,6 +90,8 @@ def test_cli_benchmark_writes_json_report(tmp_path):
     assert main(
         [
             "benchmark",
+            "--model-kind",
+            "baseline",
             "--input-dim",
             "6",
             "--memory-units",
@@ -131,6 +151,8 @@ def test_cli_train_saves_official_checkpoint(tmp_path):
             "train",
             "--data",
             str(data_dir),
+            "--registry",
+            "off",
             "--model-kind",
             "official",
             "--model-config",
@@ -188,6 +210,41 @@ def test_cli_evaluate_loads_raw_official_state_dict(tmp_path):
 
     assert result == 0
     assert metrics_path.exists()
+
+
+def test_cli_preset_and_registry_write_jsonl(tmp_path):
+    data_dir = tmp_path / "data"
+    metrics_path = tmp_path / "metrics.json"
+    registry_path = tmp_path / "registry.jsonl"
+    config_path = tmp_path / "official.json"
+    _write_small_official_config(config_path)
+
+    main(["make-demo-data", "--output", str(data_dir), "--samples", "2", "--time-steps", "8", "--input-dim", "6"])
+
+    result = main(
+        [
+            "evaluate",
+            "--preset",
+            "fulltrace-paper-metric",
+            "--data",
+            str(data_dir),
+            "--model-config",
+            str(config_path),
+            "--metric-ignore-start",
+            "1",
+            "--registry",
+            str(registry_path),
+            "--output",
+            str(metrics_path),
+        ]
+    )
+
+    assert result == 0
+    lines = registry_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["command"] == "evaluate"
+    assert entry["preset"] == "fulltrace-paper-metric"
 
 
 def test_cli_convert_neuronio_requires_existing_raw_path(tmp_path):
