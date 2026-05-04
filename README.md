@@ -150,6 +150,12 @@ python -m bnn_sim.cli train \
   --window-stride 350 \
   --ignore-start 500 \
   --burn-in 150 \
+  --shuffle-mode shard \
+  --cache-shards 1 \
   --checkpoint runs/branch-elm-30.pt \
   --metrics runs/branch-elm-30-train.json
 ```
+
+`--shuffle-mode shard` keeps training deterministic while shuffling shard order
+and within-shard sample order. Pair it with `--cache-shards 1` for compressed
+NeuronIO shards so each shard is inflated once while its local samples are used.

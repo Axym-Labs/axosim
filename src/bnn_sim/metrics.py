@@ -23,23 +23,16 @@ def binary_auc(scores: np.ndarray, labels: np.ndarray) -> float:
         return float("nan")
 
     order = np.argsort(scores)
-    ranks = np.empty_like(order, dtype=np.float64)
-    ranks[order] = np.arange(1, len(scores) + 1, dtype=np.float64)
-    tied_ranks = _average_tied_ranks(scores, ranks)
-    pos_rank_sum = tied_ranks[positive].sum()
+    sorted_scores = scores[order]
+    sorted_positive = positive[order].astype(np.float64, copy=False)
+    tie_starts = np.concatenate(([0], np.flatnonzero(np.diff(sorted_scores)) + 1))
+    tie_ends = np.concatenate((tie_starts[1:], [len(scores)]))
+    positive_per_tie = np.add.reduceat(sorted_positive, tie_starts)
+    average_ranks = (tie_starts + 1 + tie_ends) / 2.0
+    pos_rank_sum = float(np.dot(positive_per_tie, average_ranks))
     auc = (pos_rank_sum - pos_count * (pos_count + 1) / 2.0) / (pos_count * neg_count)
     return float(auc)
 
 
 def spike_auc(prediction: np.ndarray, target: np.ndarray) -> float:
     return binary_auc(np.asarray(prediction)[..., 0], np.asarray(target)[..., 0])
-
-
-def _average_tied_ranks(scores: np.ndarray, ranks: np.ndarray) -> np.ndarray:
-    result = ranks.copy()
-    unique_scores, inverse, counts = np.unique(scores, return_inverse=True, return_counts=True)
-    for score_idx, count in enumerate(counts):
-        if count > 1:
-            mask = inverse == score_idx
-            result[mask] = ranks[mask].mean()
-    return result

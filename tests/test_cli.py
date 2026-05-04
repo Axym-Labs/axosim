@@ -56,6 +56,7 @@ def test_cli_evaluate_accepts_window_options(tmp_path):
             "4",
             "--window-stride",
             "4",
+            "--blocking-transfer",
             "--output",
             str(metrics_path),
         ]
@@ -138,6 +139,10 @@ def test_cli_train_saves_official_checkpoint(tmp_path):
             "1",
             "--batch-size",
             "1",
+            "--shuffle-mode",
+            "shard",
+            "--cache-shards",
+            "1",
             "--checkpoint",
             str(checkpoint_path),
             "--metrics",
@@ -191,3 +196,16 @@ def test_cli_convert_neuronio_requires_existing_raw_path(tmp_path):
     result = main(["convert-neuronio", "--input", str(tmp_path / "missing"), "--output", str(output_dir)])
 
     assert result == 2
+
+
+def test_cli_repack_shards_writes_sliceable_dataset(tmp_path):
+    data_dir = tmp_path / "data"
+    repacked_dir = tmp_path / "repacked"
+
+    main(["make-demo-data", "--output", str(data_dir), "--samples", "2", "--time-steps", "4", "--input-dim", "6"])
+
+    result = main(["repack-shards", "--input", str(data_dir), "--output", str(repacked_dir)])
+
+    assert result == 0
+    assert (repacked_dir / "manifest.json").exists()
+    assert len(list(repacked_dir.glob("*_inputs.npy"))) == 1

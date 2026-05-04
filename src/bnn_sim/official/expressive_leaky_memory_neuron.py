@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import List, Optional
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -193,14 +193,14 @@ class ELM(jit.ScriptModule):
         kappa_s, kappa_m = self.kappa_s, self.kappa_m
         s_prev = torch.zeros(batch_size, len(kappa_s), device=X.device)
         m_prev = torch.zeros(batch_size, len(kappa_m), device=X.device)
-        outputs = torch.jit.annotate(List[torch.Tensor], [])
+        outputs = torch.empty(batch_size, T, self.num_output, device=X.device)
         inputs = self.route_input_to_synapses(X)
         for t in range(T):
             y_t, s_prev, m_prev = self.dynamics(
                 inputs[:, t], s_prev, m_prev, w_s, kappa_s, kappa_m
             )
-            outputs.append(y_t)
-        return torch.stack(outputs, dim=-2)
+            outputs[:, t, :] = y_t
+        return outputs
 
     # NOTE: part of model for ease of use
     @jit.script_method
@@ -230,20 +230,17 @@ class ELM(jit.ScriptModule):
         m_prev = torch.zeros(batch_size, len(kappa_m), device=X.device)
 
         # calcualte the outputs, synapse and memory values
-        outputs = torch.jit.annotate(List[torch.Tensor], [])
-        s_record = torch.jit.annotate(List[torch.Tensor], [])
-        m_record = torch.jit.annotate(List[torch.Tensor], [])
+        outputs = torch.empty(batch_size, T, self.num_output, device=X.device)
+        s_record = torch.empty(batch_size, T, len(kappa_s), device=X.device)
+        m_record = torch.empty(batch_size, T, len(kappa_m), device=X.device)
         inputs = self.route_input_to_synapses(X)
         for t in range(T):
             y_t, s_prev, m_prev = self.dynamics(
                 inputs[:, t], s_prev, m_prev, w_s, kappa_s, kappa_m
             )
-            outputs.append(y_t)
-            s_record.append(s_prev)
-            m_record.append(m_prev)
-        outputs = torch.stack(outputs, dim=-2)
-        s_record = torch.stack(s_record, dim=-2)
-        m_record = torch.stack(m_record, dim=-2)
+            outputs[:, t, :] = y_t
+            s_record[:, t, :] = s_prev
+            m_record[:, t, :] = m_prev
 
         # postprocess the outputs
         spike_pred, soma_pred = outputs[..., 0], outputs[..., 1]

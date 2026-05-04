@@ -5,10 +5,17 @@ import json
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from bnn_sim.checkpoint import load_checkpoint
-from bnn_sim.data import DeterministicWindowDataset, ShardedNeuronIODataset, write_demo_shards
+from bnn_sim.data import (
+    DeterministicWindowDataset,
+    RandomFullTraceWindowDataset,
+    ShardedNeuronIODataset,
+    repack_shards_as_npy,
+    write_demo_shards,
+)
 from bnn_sim.evaluate import evaluate_dataset, write_metrics
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.neuronio_raw import convert_neuronio_pickles
@@ -38,6 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     convert.add_argument("--window-stride", type=int)
     convert.add_argument("--ignore-start", type=int, default=0)
 
+    repack = subparsers.add_parser("repack-shards", help="repack shards as sliceable .npy arrays")
+    repack.add_argument("--input", required=True)
+    repack.add_argument("--output", required=True)
+    repack.add_argument("--input-dtype", choices=["int8", "float32"], default="int8")
+
     evaluate = subparsers.add_parser("evaluate", help="evaluate an untrained Branch-ELM smoke baseline")
     evaluate.add_argument("--data", required=True)
     evaluate.add_argument("--output", required=True)
@@ -53,6 +65,15 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument("--window-size", type=int)
     evaluate.add_argument("--window-stride", type=int)
     evaluate.add_argument("--ignore-start", type=int, default=0)
+    evaluate.add_argument("--cache-shards", type=int, default=1)
+    evaluate.add_argument("--soma-units", choices=["millivolts", "normalized"], default="millivolts")
+    evaluate.add_argument("--metric-ignore-start", type=int, default=0)
+    evaluate.add_argument("--metric-mask-mode", choices=["ignore-start", "official-overlap"], default="ignore-start")
+    evaluate.add_argument("--metric-stitch-burn-in", type=int, default=150)
+    evaluate.add_argument("--soma-affine-calibration", action="store_true")
+    evaluate.add_argument("--pin-memory", action="store_true")
+    evaluate.add_argument("--blocking-transfer", action="store_false", dest="non_blocking")
+    evaluate.set_defaults(non_blocking=True)
 
     train = subparsers.add_parser("train", help="train a deterministic Branch-ELM baseline")
     train.add_argument("--data", required=True)
@@ -72,6 +93,37 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--window-size", type=int)
     train.add_argument("--window-stride", type=int)
     train.add_argument("--ignore-start", type=int, default=0)
+    train.add_argument("--window-sampling", choices=["deterministic", "random-full-trace"], default="deterministic")
+    train.add_argument("--epoch-samples", type=int)
+    train.add_argument("--shard-reuse-batches", type=int, default=1)
+    train.add_argument("--full-trace-length", type=int)
+    train.add_argument("--shuffle-mode", choices=["sample", "shard", "none"], default="shard")
+    train.add_argument("--cache-shards", type=int, default=1)
+    train.add_argument("--val-data")
+    train.add_argument("--val-batch-size", type=int)
+    train.add_argument("--val-cache-shards", type=int, default=1)
+    train.add_argument("--val-window-size", type=int)
+    train.add_argument("--val-window-stride", type=int)
+    train.add_argument("--val-ignore-start", type=int, default=0)
+    train.add_argument("--val-soma-units", choices=["millivolts", "normalized"], default="millivolts")
+    train.add_argument("--val-metric-ignore-start", type=int, default=500)
+    train.add_argument("--val-metric-mask-mode", choices=["ignore-start", "official-overlap"], default="ignore-start")
+    train.add_argument("--val-metric-stitch-burn-in", type=int, default=150)
+    train.add_argument("--val-soma-affine-calibration", action="store_true", default=True)
+    train.add_argument("--no-val-soma-affine-calibration", action="store_false", dest="val_soma_affine_calibration")
+    train.add_argument("--best-checkpoint")
+    train.add_argument("--max-train-batches", type=int)
+    train.add_argument("--lr-schedule", choices=["constant", "cosine"], default="constant")
+    train.add_argument("--lr-schedule-steps", type=int)
+    train.add_argument("--optimizer", choices=["adam", "adamw"], default="adam")
+    train.add_argument("--weight-decay", type=float, default=0.0)
+    train.add_argument("--l1-lambda", type=float, default=0.0)
+    train.add_argument("--spike-loss-weight", type=float, default=0.5)
+    train.add_argument("--soma-loss-weight", type=float, default=0.5)
+    train.add_argument("--prefetch-batches", type=int, default=0)
+    train.add_argument("--pin-memory", action="store_true")
+    train.add_argument("--blocking-transfer", action="store_false", dest="non_blocking")
+    train.set_defaults(non_blocking=True)
 
     benchmark = subparsers.add_parser("benchmark", help="time Branch-ELM forward passes on random input")
     benchmark.add_argument("--input-dim", type=int, default=1278)
@@ -115,14 +167,42 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote_shards={len(written)}")
         return 0
 
+    if args.command == "repack-shards":
+        try:
+            input_dtype = np.float32 if args.input_dtype == "float32" else np.int8
+            written = repack_shards_as_npy(args.input, args.output, input_dtype=input_dtype)
+        except (FileNotFoundError, ValueError) as error:
+            print(str(error))
+            return 2
+        print(f"wrote_shards={len(written)}")
+        return 0
+
     if args.command == "evaluate":
         torch.manual_seed(args.seed)
-        dataset = _build_dataset(args.data, window_size=args.window_size, window_stride=args.window_stride, ignore_start=args.ignore_start)
+        dataset = _build_dataset(
+            args.data,
+            window_size=args.window_size,
+            window_stride=args.window_stride,
+            ignore_start=args.ignore_start,
+            cache_shards=args.cache_shards,
+        )
         if args.checkpoint:
             model = _load_checkpoint_for_evaluate(args)
         else:
             model = _build_model_from_args(args)
-        metrics = evaluate_dataset(model, dataset, batch_size=args.batch_size, device=args.device)
+        metrics = evaluate_dataset(
+            model,
+            dataset,
+            batch_size=args.batch_size,
+            device=args.device,
+            soma_units=args.soma_units,
+            ignore_start=args.metric_ignore_start,
+            mask_mode=args.metric_mask_mode,
+            stitch_burn_in=args.metric_stitch_burn_in,
+            soma_affine_calibration=args.soma_affine_calibration,
+            pin_memory=args.pin_memory,
+            non_blocking=args.non_blocking,
+        )
         write_metrics(metrics, args.output)
         return 0
 
@@ -130,13 +210,33 @@ def main(argv: list[str] | None = None) -> int:
         torch.manual_seed(args.seed)
         dataset = _build_dataset(
             args.data,
-            shuffle=True,
+            shuffle=args.shuffle_mode != "none",
+            shuffle_mode="shard" if args.shuffle_mode == "none" else args.shuffle_mode,
             seed=args.seed,
             window_size=args.window_size,
             window_stride=args.window_stride,
             ignore_start=args.ignore_start,
+            cache_shards=args.cache_shards,
+            window_sampling=args.window_sampling,
+            epoch_samples=args.epoch_samples,
+            batch_size=args.batch_size,
+            shard_reuse_batches=args.shard_reuse_batches,
+            sequence_length=args.full_trace_length,
         )
+        validation_dataset = None
+        if args.val_data:
+            validation_dataset = _build_dataset(
+                args.val_data,
+                window_size=args.val_window_size,
+                window_stride=args.val_window_stride,
+                ignore_start=args.val_ignore_start,
+                cache_shards=args.val_cache_shards,
+            )
         model = _build_model_from_args(args)
+        best_checkpoint = args.best_checkpoint
+        if validation_dataset is not None and best_checkpoint is None:
+            checkpoint_path = Path(args.checkpoint)
+            best_checkpoint = str(checkpoint_path.with_name(f"{checkpoint_path.stem}-best{checkpoint_path.suffix}"))
         train_and_save(
             model,
             dataset,
@@ -148,6 +248,25 @@ def main(argv: list[str] | None = None) -> int:
             burn_in=args.burn_in,
             device=args.device,
             seed=args.seed,
+            validation_dataset=validation_dataset,
+            validation_batch_size=args.val_batch_size,
+            best_checkpoint_path=best_checkpoint,
+            validation_soma_units=args.val_soma_units,
+            validation_metric_ignore_start=args.val_metric_ignore_start,
+            validation_metric_mask_mode=args.val_metric_mask_mode,
+            validation_metric_stitch_burn_in=args.val_metric_stitch_burn_in,
+            validation_soma_affine_calibration=args.val_soma_affine_calibration,
+            max_train_batches=args.max_train_batches,
+            lr_schedule=args.lr_schedule,
+            lr_schedule_steps=args.lr_schedule_steps,
+            optimizer_name=args.optimizer,
+            weight_decay=args.weight_decay,
+            l1_lambda=args.l1_lambda,
+            spike_loss_weight=args.spike_loss_weight,
+            soma_loss_weight=args.soma_loss_weight,
+            prefetch_batches=args.prefetch_batches,
+            pin_memory=args.pin_memory,
+            non_blocking=args.non_blocking,
         )
         return 0
 
@@ -189,14 +308,40 @@ def _build_dataset(
     data_path: str,
     *,
     shuffle: bool = False,
+    shuffle_mode: str = "sample",
     seed: int = 0,
     window_size: int | None = None,
     window_stride: int | None = None,
     ignore_start: int = 0,
+    cache_shards: int = 0,
+    window_sampling: str = "deterministic",
+    epoch_samples: int | None = None,
+    batch_size: int = 8,
+    shard_reuse_batches: int = 1,
+    sequence_length: int | None = None,
 ):
-    dataset = ShardedNeuronIODataset(data_path, shuffle=shuffle, seed=seed)
+    dataset = ShardedNeuronIODataset(
+        data_path,
+        shuffle=shuffle,
+        shuffle_mode=shuffle_mode,  # type: ignore[arg-type]
+        seed=seed,
+        cache_shards=cache_shards,
+    )
     if window_size is None:
         return dataset
+    if window_sampling == "random-full-trace":
+        return RandomFullTraceWindowDataset(
+            dataset,
+            window_size=window_size,
+            start_offset=ignore_start,
+            samples_per_epoch=epoch_samples,
+            batch_size=batch_size,
+            shard_reuse_batches=shard_reuse_batches,
+            sequence_length=sequence_length,
+            seed=seed,
+        )
+    if window_sampling != "deterministic":
+        raise ValueError("window_sampling must be 'deterministic' or 'random-full-trace'")
     return DeterministicWindowDataset(
         dataset,
         window_size=window_size,
