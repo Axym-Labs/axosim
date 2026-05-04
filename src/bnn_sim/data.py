@@ -334,6 +334,135 @@ class RandomFullTraceWindowDataset:
         return self._sequence_lengths[shard_idx]
 
 
+class OfficialStyleFullTraceWindowDataset:
+    """Deterministic port of the official NeuronIO file/simulation/time sampling policy."""
+
+    def __init__(
+        self,
+        base: ShardedNeuronIODataset,
+        *,
+        window_size: int = 500,
+        start_offset: int = 500,
+        samples_per_epoch: int | None = None,
+        batch_size: int = 8,
+        file_load_fraction: float = 0.3,
+        source_simulations: int = 128,
+        sequence_length: int | None = None,
+        seed: int = 0,
+    ) -> None:
+        if window_size <= 0:
+            raise ValueError("window_size must be positive")
+        if start_offset < 0:
+            raise ValueError("start_offset must be non-negative")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if samples_per_epoch is not None and samples_per_epoch <= 0:
+            raise ValueError("samples_per_epoch must be positive")
+        if file_load_fraction <= 0:
+            raise ValueError("file_load_fraction must be positive")
+        if source_simulations <= 0:
+            raise ValueError("source_simulations must be positive")
+        if sequence_length is not None and sequence_length <= 0:
+            raise ValueError("sequence_length must be positive")
+
+        self.base = base
+        self.window_size = window_size
+        self.start_offset = start_offset
+        self.batch_size = batch_size
+        self.file_load_fraction = file_load_fraction
+        self.source_simulations = source_simulations
+        self.sequence_length = sequence_length
+        self.samples_per_epoch = samples_per_epoch or len(base)
+        self._by_source: dict[str, list[tuple[int, int, str]]] = {}
+        self._sequence_lengths: dict[int, int] = {}
+        for shard_idx, sample_idx, sample_id in base._base_index:
+            self._by_source.setdefault(_source_id_from_sample_id(sample_id), []).append((shard_idx, sample_idx, sample_id))
+        if not self._by_source:
+            raise ValueError("base dataset has no samples")
+        self.reshuffle(seed)
+
+    def __len__(self) -> int:
+        return len(self._index)
+
+    def reshuffle(self, seed: int) -> None:
+        rng = np.random.default_rng(seed)
+        source_ids = np.array(sorted(self._by_source), dtype=object)
+        index: list[tuple[int, int, int, str]] = []
+        num_batches = (self.samples_per_epoch + self.batch_size - 1) // self.batch_size
+        batches_per_source = int(
+            self.file_load_fraction * self.source_simulations * self._global_sequence_length() / (self.batch_size * self.window_size)
+        )
+        if batches_per_source <= 0:
+            raise ValueError("file_load_fraction yields zero batches per source; increase it or reduce batch/window size")
+
+        batch_count = 0
+        while batch_count < num_batches:
+            source_id = str(rng.choice(source_ids))
+            source_samples = self._by_source[source_id]
+            for _ in range(min(batches_per_source, num_batches - batch_count)):
+                replace = len(source_samples) < self.batch_size
+                chosen = rng.choice(len(source_samples), size=self.batch_size, replace=replace)
+                starts = rng.integers(
+                    self.start_offset,
+                    self._max_start_exclusive(),
+                    size=self.batch_size,
+                )
+                for chosen_idx, start in zip(chosen, starts):
+                    shard_idx, sample_idx, sample_id = source_samples[int(chosen_idx)]
+                    index.append((shard_idx, sample_idx, int(start), f"{sample_id}@{int(start)}"))
+                batch_count += 1
+        self._index = index[: self.samples_per_epoch]
+
+    def __getitem__(self, index: int) -> NeuronIOSample:
+        shard_idx, sample_idx, start, sample_id = self._index[index]
+        shard_inputs, shard_targets = self.base._load_cached_shard(shard_idx)
+        end = start + self.window_size
+        return NeuronIOSample(
+            sample_id=sample_id,
+            inputs=np.asarray(shard_inputs[sample_idx, start:end], dtype=np.float32),
+            targets=np.asarray(shard_targets[sample_idx, start:end], dtype=np.float32),
+        )
+
+    def get_batch(self, indices: range | list[int]) -> tuple[np.ndarray, np.ndarray]:
+        entries = [self._index[int(index)] for index in indices]
+        inputs: list[np.ndarray] = []
+        targets: list[np.ndarray] = []
+        for shard_idx, shard_entries in _group_full_trace_window_entries_by_shard(entries):
+            shard_inputs, shard_targets = self.base._load_cached_shard(shard_idx)
+            for sample_idx, start, _ in shard_entries:
+                end = start + self.window_size
+                inputs.append(np.asarray(shard_inputs[sample_idx, start:end], dtype=np.float32))
+                targets.append(np.asarray(shard_targets[sample_idx, start:end], dtype=np.float32))
+        return np.stack(inputs).astype(np.float32, copy=False), np.stack(targets).astype(np.float32, copy=False)
+
+    def get_sample_ids(self, indices: range | list[int]) -> list[str]:
+        return [self._index[int(index)][3] for index in indices]
+
+    def _global_sequence_length(self) -> int:
+        if self.sequence_length is not None:
+            return self.sequence_length
+        first_shard_idx = self.base._base_index[0][0]
+        return self._sequence_length(first_shard_idx)
+
+    def _sequence_length(self, shard_idx: int) -> int:
+        if self.sequence_length is not None:
+            return self.sequence_length
+        if shard_idx not in self._sequence_lengths:
+            with _open_shard(self.base.shards[shard_idx]) as data:
+                self._sequence_lengths[shard_idx] = int(data["inputs"].shape[1])
+        return self._sequence_lengths[shard_idx]
+
+    def _max_start_exclusive(self) -> int:
+        sequence_length = self._global_sequence_length()
+        max_choice = sequence_length - self.window_size - self.start_offset
+        if max_choice <= 0:
+            raise ValueError(
+                f"start_offset={self.start_offset} leaves no {self.window_size}-step windows "
+                f"for sequence length {sequence_length}"
+            )
+        return self.start_offset + max_choice
+
+
 def write_demo_shards(
     root: str | Path,
     *,
@@ -507,3 +636,7 @@ def _group_full_trace_window_entries_by_shard(
     if current_entries:
         grouped.append((current_shard, current_entries))
     return grouped
+
+
+def _source_id_from_sample_id(sample_id: str) -> str:
+    return sample_id.rsplit(":", 1)[0]

@@ -11,6 +11,7 @@ import torch
 from bnn_sim.checkpoint import load_checkpoint
 from bnn_sim.data import (
     DeterministicWindowDataset,
+    OfficialStyleFullTraceWindowDataset,
     RandomFullTraceWindowDataset,
     ShardedNeuronIODataset,
     repack_shards_as_npy,
@@ -93,9 +94,14 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--window-size", type=int)
     train.add_argument("--window-stride", type=int)
     train.add_argument("--ignore-start", type=int, default=0)
-    train.add_argument("--window-sampling", choices=["deterministic", "random-full-trace"], default="deterministic")
+    train.add_argument(
+        "--window-sampling",
+        choices=["deterministic", "random-full-trace", "official-full-trace"],
+        default="deterministic",
+    )
     train.add_argument("--epoch-samples", type=int)
     train.add_argument("--shard-reuse-batches", type=int, default=1)
+    train.add_argument("--file-load-fraction", type=float, default=0.3)
     train.add_argument("--full-trace-length", type=int)
     train.add_argument("--shuffle-mode", choices=["sample", "shard", "none"], default="shard")
     train.add_argument("--cache-shards", type=int, default=1)
@@ -221,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             epoch_samples=args.epoch_samples,
             batch_size=args.batch_size,
             shard_reuse_batches=args.shard_reuse_batches,
+            file_load_fraction=args.file_load_fraction,
             sequence_length=args.full_trace_length,
         )
         validation_dataset = None
@@ -318,6 +325,7 @@ def _build_dataset(
     epoch_samples: int | None = None,
     batch_size: int = 8,
     shard_reuse_batches: int = 1,
+    file_load_fraction: float = 0.3,
     sequence_length: int | None = None,
 ):
     dataset = ShardedNeuronIODataset(
@@ -340,8 +348,19 @@ def _build_dataset(
             sequence_length=sequence_length,
             seed=seed,
         )
+    if window_sampling == "official-full-trace":
+        return OfficialStyleFullTraceWindowDataset(
+            dataset,
+            window_size=window_size,
+            start_offset=ignore_start,
+            samples_per_epoch=epoch_samples,
+            batch_size=batch_size,
+            file_load_fraction=file_load_fraction,
+            sequence_length=sequence_length,
+            seed=seed,
+        )
     if window_sampling != "deterministic":
-        raise ValueError("window_sampling must be 'deterministic' or 'random-full-trace'")
+        raise ValueError("window_sampling must be 'deterministic', 'random-full-trace', or 'official-full-trace'")
     return DeterministicWindowDataset(
         dataset,
         window_size=window_size,

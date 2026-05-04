@@ -136,3 +136,52 @@ def test_cli_train_with_validation_writes_best_checkpoint(tmp_path):
     assert metrics["history"][0]["validation_soma_affine_calibration"] is True
     assert metrics["history"][0]["validation_soma_rmse_units"] == "millivolts"
     assert "validation_soma_rmse" in metrics["history"][0]
+
+
+def test_cli_train_supports_official_full_trace_sampling(tmp_path):
+    data_dir = tmp_path / "data"
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    metrics_path = tmp_path / "train_metrics.json"
+
+    main(["make-demo-data", "--output", str(data_dir), "--samples", "8", "--time-steps", "12", "--input-dim", "8"])
+
+    result = main(
+        [
+            "train",
+            "--data",
+            str(data_dir),
+            "--val-data",
+            str(data_dir),
+            "--input-dim",
+            "8",
+            "--memory-units",
+            "4",
+            "--branches",
+            "2",
+            "--epochs",
+            "1",
+            "--batch-size",
+            "2",
+            "--window-size",
+            "4",
+            "--ignore-start",
+            "2",
+            "--window-sampling",
+            "official-full-trace",
+            "--epoch-samples",
+            "8",
+            "--file-load-fraction",
+            "0.5",
+            "--full-trace-length",
+            "12",
+            "--checkpoint",
+            str(checkpoint_path),
+            "--metrics",
+            str(metrics_path),
+        ]
+    )
+
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    assert result == 0
+    assert checkpoint_path.exists()
+    assert metrics["samples"] == 8

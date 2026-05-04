@@ -3,6 +3,7 @@ import json
 
 from bnn_sim.data import (
     DeterministicWindowDataset,
+    OfficialStyleFullTraceWindowDataset,
     RandomFullTraceWindowDataset,
     ShardedNeuronIODataset,
     repack_shards_as_npy,
@@ -139,3 +140,38 @@ def test_random_full_trace_window_dataset_samples_cached_windows(tmp_path):
     assert y.shape == (2, 4, 2)
     assert windows_a.get_sample_ids(range(8)) == windows_b.get_sample_ids(range(8))
     assert all(int(sample_id.rsplit("@", 1)[1]) >= 2 for sample_id in windows_a.get_sample_ids(range(8)))
+
+
+def test_official_style_full_trace_window_dataset_matches_source_group_sampling(tmp_path):
+    write_demo_shards(tmp_path, shard_count=2, samples_per_shard=4, time_steps=12, input_dim=3, seed=5)
+    base = ShardedNeuronIODataset(tmp_path, cache_shards=1)
+
+    windows_a = OfficialStyleFullTraceWindowDataset(
+        base,
+        window_size=4,
+        start_offset=2,
+        samples_per_epoch=8,
+        batch_size=2,
+        file_load_fraction=0.5,
+        source_simulations=4,
+        sequence_length=12,
+        seed=7,
+    )
+    windows_b = OfficialStyleFullTraceWindowDataset(
+        base,
+        window_size=4,
+        start_offset=2,
+        samples_per_epoch=8,
+        batch_size=2,
+        file_load_fraction=0.5,
+        source_simulations=4,
+        sequence_length=12,
+        seed=7,
+    )
+
+    sample_ids = windows_a.get_sample_ids(range(8))
+
+    assert len(windows_a) == 8
+    assert sample_ids == windows_b.get_sample_ids(range(8))
+    assert all(int(sample_id.rsplit("@", 1)[1]) >= 2 for sample_id in sample_ids)
+    assert len({_id.rsplit(":", 1)[0] for _id in sample_ids[:6]}) == 1
