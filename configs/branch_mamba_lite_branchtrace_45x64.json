@@ -1,0 +1,20 @@
+{
+  "num_input": 1278,
+  "num_output": 2,
+  "num_branch": 45,
+  "num_synapse_per_branch": 100,
+  "input_to_synapse_routing": "neuronio_routing",
+  "model_dim": 64,
+  "num_layers": 4,
+  "conv_kernel": 9,
+  "long_conv_kernel": 65,
+  "expansion": 2,
+  "dropout": 0.0,
+  "residual_scale_init": 0.1,
+  "long_path_bias": 0.5,
+  "use_branch_trace": true,
+  "branch_trace_tau": 5.0,
+  "branch_trace_kernel": 65,
+  "branch_trace_gain_init": 0.5,
+  "learn_branch_trace_gain": true
+}

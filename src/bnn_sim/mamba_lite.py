@@ -28,6 +28,16 @@ class BranchMambaLiteConfig:
     dropout: float = 0.0
     residual_scale_init: float = 0.1
     long_path_bias: float = 0.5
+    use_branch_trace: bool = False
+    branch_trace_tau: float = 5.0
+    branch_trace_kernel: int = 65
+    branch_trace_gain_init: float = 0.5
+    learn_branch_trace_gain: bool = True
+    use_state_trace: bool = False
+    state_trace_kernel: int = 129
+    state_tau_min: float = 2.0
+    state_tau_max: float = 150.0
+    state_mix_init: float = 0.0
 
 
 class BranchMambaLite(nn.Module):
@@ -53,6 +63,16 @@ class BranchMambaLite(nn.Module):
             raise ValueError("expansion must be positive")
         if config.long_conv_kernel <= 0:
             raise ValueError("long_conv_kernel must be positive")
+        if config.branch_trace_tau <= 0:
+            raise ValueError("branch_trace_tau must be positive")
+        if config.branch_trace_kernel <= 0:
+            raise ValueError("branch_trace_kernel must be positive")
+        if config.state_trace_kernel <= 0:
+            raise ValueError("state_trace_kernel must be positive")
+        if config.state_tau_min <= 0:
+            raise ValueError("state_tau_min must be positive")
+        if config.state_tau_max < config.state_tau_min:
+            raise ValueError("state_tau_max must be >= state_tau_min")
 
         self.config = config
         self.num_input = config.num_input
@@ -65,10 +85,19 @@ class BranchMambaLite(nn.Module):
         self.conv_kernel = config.conv_kernel
         self.expansion = config.expansion
         self.dropout = config.dropout
+        self.use_branch_trace = config.use_branch_trace
 
         routing_indices, valid_mask = self._create_input_to_synapse_indices()
         self.register_buffer("input_to_synapse_indices", routing_indices if routing_indices is not None else torch.empty(0, dtype=torch.long))
         self.register_buffer("valid_indices_mask", valid_mask if valid_mask is not None else torch.empty(0, dtype=torch.float32))
+        if self.use_branch_trace:
+            self.register_buffer("branch_trace_kernel", self._create_branch_trace_kernel(), persistent=False)
+            self.branch_trace_gain = nn.Parameter(
+                torch.full((config.num_branch,), float(config.branch_trace_gain_init)),
+                requires_grad=config.learn_branch_trace_gain,
+            )
+        else:
+            self.branch_trace_gain = None
 
         self.branch_projection = nn.Linear(config.num_branch, config.model_dim)
         self.blocks = nn.ModuleList(
@@ -81,6 +110,11 @@ class BranchMambaLite(nn.Module):
                     dropout=config.dropout,
                     residual_scale_init=config.residual_scale_init,
                     long_path_bias=config.long_path_bias,
+                    use_state_trace=config.use_state_trace,
+                    state_trace_kernel=config.state_trace_kernel,
+                    state_tau_min=config.state_tau_min,
+                    state_tau_max=config.state_tau_max,
+                    state_mix_init=config.state_mix_init,
                 )
                 for _ in range(config.num_layers)
             ]
@@ -95,6 +129,8 @@ class BranchMambaLite(nn.Module):
             raise ValueError(f"expected num_input={self.num_input}, got {x.shape[-1]}")
 
         branch_inputs = self._branch_reduce(x)
+        if self.use_branch_trace:
+            branch_inputs = self._branch_trace(branch_inputs)
         hidden = self.branch_projection(branch_inputs)
         for block in self.blocks:
             hidden = block(hidden)
@@ -126,6 +162,27 @@ class BranchMambaLite(nn.Module):
         batch_size, time_steps, _ = routed.shape
         return routed.view(batch_size, time_steps, self.num_branch, -1).sum(dim=-1)
 
+    def _create_branch_trace_kernel(self) -> torch.Tensor:
+        kernel_size = self.config.branch_trace_kernel
+        decay = math.exp(-1.0 / self.config.branch_trace_tau)
+        kernel = decay ** torch.arange(kernel_size, dtype=torch.float32)
+        kernel = torch.flip(kernel, dims=[0]).view(1, 1, kernel_size)
+        return kernel.repeat(self.config.num_branch, 1, 1)
+
+    def _branch_trace(self, branch_inputs: torch.Tensor) -> torch.Tensor:
+        if self.branch_trace_gain is None:
+            raise RuntimeError("branch trace is disabled")
+        branch_inputs_t = branch_inputs.transpose(1, 2)
+        gain = F.relu(self.branch_trace_gain).to(dtype=branch_inputs.dtype, device=branch_inputs.device)
+        kernel = self.branch_trace_kernel.to(dtype=branch_inputs.dtype, device=branch_inputs.device)
+        traced = F.conv1d(
+            branch_inputs_t,
+            kernel,
+            padding=self.config.branch_trace_kernel - 1,
+            groups=self.num_branch,
+        )[..., : branch_inputs.shape[1]]
+        return (traced * gain.view(1, -1, 1)).transpose(1, 2)
+
 
 class _ParallelMambaBlock(nn.Module):
     def __init__(
@@ -138,9 +195,16 @@ class _ParallelMambaBlock(nn.Module):
         dropout: float,
         residual_scale_init: float,
         long_path_bias: float,
+        use_state_trace: bool,
+        state_trace_kernel: int,
+        state_tau_min: float,
+        state_tau_max: float,
+        state_mix_init: float,
     ) -> None:
         super().__init__()
         expanded_dim = expansion * model_dim
+        self.use_state_trace = use_state_trace
+        self.state_trace_kernel_size = state_trace_kernel
         self.norm = nn.LayerNorm(model_dim)
         self.in_proj = nn.Linear(model_dim, expanded_dim)
         self.gate_proj = nn.Linear(model_dim, expanded_dim)
@@ -163,6 +227,20 @@ class _ParallelMambaBlock(nn.Module):
         self.out_proj = nn.Linear(expanded_dim, model_dim)
         self.dropout = nn.Dropout(dropout)
         self.path_mix_logit = nn.Parameter(torch.full((expanded_dim,), float(long_path_bias)))
+        if self.use_state_trace:
+            self.register_buffer(
+                "state_trace_kernel",
+                self._create_state_trace_kernel(
+                    expanded_dim=expanded_dim,
+                    kernel_size=state_trace_kernel,
+                    tau_min=state_tau_min,
+                    tau_max=state_tau_max,
+                ),
+                persistent=False,
+            )
+            self.state_mix_logit = nn.Parameter(torch.full((expanded_dim,), float(state_mix_init)))
+        else:
+            self.state_mix_logit = None
         self.residual_scale = nn.Parameter(torch.full((model_dim,), float(residual_scale_init)))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -176,5 +254,35 @@ class _ParallelMambaBlock(nn.Module):
         path_mix = torch.sigmoid(self.path_mix_logit).view(1, 1, -1)
         mixed = (1.0 - path_mix) * F.silu(short) + path_mix * F.silu(long)
         mixed = mixed * gate
+        if self.use_state_trace:
+            state = self._state_trace(mixed)
+            state_mix = torch.sigmoid(self.state_mix_logit).view(1, 1, -1)
+            mixed = (1.0 - state_mix) * mixed + state_mix * state
         update = self.dropout(self.out_proj(mixed))
         return residual + self.residual_scale.view(1, 1, -1) * update
+
+    @staticmethod
+    def _create_state_trace_kernel(
+        *,
+        expanded_dim: int,
+        kernel_size: int,
+        tau_min: float,
+        tau_max: float,
+    ) -> torch.Tensor:
+        taus = torch.logspace(math.log10(tau_min), math.log10(tau_max), expanded_dim)
+        decays = torch.exp(-1.0 / taus).view(expanded_dim, 1)
+        powers = torch.arange(kernel_size, dtype=torch.float32).view(1, kernel_size)
+        kernel = (1.0 - decays) * (decays ** powers)
+        kernel = torch.flip(kernel, dims=[1]).view(expanded_dim, 1, kernel_size)
+        return kernel
+
+    def _state_trace(self, x: torch.Tensor) -> torch.Tensor:
+        x_t = x.transpose(1, 2)
+        kernel = self.state_trace_kernel.to(dtype=x.dtype, device=x.device)
+        traced = F.conv1d(
+            x_t,
+            kernel,
+            padding=self.state_trace_kernel_size - 1,
+            groups=x.shape[-1],
+        )[..., : x.shape[1]]
+        return traced.transpose(1, 2)

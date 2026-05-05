@@ -7,6 +7,7 @@ from typing import Any
 import torch
 
 from bnn_sim.mamba_lite import BranchMambaLite, BranchMambaLiteConfig
+from bnn_sim.mamba_selective import BranchSelectiveMamba, BranchSelectiveMambaConfig
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.official import ELM, create_official_elm
 
@@ -34,6 +35,14 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
     elif model_kind == "mamba-lite":
         config = BranchMambaLiteConfig(**payload["config"])
         model = BranchMambaLite(config)
+    elif model_kind == "mamba-selective":
+        config = BranchSelectiveMambaConfig(**payload["config"])
+        model = BranchSelectiveMamba(config)
+    elif model_kind == "mamba-official":
+        from bnn_sim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
+
+        config = BranchOfficialMambaConfig(**payload["config"])
+        model = BranchOfficialMamba(config)
     elif model_kind == "official":
         model = create_official_elm(payload["config"])
     else:
@@ -47,6 +56,10 @@ def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]
         return "baseline", asdict(model.config)
     if isinstance(model, BranchMambaLite):
         return "mamba-lite", asdict(model.config)
+    if isinstance(model, BranchSelectiveMamba):
+        return "mamba-selective", asdict(model.config)
+    if model.__class__.__name__ == "BranchOfficialMamba" and hasattr(model, "config"):
+        return "mamba-official", asdict(model.config)
     if isinstance(model, ELM):
         return "official", {
             "num_input": int(model.num_input),
