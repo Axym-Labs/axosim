@@ -29,6 +29,10 @@ class BranchOfficialMambaConfig:
     head_dim: int = 64
     num_groups: int = 1
     chunk_size: int = 256
+    channel_groups: int = 1
+    share_group_mamba: bool = False
+    block_norm: bool = True
+    final_norm: bool = True
     dropout: float = 0.0
     residual_scale_init: float = 0.1
     separate_heads: bool = False
@@ -92,6 +96,12 @@ class BranchOfficialMamba(nn.Module):
             raise ValueError("num_groups must be positive")
         if config.chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
+        if config.channel_groups <= 0:
+            raise ValueError("channel_groups must be positive")
+        if config.model_dim % config.channel_groups != 0:
+            raise ValueError("channel_groups must divide model_dim")
+        if config.share_group_mamba and config.block_type != "mamba1":
+            raise ValueError("share_group_mamba is currently supported only for block_type='mamba1'")
         if config.soma_filter_tau <= 0:
             raise ValueError("soma_filter_tau must be positive")
         if config.soma_filter_kernel <= 0:
@@ -160,12 +170,7 @@ class BranchOfficialMamba(nn.Module):
         )
         self.blocks = nn.ModuleList(
             [
-                _OfficialMambaResidualBlock(
-                    self._build_mamba_block(Mamba, Mamba2),
-                    model_dim=config.model_dim,
-                    dropout=config.dropout,
-                    residual_scale_init=config.residual_scale_init,
-                )
+                self._build_residual_block(Mamba, Mamba2)
                 for _ in range(config.num_layers)
             ]
         )
@@ -185,7 +190,7 @@ class BranchOfficialMamba(nn.Module):
             if config.temporal_refine_kernel > 0
             else None
         )
-        self.norm = nn.LayerNorm(config.model_dim)
+        self.norm = nn.LayerNorm(config.model_dim) if config.final_norm else nn.Identity()
         readout_dim = config.model_dim * (1 + len(self.hidden_trace_taus))
         if config.separate_heads or config.soma_filter or config.soma_multiplicative_gate:
             self.spike_readout = nn.Linear(readout_dim, 1)
@@ -216,21 +221,56 @@ class BranchOfficialMamba(nn.Module):
             self.soma_filter_logit = None
 
     def _build_mamba_block(self, mamba_cls: type[nn.Module], mamba2_cls: type[nn.Module]) -> nn.Module:
+        return self._build_mamba_block_for_dim(mamba_cls, mamba2_cls, self.config.model_dim)
+
+    def _build_mamba_block_for_dim(
+        self,
+        mamba_cls: type[nn.Module],
+        mamba2_cls: type[nn.Module],
+        model_dim: int,
+    ) -> nn.Module:
         if self.config.block_type == "mamba1":
             return mamba_cls(
-                d_model=self.config.model_dim,
+                d_model=model_dim,
                 d_state=self.config.state_dim,
                 d_conv=self.config.conv_kernel,
                 expand=self.config.expansion,
             )
         return mamba2_cls(
-            d_model=self.config.model_dim,
+            d_model=model_dim,
             d_state=self.config.state_dim,
             d_conv=self.config.conv_kernel,
             expand=self.config.expansion,
             headdim=self.config.head_dim,
             ngroups=self.config.num_groups,
             chunk_size=self.config.chunk_size,
+        )
+
+    def _build_residual_block(self, mamba_cls: type[nn.Module], mamba2_cls: type[nn.Module]) -> nn.Module:
+        if self.config.channel_groups == 1:
+            return _OfficialMambaResidualBlock(
+                self._build_mamba_block_for_dim(mamba_cls, mamba2_cls, self.config.model_dim),
+                model_dim=self.config.model_dim,
+                dropout=self.config.dropout,
+                residual_scale_init=self.config.residual_scale_init,
+                use_norm=self.config.block_norm,
+            )
+        group_dim = self.config.model_dim // self.config.channel_groups
+        return _GroupedOfficialMambaResidualBlock(
+            shared_mamba=self._build_mamba_block_for_dim(mamba_cls, mamba2_cls, group_dim)
+            if self.config.share_group_mamba
+            else None,
+            group_mambas=[
+                self._build_mamba_block_for_dim(mamba_cls, mamba2_cls, group_dim)
+                for _ in range(self.config.channel_groups)
+            ]
+            if not self.config.share_group_mamba
+            else None,
+            model_dim=self.config.model_dim,
+            channel_groups=self.config.channel_groups,
+            dropout=self.config.dropout,
+            residual_scale_init=self.config.residual_scale_init,
+            use_norm=self.config.block_norm,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -341,9 +381,10 @@ class _OfficialMambaResidualBlock(nn.Module):
         model_dim: int,
         dropout: float,
         residual_scale_init: float,
+        use_norm: bool = True,
     ) -> None:
         super().__init__()
-        self.norm = nn.LayerNorm(model_dim)
+        self.norm = nn.LayerNorm(model_dim) if use_norm else nn.Identity()
         self.mamba = mamba
         self.dropout = nn.Dropout(dropout)
         self.residual_scale = nn.Parameter(torch.full((model_dim,), float(residual_scale_init)))
@@ -351,6 +392,48 @@ class _OfficialMambaResidualBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         update = self.dropout(self.mamba(self.norm(x)))
         return x + self.residual_scale.view(1, 1, -1) * update
+
+
+class _GroupedOfficialMambaResidualBlock(nn.Module):
+    def __init__(
+        self,
+        *,
+        shared_mamba: nn.Module | None,
+        group_mambas: list[nn.Module] | None,
+        model_dim: int,
+        channel_groups: int,
+        dropout: float,
+        residual_scale_init: float,
+        use_norm: bool = True,
+    ) -> None:
+        super().__init__()
+        if (shared_mamba is None) == (group_mambas is None):
+            raise ValueError("provide exactly one of shared_mamba or group_mambas")
+        if model_dim % channel_groups != 0:
+            raise ValueError("channel_groups must divide model_dim")
+        self.channel_groups = channel_groups
+        self.group_dim = model_dim // channel_groups
+        self.norm = nn.LayerNorm(model_dim) if use_norm else nn.Identity()
+        self.shared_mamba = shared_mamba
+        self.group_mambas = nn.ModuleList(group_mambas or [])
+        self.dropout = nn.Dropout(dropout)
+        self.residual_scale = nn.Parameter(torch.full((model_dim,), float(residual_scale_init)))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, time_steps, _ = x.shape
+        grouped = self.norm(x).view(batch_size, time_steps, self.channel_groups, self.group_dim)
+        if self.shared_mamba is not None:
+            shared_input = grouped.permute(0, 2, 1, 3).reshape(batch_size * self.channel_groups, time_steps, self.group_dim)
+            update = self.shared_mamba(shared_input)
+            update = update.view(batch_size, self.channel_groups, time_steps, self.group_dim).permute(0, 2, 1, 3)
+        else:
+            updates = [
+                mamba(grouped[:, :, group_index, :]).unsqueeze(2)
+                for group_index, mamba in enumerate(self.group_mambas)
+            ]
+            update = torch.cat(updates, dim=2)
+        update = update.reshape(batch_size, time_steps, self.channel_groups * self.group_dim)
+        return x + self.residual_scale.view(1, 1, -1) * self.dropout(update)
 
 
 class _DepthwiseTemporalRefine(nn.Module):

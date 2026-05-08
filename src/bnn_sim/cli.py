@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from bnn_sim.branch_attention import BranchAttention, BranchAttentionConfig
 from bnn_sim.checkpoint import load_checkpoint
 from bnn_sim.data import (
     DeterministicWindowDataset,
@@ -37,6 +38,7 @@ DEFAULT_OFFICIAL_MODEL_CONFIG = "configs/branch_elm_30_official.json"
 DEFAULT_MAMBA_LITE_MODEL_CONFIG = "configs/branch_mamba_lite_45x64.json"
 DEFAULT_MAMBA_SELECTIVE_MODEL_CONFIG = "configs/branch_mamba_selective_45x64.json"
 DEFAULT_MAMBA_OFFICIAL_MODEL_CONFIG = "configs/branch_mamba_official_45x64.json"
+DEFAULT_BRANCH_ATTENTION_MODEL_CONFIG = "configs/branch_attention_45x64.json"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument("--input-dim", type=int, default=1278)
     evaluate.add_argument("--memory-units", type=int, default=30)
     evaluate.add_argument("--branches", type=int, default=32)
-    evaluate.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite", "mamba-selective", "mamba-official"], default="baseline", help="use 'official' for the paper-style model, 'mamba-lite' for the parallel temporal experiment, 'mamba-selective' for the reference selective SSM probe, 'mamba-official' for the official mamba-ssm backend; 'baseline' is legacy/debug")
+    evaluate.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite", "mamba-selective", "mamba-official", "branch-attention"], default="baseline", help="use 'official' for the paper-style model, 'mamba-lite' for the parallel temporal experiment, 'mamba-selective' for the reference selective SSM probe, 'mamba-official' for the official mamba-ssm backend, 'branch-attention' for the causal attention probe; 'baseline' is legacy/debug")
     evaluate.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     evaluate.add_argument("--batch-size", type=int, default=8)
     evaluate.add_argument("--seed", type=int, default=0)
@@ -103,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--input-dim", type=int, default=1278)
     train.add_argument("--memory-units", type=int, default=30)
     train.add_argument("--branches", type=int, default=32)
-    train.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite", "mamba-selective", "mamba-official"], default="baseline", help="use 'official' for the paper-style model, 'mamba-lite' for the parallel temporal experiment, 'mamba-selective' for the reference selective SSM probe, 'mamba-official' for the official mamba-ssm backend; 'baseline' is legacy/debug")
+    train.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite", "mamba-selective", "mamba-official", "branch-attention"], default="baseline", help="use 'official' for the paper-style model, 'mamba-lite' for the parallel temporal experiment, 'mamba-selective' for the reference selective SSM probe, 'mamba-official' for the official mamba-ssm backend, 'branch-attention' for the causal attention probe; 'baseline' is legacy/debug")
     train.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     train.add_argument("--epochs", type=int, default=1)
     train.add_argument("--batch-size", type=int, default=8)
@@ -157,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--input-dim", type=int, default=1278)
     benchmark.add_argument("--memory-units", type=int, default=30)
     benchmark.add_argument("--branches", type=int, default=32)
-    benchmark.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite", "mamba-selective", "mamba-official"], default="baseline", help="use 'official' for the paper-style model, 'mamba-lite' for the parallel temporal experiment, 'mamba-selective' for the reference selective SSM probe, 'mamba-official' for the official mamba-ssm backend; 'baseline' is legacy/debug")
+    benchmark.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite", "mamba-selective", "mamba-official", "branch-attention"], default="baseline", help="use 'official' for the paper-style model, 'mamba-lite' for the parallel temporal experiment, 'mamba-selective' for the reference selective SSM probe, 'mamba-official' for the official mamba-ssm backend, 'branch-attention' for the causal attention probe; 'baseline' is legacy/debug")
     benchmark.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     benchmark.add_argument("--batch-size", type=int, default=1)
     benchmark.add_argument("--time-steps", type=int, default=500)
@@ -433,6 +435,9 @@ def _build_model_from_args(args):
     if args.model_kind == "mamba-selective":
         config_path = args.model_config if args.model_config != DEFAULT_OFFICIAL_MODEL_CONFIG else DEFAULT_MAMBA_SELECTIVE_MODEL_CONFIG
         return BranchSelectiveMamba(BranchSelectiveMambaConfig(**load_official_elm_config(config_path)))
+    if args.model_kind == "branch-attention":
+        config_path = args.model_config if args.model_config != DEFAULT_OFFICIAL_MODEL_CONFIG else DEFAULT_BRANCH_ATTENTION_MODEL_CONFIG
+        return BranchAttention(BranchAttentionConfig(**load_official_elm_config(config_path)))
     if args.model_kind == "mamba-official":
         from bnn_sim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
 

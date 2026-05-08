@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 
+from bnn_sim.branch_attention import BranchAttention, BranchAttentionConfig
 from bnn_sim.mamba_lite import BranchMambaLite, BranchMambaLiteConfig
 from bnn_sim.mamba_selective import BranchSelectiveMamba, BranchSelectiveMambaConfig
 from bnn_sim.model import BranchELM, BranchELMConfig
@@ -38,6 +39,9 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
     elif model_kind == "mamba-selective":
         config = BranchSelectiveMambaConfig(**payload["config"])
         model = BranchSelectiveMamba(config)
+    elif model_kind == "branch-attention":
+        config = BranchAttentionConfig(**payload["config"])
+        model = BranchAttention(config)
     elif model_kind == "mamba-official":
         from bnn_sim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
 
@@ -58,6 +62,8 @@ def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]
         return "mamba-lite", asdict(model.config)
     if isinstance(model, BranchSelectiveMamba):
         return "mamba-selective", asdict(model.config)
+    if isinstance(model, BranchAttention):
+        return "branch-attention", asdict(model.config)
     if model.__class__.__name__ == "BranchOfficialMamba" and hasattr(model, "config"):
         return "mamba-official", asdict(model.config)
     if isinstance(model, ELM):
