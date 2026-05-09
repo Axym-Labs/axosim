@@ -109,8 +109,8 @@ class BranchTraceRNN(jit.ScriptModule):
             raise ValueError("num_branch * num_synapse_per_branch must cover the routed inputs")
         if self.trace_banks <= 0:
             raise ValueError("trace_banks must be positive")
-        if self.branch_nonlinearity not in {"none", "tanh"}:
-            raise ValueError("branch_nonlinearity must be 'none' or 'tanh'")
+        if self.branch_nonlinearity not in {"none", "tanh", "tanh_global", "tanh_fixed"}:
+            raise ValueError("branch_nonlinearity must be 'none', 'tanh', 'tanh_global', or 'tanh_fixed'")
         if config.branch_nonlinearity_scale_init <= 0:
             raise ValueError("branch_nonlinearity_scale_init must be positive")
         if config.soma_multiplicative_scale_init < 0:
@@ -149,10 +149,20 @@ class BranchTraceRNN(jit.ScriptModule):
         nn.init.zeros_(self.branch_skip_readout.bias)
         self.branch_readout_skip_scale = nn.Parameter(torch.tensor(float(config.branch_readout_skip_scale_init)))
         self.branch_gain = nn.Parameter(torch.ones(self.num_branch))
-        self.branch_nonlinearity_log_scale = nn.Parameter(
-            torch.full((self.num_branch,), math.log(config.branch_nonlinearity_scale_init))
-        )
-        self.branch_nonlinearity_bias = nn.Parameter(torch.zeros(self.num_branch))
+        if self.branch_nonlinearity in {"tanh_global", "tanh_fixed"}:
+            self.branch_nonlinearity_log_scale = nn.Parameter(
+                torch.tensor(math.log(config.branch_nonlinearity_scale_init)),
+                requires_grad=self.branch_nonlinearity == "tanh_global",
+            )
+            self.branch_nonlinearity_bias = nn.Parameter(torch.zeros(1), requires_grad=False)
+        else:
+            self.branch_nonlinearity_log_scale = nn.Parameter(
+                torch.full((self.num_branch,), math.log(config.branch_nonlinearity_scale_init))
+            )
+            self.branch_nonlinearity_bias = nn.Parameter(
+                torch.zeros(self.num_branch),
+                requires_grad=self.branch_nonlinearity == "tanh",
+            )
 
         proto_tau_m = torch.logspace(
             math.log10(self.memory_tau_min + 1e-6),
@@ -242,6 +252,9 @@ class BranchTraceRNN(jit.ScriptModule):
             scale = torch.exp(self.branch_nonlinearity_log_scale).view(1, self.num_branch, 1)
             bias = self.branch_nonlinearity_bias.view(1, self.num_branch, 1)
             signed_branch_features = torch.tanh(scale * (signed_branch_features + bias)) / torch.clamp(scale, min=1e-6)
+        if self.branch_nonlinearity == "tanh_global" or self.branch_nonlinearity == "tanh_fixed":
+            scale = torch.exp(self.branch_nonlinearity_log_scale).view(1, 1, 1)
+            signed_branch_features = torch.tanh(scale * signed_branch_features) / torch.clamp(scale, min=1e-6)
         branch_features = signed_branch_features.flatten(1)
         memory_input = torch.cat([branch_features, kappa_m * m_prev], dim=-1)
         delta_m_t = custom_tanh(self.mlp(memory_input))
