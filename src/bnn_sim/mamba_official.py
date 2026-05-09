@@ -22,6 +22,7 @@ class BranchOfficialMambaConfig:
     input_to_synapse_routing: str | None = "neuronio_routing"
     model_dim: int = 64
     num_layers: int = 2
+    block_repeats: int = 1
     state_dim: int = 16
     conv_kernel: int = 4
     expansion: int = 2
@@ -42,6 +43,11 @@ class BranchOfficialMambaConfig:
     learn_soma_filter_decay: bool = True
     soma_multiplicative_gate: bool = False
     soma_multiplicative_scale_init: float = 0.1
+    soma_peak_correction: bool = False
+    soma_peak_correction_scale_init: float = 0.1
+    soma_highpass_correction: bool = False
+    soma_highpass_correction_scale_init: float = 0.1
+    detach_spike_readout_features: bool = False
     branch_gain: bool = False
     branch_nonlinearity: str = "none"
     branch_nonlinearity_scale_init: float = 0.1
@@ -82,6 +88,8 @@ class BranchOfficialMamba(nn.Module):
             raise ValueError("model_dim must be positive")
         if config.num_layers <= 0:
             raise ValueError("num_layers must be positive")
+        if config.block_repeats <= 0:
+            raise ValueError("block_repeats must be positive")
         if config.state_dim <= 0:
             raise ValueError("state_dim must be positive")
         if config.conv_kernel <= 0:
@@ -108,6 +116,10 @@ class BranchOfficialMamba(nn.Module):
             raise ValueError("soma_filter_kernel must be positive")
         if config.soma_multiplicative_scale_init < 0:
             raise ValueError("soma_multiplicative_scale_init must be non-negative")
+        if config.soma_peak_correction_scale_init < 0:
+            raise ValueError("soma_peak_correction_scale_init must be non-negative")
+        if config.soma_highpass_correction_scale_init < 0:
+            raise ValueError("soma_highpass_correction_scale_init must be non-negative")
         if config.branch_nonlinearity not in {"none", "tanh"}:
             raise ValueError("branch_nonlinearity must be 'none' or 'tanh'")
         if config.branch_nonlinearity_scale_init <= 0:
@@ -192,7 +204,7 @@ class BranchOfficialMamba(nn.Module):
         )
         self.norm = nn.LayerNorm(config.model_dim) if config.final_norm else nn.Identity()
         readout_dim = config.model_dim * (1 + len(self.hidden_trace_taus))
-        if config.separate_heads or config.soma_filter or config.soma_multiplicative_gate:
+        if config.separate_heads or config.soma_filter or config.soma_multiplicative_gate or config.soma_peak_correction:
             self.spike_readout = nn.Linear(readout_dim, 1)
             self.soma_readout = nn.Linear(readout_dim, 1)
             self.readout = None
@@ -210,6 +222,26 @@ class BranchOfficialMamba(nn.Module):
             self.soma_gate_readout = None
             self.soma_mod_readout = None
             self.soma_multiplicative_scale = None
+        if config.soma_peak_correction:
+            self.soma_peak_gate_readout = nn.Linear(readout_dim, 1)
+            self.soma_peak_delta_readout = nn.Linear(readout_dim, 1)
+            nn.init.zeros_(self.soma_peak_delta_readout.weight)
+            nn.init.zeros_(self.soma_peak_delta_readout.bias)
+            self.soma_peak_correction_scale = nn.Parameter(torch.tensor(float(config.soma_peak_correction_scale_init)))
+        else:
+            self.soma_peak_gate_readout = None
+            self.soma_peak_delta_readout = None
+            self.soma_peak_correction_scale = None
+        if config.soma_highpass_correction:
+            self.soma_highpass_readout = nn.Linear(config.num_branch, 2)
+            nn.init.zeros_(self.soma_highpass_readout.weight[1])
+            nn.init.zeros_(self.soma_highpass_readout.bias[1])
+            self.soma_highpass_correction_scale = nn.Parameter(
+                torch.tensor(float(config.soma_highpass_correction_scale_init))
+            )
+        else:
+            self.soma_highpass_readout = None
+            self.soma_highpass_correction_scale = None
         if config.soma_filter:
             initial_decay = math.exp(-1.0 / config.soma_filter_tau)
             initial_logit = math.log(initial_decay / (1.0 - initial_decay))
@@ -288,6 +320,11 @@ class BranchOfficialMamba(nn.Module):
             bias = self.branch_nonlinearity_bias.to(dtype=branch_inputs.dtype, device=branch_inputs.device)
             branch_inputs = torch.tanh(scale.view(1, 1, -1) * (branch_inputs + bias.view(1, 1, -1)))
             branch_inputs = branch_inputs / scale.view(1, 1, -1).clamp_min(torch.finfo(branch_inputs.dtype).eps)
+        highpass_features = None
+        if self.soma_highpass_correction_scale is not None:
+            branch_delta = torch.zeros_like(branch_inputs)
+            branch_delta[:, 1:] = branch_inputs[:, 1:] - branch_inputs[:, :-1]
+            highpass_features = branch_delta
         if self.branch_trace_taus:
             branch_inputs = torch.cat(
                 [branch_inputs]
@@ -300,8 +337,9 @@ class BranchOfficialMamba(nn.Module):
         hidden = self.branch_projection(branch_inputs)
         if self.integrative_pre is not None:
             hidden = self.integrative_pre(hidden)
-        for block in self.blocks:
-            hidden = block(hidden)
+        for _ in range(self.config.block_repeats):
+            for block in self.blocks:
+                hidden = block(hidden)
         if self.integrative_post is not None:
             hidden = self.integrative_post(hidden)
         if self.temporal_refine is not None:
@@ -319,7 +357,8 @@ class BranchOfficialMamba(nn.Module):
         if self.readout is not None:
             return self.readout(features)
         assert self.spike_readout is not None and self.soma_readout is not None
-        spike = self.spike_readout(features)
+        spike_features = features.detach() if self.config.detach_spike_readout_features else features
+        spike = self.spike_readout(spike_features)
         soma = self.soma_readout(features)
         if self.soma_multiplicative_scale is not None:
             assert self.soma_gate_readout is not None and self.soma_mod_readout is not None
@@ -327,6 +366,20 @@ class BranchOfficialMamba(nn.Module):
             modulation = torch.tanh(self.soma_mod_readout(features))
             scale = self.soma_multiplicative_scale.to(dtype=soma.dtype, device=soma.device)
             soma = soma + scale * gate * soma * modulation
+        if self.soma_peak_correction_scale is not None:
+            assert self.soma_peak_gate_readout is not None and self.soma_peak_delta_readout is not None
+            gate = torch.sigmoid(self.soma_peak_gate_readout(features))
+            delta = torch.tanh(self.soma_peak_delta_readout(features))
+            scale = self.soma_peak_correction_scale.to(dtype=soma.dtype, device=soma.device)
+            soma = soma + scale * gate * delta
+        if self.soma_highpass_correction_scale is not None:
+            assert highpass_features is not None
+            assert self.soma_highpass_readout is not None
+            gate_delta = self.soma_highpass_readout(highpass_features)
+            gate = torch.sigmoid(gate_delta[..., 0:1])
+            delta = torch.tanh(gate_delta[..., 1:2])
+            scale = self.soma_highpass_correction_scale.to(dtype=soma.dtype, device=soma.device)
+            soma = soma + scale * gate * delta
         if self.soma_filter_logit is not None:
             soma = self._filter_soma(soma)
         return torch.cat([spike, soma], dim=-1)

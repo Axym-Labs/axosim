@@ -176,6 +176,15 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--l1-lambda", type=float, default=0.0)
     train.add_argument("--spike-loss-weight", type=float, default=0.5)
     train.add_argument("--soma-loss-weight", type=float, default=0.5)
+    train.add_argument("--sparse-soma-loss-weight", type=float, default=0.0)
+    train.add_argument("--sparse-soma-high-voltage-quantile", type=float, default=0.9)
+    train.add_argument("--sparse-soma-high-dvdt-quantile", type=float, default=0.9)
+    train.add_argument("--sparse-soma-input-event-quantile", type=float, default=0.95)
+    train.add_argument("--sparse-soma-spike-window", type=int, default=5)
+    train.add_argument("--sparse-soma-post-event-window", type=int, default=5)
+    train.add_argument("--soma-slope-loss-weight", type=float, default=0.0)
+    train.add_argument("--train-update-log-interval", type=int, default=0)
+    train.add_argument("--train-update-log")
     train.add_argument("--prefetch-batches", type=int, default=0)
     train.add_argument("--pin-memory", action="store_true")
     train.add_argument("--blocking-transfer", action="store_false", dest="non_blocking")
@@ -374,6 +383,15 @@ def main(argv: list[str] | None = None) -> int:
             l1_lambda=args.l1_lambda,
             spike_loss_weight=args.spike_loss_weight,
             soma_loss_weight=args.soma_loss_weight,
+            sparse_soma_loss_weight=args.sparse_soma_loss_weight,
+            sparse_soma_high_voltage_quantile=args.sparse_soma_high_voltage_quantile,
+            sparse_soma_high_dvdt_quantile=args.sparse_soma_high_dvdt_quantile,
+            sparse_soma_input_event_quantile=args.sparse_soma_input_event_quantile,
+            sparse_soma_spike_window=args.sparse_soma_spike_window,
+            sparse_soma_post_event_window=args.sparse_soma_post_event_window,
+            soma_slope_loss_weight=args.soma_slope_loss_weight,
+            update_log_interval=args.train_update_log_interval,
+            update_log_path=args.train_update_log,
             prefetch_batches=args.prefetch_batches,
             pin_memory=args.pin_memory,
             non_blocking=args.non_blocking,
