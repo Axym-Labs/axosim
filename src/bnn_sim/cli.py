@@ -19,6 +19,7 @@ from bnn_sim.data import (
     repack_shards_as_npy,
     write_demo_shards,
 )
+from bnn_sim.diagnostics import diagnose_dataset
 from bnn_sim.experiments import (
     append_registry_entry,
     apply_preset,
@@ -98,6 +99,32 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument("--no-registry", action="store_const", const="off", dest="registry")
     evaluate.set_defaults(non_blocking=True)
 
+    diagnose = subparsers.add_parser("diagnose", help="write biology-oriented surrogate fidelity diagnostics")
+    diagnose.add_argument("--preset", choices=sorted(list_presets()["evaluate"]))
+    diagnose.add_argument("--data", required=True)
+    diagnose.add_argument("--output-dir", required=True)
+    diagnose.add_argument("--input-dim", type=int, default=1278)
+    diagnose.add_argument("--memory-units", type=int, default=30)
+    diagnose.add_argument("--branches", type=int, default=32)
+    diagnose.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite", "mamba-selective", "mamba-official", "branch-attention", "branch-trace-rnn"], default="baseline")
+    diagnose.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
+    diagnose.add_argument("--batch-size", type=int, default=8)
+    diagnose.add_argument("--seed", type=int, default=0)
+    diagnose.add_argument("--device", default="cpu")
+    diagnose.add_argument("--checkpoint")
+    diagnose.add_argument("--window-size", type=int)
+    diagnose.add_argument("--window-stride", type=int)
+    diagnose.add_argument("--ignore-start", type=int, default=0)
+    diagnose.add_argument("--cache-shards", type=int, default=1)
+    diagnose.add_argument("--metric-ignore-start", type=int, default=0)
+    diagnose.add_argument("--metric-mask-mode", choices=["ignore-start", "official-overlap"], default="ignore-start", help=argparse.SUPPRESS)
+    diagnose.add_argument("--metric-stitch-burn-in", type=int, default=150, help=argparse.SUPPRESS)
+    diagnose.add_argument("--soma-affine-calibration", action="store_true")
+    diagnose.add_argument("--max-samples", type=int)
+    diagnose.add_argument("--pin-memory", action="store_true")
+    diagnose.add_argument("--blocking-transfer", action="store_false", dest="non_blocking")
+    diagnose.set_defaults(non_blocking=True)
+
     train = subparsers.add_parser("train", help="train a model with the current experiment workflow")
     train.add_argument("--preset", choices=sorted(list_presets()["train"]))
     train.add_argument("--data", required=True)
@@ -173,6 +200,8 @@ def main(argv: list[str] | None = None) -> int:
     explicit_dests = _explicit_option_dests(parser, argv, args.command)
     if args.command in {"train", "evaluate"}:
         apply_preset(args.command, getattr(args, "preset", None), args, explicit_dests)
+    elif args.command == "diagnose":
+        apply_preset("evaluate", getattr(args, "preset", None), args, explicit_dests)
 
     if args.command == "list-presets":
         print(json.dumps(list_presets(), indent=2, sort_keys=True))
@@ -255,6 +284,35 @@ def main(argv: list[str] | None = None) -> int:
                     checkpoint_path=args.checkpoint,
                 ),
             )
+        return 0
+
+    if args.command == "diagnose":
+        torch.manual_seed(args.seed)
+        dataset = _build_dataset(
+            args.data,
+            window_size=args.window_size,
+            window_stride=args.window_stride,
+            ignore_start=args.ignore_start,
+            cache_shards=args.cache_shards,
+        )
+        if args.checkpoint:
+            model = _load_checkpoint_for_evaluate(args)
+        else:
+            model = _build_model_from_args(args)
+        diagnose_dataset(
+            model,
+            dataset,
+            output_dir=args.output_dir,
+            batch_size=args.batch_size,
+            device=args.device,
+            ignore_start=args.metric_ignore_start,
+            mask_mode=args.metric_mask_mode,
+            stitch_burn_in=args.metric_stitch_burn_in,
+            soma_affine_calibration=args.soma_affine_calibration,
+            max_samples=args.max_samples,
+            pin_memory=args.pin_memory,
+            non_blocking=args.non_blocking,
+        )
         return 0
 
     if args.command == "train":

@@ -55,11 +55,6 @@ class BranchOfficialMambaConfig:
     integrative_mixer_long_kernel: int = 65
     integrative_mixer_position: str = "pre"
     integrative_mixer_long_path_bias: float = 0.5
-    engram_slots: int = 0
-    engram_dim: int = 16
-    engram_tau: float = 80.0
-    engram_kernel: int = 129
-    engram_residual_scale_init: float = 0.1
 
 
 class BranchOfficialMamba(nn.Module):
@@ -131,16 +126,6 @@ class BranchOfficialMamba(nn.Module):
             raise ValueError("integrative_mixer_long_kernel must be positive")
         if config.integrative_mixer_position not in {"pre", "post", "both"}:
             raise ValueError("integrative_mixer_position must be 'pre', 'post', or 'both'")
-        if config.engram_slots < 0:
-            raise ValueError("engram_slots must be non-negative")
-        if config.engram_dim <= 0:
-            raise ValueError("engram_dim must be positive")
-        if config.engram_tau <= 0:
-            raise ValueError("engram_tau must be positive")
-        if config.engram_kernel <= 0:
-            raise ValueError("engram_kernel must be positive")
-        if config.engram_residual_scale_init < 0:
-            raise ValueError("engram_residual_scale_init must be non-negative")
 
         self.config = config
         self.num_input = config.num_input
@@ -203,18 +188,6 @@ class BranchOfficialMamba(nn.Module):
         self.temporal_refine = (
             _DepthwiseTemporalRefine(config.model_dim, config.temporal_refine_kernel, config.residual_scale_init)
             if config.temporal_refine_kernel > 0
-            else None
-        )
-        self.engram = (
-            _EngramMemoryBlock(
-                config.model_dim,
-                slots=config.engram_slots,
-                engram_dim=config.engram_dim,
-                tau=config.engram_tau,
-                kernel_size=config.engram_kernel,
-                residual_scale_init=config.engram_residual_scale_init,
-            )
-            if config.engram_slots > 0
             else None
         )
         self.norm = nn.LayerNorm(config.model_dim) if config.final_norm else nn.Identity()
@@ -333,8 +306,6 @@ class BranchOfficialMamba(nn.Module):
             hidden = self.integrative_post(hidden)
         if self.temporal_refine is not None:
             hidden = self.temporal_refine(hidden)
-        if self.engram is not None:
-            hidden = self.engram(hidden)
         features = self.norm(hidden)
         if self.hidden_trace_taus:
             features = torch.cat(
@@ -483,52 +454,6 @@ class _DepthwiseTemporalRefine(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         update = self.conv(self.norm(x).transpose(1, 2))[..., : x.shape[1]].transpose(1, 2)
-        return x + self.residual_scale.view(1, 1, -1) * update
-
-
-class _EngramMemoryBlock(nn.Module):
-    """Causal slot memory side-path for cheap persistent latent traces."""
-
-    def __init__(
-        self,
-        model_dim: int,
-        *,
-        slots: int,
-        engram_dim: int,
-        tau: float,
-        kernel_size: int,
-        residual_scale_init: float,
-    ) -> None:
-        super().__init__()
-        if slots <= 0:
-            raise ValueError("slots must be positive")
-        self.slots = slots
-        self.engram_dim = engram_dim
-        self.tau = tau
-        self.kernel_size = kernel_size
-        self.norm = nn.LayerNorm(model_dim)
-        self.write_logits = nn.Linear(model_dim, slots)
-        self.read_logits = nn.Linear(model_dim, slots)
-        self.write_gate = nn.Linear(model_dim, 1)
-        self.value = nn.Linear(model_dim, engram_dim)
-        self.output = nn.Linear(engram_dim, model_dim)
-        self.residual_scale = nn.Parameter(torch.full((model_dim,), float(residual_scale_init)))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        z = self.norm(x)
-        write_weights = torch.softmax(self.write_logits(z), dim=-1)
-        write_gate = torch.sigmoid(self.write_gate(z))
-        values = self.value(z)
-        writes = write_weights.unsqueeze(-1) * write_gate.unsqueeze(-1) * values.unsqueeze(2)
-        batch_size, time_steps, _, _ = writes.shape
-        memory = _causal_exponential_filter(
-            writes.reshape(batch_size, time_steps, self.slots * self.engram_dim),
-            tau=self.tau,
-            kernel_size=self.kernel_size,
-        ).view(batch_size, time_steps, self.slots, self.engram_dim)
-        read_weights = torch.softmax(self.read_logits(z), dim=-1)
-        read = (memory * read_weights.unsqueeze(-1)).sum(dim=2)
-        update = self.output(F.silu(read))
         return x + self.residual_scale.view(1, 1, -1) * update
 
 
