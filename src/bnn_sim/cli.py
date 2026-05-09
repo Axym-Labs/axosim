@@ -28,6 +28,11 @@ from bnn_sim.experiments import (
     resolve_registry_path,
 )
 from bnn_sim.evaluate import evaluate_dataset, write_metrics
+from bnn_sim.inference_benchmark import (
+    benchmark_inference_matrix,
+    parse_int_list,
+    write_inference_benchmark,
+)
 from bnn_sim.mamba_lite import BranchMambaLite, BranchMambaLiteConfig
 from bnn_sim.mamba_selective import BranchSelectiveMamba, BranchSelectiveMambaConfig
 from bnn_sim.model import BranchELM, BranchELMConfig
@@ -204,6 +209,26 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--device", default="cpu")
     benchmark.add_argument("--compile", action="store_true", dest="compile_model")
     benchmark.add_argument("--output")
+
+    inference_benchmark = subparsers.add_parser(
+        "inference-benchmark",
+        help="benchmark deployment-oriented inference throughput across batch and sequence scales",
+    )
+    inference_benchmark.add_argument("--input-dim", type=int, default=1278)
+    inference_benchmark.add_argument("--memory-units", type=int, default=30)
+    inference_benchmark.add_argument("--branches", type=int, default=32)
+    inference_benchmark.add_argument("--model-kind", choices=["baseline", "official", "mamba-lite", "mamba-selective", "mamba-official", "branch-attention", "branch-trace-rnn"], default="baseline")
+    inference_benchmark.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
+    inference_benchmark.add_argument("--checkpoint")
+    inference_benchmark.add_argument("--batch-sizes", default="1,8,32,128")
+    inference_benchmark.add_argument("--time-steps", default="500,1000,6000")
+    inference_benchmark.add_argument("--runs", type=int, default=20)
+    inference_benchmark.add_argument("--warmup-runs", type=int, default=5)
+    inference_benchmark.add_argument("--precision", choices=["float32", "float16", "bfloat16"], default="float32")
+    inference_benchmark.add_argument("--device", default="cpu")
+    inference_benchmark.add_argument("--compile", action="store_true", dest="compile_model")
+    inference_benchmark.add_argument("--accuracy-metrics")
+    inference_benchmark.add_argument("--output", required=True)
 
     args = parser.parse_args(argv)
     explicit_dests = _explicit_option_dests(parser, argv, args.command)
@@ -440,6 +465,34 @@ def main(argv: list[str] | None = None) -> int:
             output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         else:
             print(f"mean_forward_seconds={report['mean_forward_seconds']:.6f}")
+        return 0
+
+    if args.command == "inference-benchmark":
+        torch.manual_seed(0)
+        if args.checkpoint:
+            model, _ = load_checkpoint(args.checkpoint, map_location=args.device)
+        else:
+            model = _build_model_from_args(args)
+        input_dim = int(getattr(model, "num_input", args.input_dim))
+        try:
+            batch_sizes = parse_int_list(args.batch_sizes)
+            time_steps = parse_int_list(args.time_steps)
+            report = benchmark_inference_matrix(
+                model,
+                batch_sizes=batch_sizes,
+                time_steps=time_steps,
+                input_dim=input_dim,
+                device=args.device,
+                precision=args.precision,
+                warmup_runs=args.warmup_runs,
+                runs=args.runs,
+                compile_model=args.compile_model,
+                accuracy_metrics_path=args.accuracy_metrics,
+            )
+        except (FileNotFoundError, ValueError) as error:
+            print(str(error))
+            return 2
+        write_inference_benchmark(report, args.output)
         return 0
 
     raise AssertionError(f"unhandled command {args.command}")

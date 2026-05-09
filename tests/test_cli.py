@@ -111,6 +111,38 @@ def test_cli_benchmark_writes_json_report(tmp_path):
     assert Path(report_path).exists()
 
 
+def test_cli_inference_benchmark_writes_deployment_report(tmp_path):
+    report_path = tmp_path / "inference-benchmark.json"
+
+    assert main(
+        [
+            "inference-benchmark",
+            "--model-kind",
+            "baseline",
+            "--input-dim",
+            "6",
+            "--memory-units",
+            "4",
+            "--branches",
+            "2",
+            "--batch-sizes",
+            "1,2",
+            "--time-steps",
+            "3",
+            "--runs",
+            "1",
+            "--warmup-runs",
+            "0",
+            "--output",
+            str(report_path),
+        ]
+    ) == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["model_parameter_count"] > 0
+    assert len(report["measurements"]) == 2
+    assert report["measurements"][0]["neuron_steps_per_second"] > 0
+
+
 def test_cli_evaluate_accepts_official_model_config(tmp_path):
     data_dir = tmp_path / "data"
     metrics_path = tmp_path / "metrics.json"
