@@ -49,7 +49,8 @@ def evaluate_dataset(
     _synchronize_device(device)
     start_time = time.perf_counter()
 
-    with torch.inference_mode():
+    eval_context = torch.no_grad() if getattr(model, "learn_memory_tau", False) else torch.inference_mode()
+    with eval_context:
         for start in range(0, len(dataset), batch_size):
             batch_indices = range(start, min(start + batch_size, len(dataset)))
             if hasattr(dataset, "get_batch"):

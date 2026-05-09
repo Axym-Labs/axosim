@@ -37,6 +37,7 @@ class ELM(jit.ScriptModule):
         "num_synapse_per_branch",
         "input_to_synapse_routing",
         "delta_t",
+        "readout_hidden_size",
     ]
 
     def __init__(
@@ -57,6 +58,7 @@ class ELM(jit.ScriptModule):
         num_synapse_per_branch: int = 1,
         input_to_synapse_routing: Optional[str] = None,
         delta_t: float = 1.0,
+        readout_hidden_size: int = 0,
     ):
         super(ELM, self).__init__()
         self.num_input, self.num_output = num_input, num_output
@@ -70,6 +72,7 @@ class ELM(jit.ScriptModule):
         self.num_synapse_per_branch = num_synapse_per_branch
         self.input_to_synapse_routing = input_to_synapse_routing
         self.delta_t = delta_t
+        self.readout_hidden_size = readout_hidden_size
 
         # derived neuron properties
         self.mlp_hidden_size = mlp_hidden_size if mlp_hidden_size else 2 * num_memory
@@ -92,7 +95,12 @@ class ELM(jit.ScriptModule):
         self._proto_w_s = nn.parameter.Parameter(
             torch.full((self.num_synapse,), w_s_value)
         )
-        self.w_y = nn.Linear(num_memory, num_output)
+        if readout_hidden_size > 0:
+            self.readout_hidden = nn.Linear(num_memory, readout_hidden_size)
+            self.w_y = nn.Linear(readout_hidden_size, num_output)
+        else:
+            self.readout_hidden = nn.Identity()
+            self.w_y = nn.Linear(num_memory, num_output)
 
         # initialization of synapse time constants and decay factors
         tau_s = torch.full((self.num_synapse,), tau_s_value)
@@ -182,7 +190,10 @@ class ELM(jit.ScriptModule):
             self.mlp(torch.cat([syn_input, kappa_m * m_prev], dim=-1))
         )
         m_t = kappa_m * m_prev + self.lambda_value * (1 - kappa_m) * delta_m_t
-        y_t = self.w_y(m_t)
+        if self.readout_hidden_size > 0:
+            y_t = self.w_y(torch.nn.functional.silu(self.readout_hidden(m_t)))
+        else:
+            y_t = self.w_y(m_t)
         return y_t, s_t, m_t
 
     @jit.script_method
