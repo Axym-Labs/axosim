@@ -224,13 +224,16 @@ class BranchTraceRNN(jit.ScriptModule):
         return torch.relu(self._proto_w_s) * self.bank_synapse_mask
 
     @jit.script_method
-    def dynamics(self, x, trace_prev, m_prev, v_prev, w_s, kappa_trace, kappa_m, kappa_membrane):
-        batch_size, _ = x.shape
+    def route_step(self, x):
         routed = torch.index_select(x, 1, self.input_to_synapse_indices)
-        routed = routed * self.valid_indices_mask
-        weighted = routed.unsqueeze(1) * w_s.unsqueeze(0)
-        drive = weighted.view(batch_size, self.trace_banks, self.num_branch, self.num_synapse_per_branch).sum(dim=-1)
-        drive = drive.transpose(1, 2)
+        return routed * self.valid_indices_mask
+
+    @jit.script_method
+    def dynamics_routed(self, routed, trace_prev, m_prev, v_prev, w_s, kappa_trace, kappa_m, kappa_membrane):
+        batch_size, _ = routed.shape
+        routed_branch = routed.view(batch_size, self.num_branch, self.num_synapse_per_branch)
+        w_s_branch = w_s.view(self.trace_banks, self.num_branch, self.num_synapse_per_branch)
+        drive = torch.einsum("bns,kns->bnk", routed_branch, w_s_branch)
         trace_t = kappa_trace.view(1, 1, self.trace_banks) * trace_prev + drive
         signed_branch_features = trace_t * self.feature_sign.view(1, 1, self.trace_banks)
         if self.branch_gain_enabled:
@@ -267,6 +270,11 @@ class BranchTraceRNN(jit.ScriptModule):
         return y_t, trace_t, m_t, v_t
 
     @jit.script_method
+    def dynamics(self, x, trace_prev, m_prev, v_prev, w_s, kappa_trace, kappa_m, kappa_membrane):
+        routed = self.route_step(x)
+        return self.dynamics_routed(routed, trace_prev, m_prev, v_prev, w_s, kappa_trace, kappa_m, kappa_membrane)
+
+    @jit.script_method
     def forward(self, X):
         batch_size, T, _ = X.shape
         w_s = self.w_s
@@ -277,9 +285,11 @@ class BranchTraceRNN(jit.ScriptModule):
         m_prev = torch.zeros(batch_size, self.num_memory, device=X.device)
         v_prev = torch.zeros(batch_size, self.num_memory, device=X.device)
         outputs = torch.empty(batch_size, T, self.num_output, device=X.device)
+        routed_inputs = torch.index_select(X, 2, self.input_to_synapse_indices)
+        routed_inputs = routed_inputs * self.valid_indices_mask
         for t in range(T):
-            y_t, trace_prev, m_prev, v_prev = self.dynamics(
-                X[:, t], trace_prev, m_prev, v_prev, w_s, kappa_trace, kappa_m, kappa_membrane
+            y_t, trace_prev, m_prev, v_prev = self.dynamics_routed(
+                routed_inputs[:, t], trace_prev, m_prev, v_prev, w_s, kappa_trace, kappa_m, kappa_membrane
             )
             outputs[:, t, :] = y_t
         return outputs
