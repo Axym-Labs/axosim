@@ -49,7 +49,8 @@ def evaluate_dataset(
     _synchronize_device(device)
     start_time = time.perf_counter()
 
-    eval_context = torch.no_grad() if getattr(model, "learn_memory_tau", False) else torch.inference_mode()
+    needs_normal_no_grad = getattr(model, "learn_memory_tau", False) or hasattr(model, "branch_gain_enabled")
+    eval_context = torch.no_grad() if needs_normal_no_grad else torch.inference_mode()
     with eval_context:
         for start in range(0, len(dataset), batch_size):
             batch_indices = range(start, min(start + batch_size, len(dataset)))

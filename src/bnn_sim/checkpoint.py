@@ -43,7 +43,8 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
         model = create_official_elm(payload["config"])
     else:
         raise ValueError(f"unknown model_kind in checkpoint: {model_kind}")
-    model.load_state_dict(payload["state_dict"])
+    strict = model_kind != "branch-trace-rnn"
+    model.load_state_dict(payload["state_dict"], strict=strict)
     return model, dict(payload.get("metadata", {}))
 
 
@@ -71,6 +72,10 @@ def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]
             "readout_hidden_size": int(model.readout_hidden_size),
             "w_s_value": float(model.w_s_value),
             "delta_t": float(model.delta_t),
+            "branch_gain": bool(getattr(model, "branch_gain_enabled", False)),
+            "branch_nonlinearity": str(getattr(model, "branch_nonlinearity", "none")),
+            "soma_multiplicative_gate": bool(getattr(model, "soma_multiplicative_gate_enabled", False)),
+            "branch_readout_skip": bool(getattr(model, "branch_readout_skip_enabled", False)),
         }
     if model.__class__.__name__ == "BranchOfficialMamba" and hasattr(model, "config"):
         return "mamba-official", asdict(model.config)
