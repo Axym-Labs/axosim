@@ -5,6 +5,7 @@ from functools import lru_cache
 import importlib.resources as resources
 import json
 from pathlib import Path
+import subprocess
 import time
 from typing import Any
 
@@ -50,7 +51,8 @@ HETEROGENEITY_NAMES = (
     "exc_tau2_ms",
     "inh_tau1_ms",
     "inh_tau2_ms",
-    "exc_weight_scale",
+    "ampa_weight_scale",
+    "nmda_weight_scale",
     "inh_weight_scale",
     "ei_balance",
     "input_rate_scale",
@@ -350,6 +352,7 @@ def _make_batch_recipe(A, config: ArborHeteroConfig, inputs, params_list, routin
             A.recipe.__init__(self)
             self.props = A.neuron_cable_properties()
             self.props.catalogue.extend(A.allen_catalogue())
+            self.props.catalogue.extend(_load_nmda_catalogue(A), "bnn::")
 
         def num_cells(self):
             return len(cells)
@@ -371,7 +374,8 @@ def _make_batch_recipe(A, config: ArborHeteroConfig, inputs, params_list, routin
             for branch_idx, times in enumerate(exc_times):
                 if times:
                     schedule = A.explicit_schedule([float(t) * U.ms for t in times])
-                    generators.append(A.event_generator(f"exc_{branch_idx}", params["exc_weight_scale"], schedule))
+                    generators.append(A.event_generator(f"ampa_{branch_idx}", params["ampa_weight_scale"], schedule))
+                    generators.append(A.event_generator(f"nmda_{branch_idx}", params["nmda_weight_scale"], schedule))
             for branch_idx, times in enumerate(inh_times):
                 if times:
                     schedule = A.explicit_schedule([float(t) * U.ms for t in times])
@@ -430,7 +434,15 @@ def _build_cell(config: ArborHeteroConfig, params: dict[str, float], branch_ids:
                 "Exp2Syn",
                 {"erev": 0.0, "tau1": params["exc_tau1_ms"], "tau2": params["exc_tau2_ms"]},
             ),
-            f"exc_{branch_idx}",
+            f"ampa_{branch_idx}",
+        )
+        decor.place(
+            f'"branch_exc_{branch_idx}"',
+            A.synapse(
+                "bnn::NMDA_CA1_pyr_SC",
+                {"e": 0.0, "tau1": 3.3, "tau2": 102.38, "mg": 1.0, "pf": 0.03},
+            ),
+            f"nmda_{branch_idx}",
         )
         decor.place(
             f'"branch_inh_{branch_idx}"',
@@ -576,7 +588,8 @@ def _sample_heterogeneity(rng: np.random.Generator) -> dict[str, float]:
         "exc_tau2_ms": float(rng.uniform(2.0, 8.5)),
         "inh_tau1_ms": float(rng.uniform(0.3, 1.8)),
         "inh_tau2_ms": float(rng.uniform(6.0, 20.0)),
-        "exc_weight_scale": float(rng.uniform(0.0015, 0.018)),
+        "ampa_weight_scale": float(rng.uniform(0.0012, 0.014)),
+        "nmda_weight_scale": float(rng.uniform(0.00015, 0.0025)),
         "inh_weight_scale": float(rng.uniform(0.001, 0.012)),
         "ei_balance": float(rng.uniform(-0.25, 0.25)),
         "input_rate_scale": float(rng.uniform(0.55, 1.75)),
@@ -613,7 +626,7 @@ def _simulator_metadata(
         "description": (
             "GPU-capable Arbor batched independent-cell teacher based on an Allen L5 morphology/fit, "
             "with region-specific passive properties, Allen active channels, calcium dynamics, "
-            "heterogeneous E/I Exp2Syn inputs, and per-sample physiology/stimulus heterogeneity."
+            "heterogeneous AMPA/NMDA/GABA-like synaptic inputs, and per-sample physiology/stimulus heterogeneity."
         ),
         "template": {
             "morphology": "src/bnn_sim/assets/allen_l5_template.swc",
@@ -627,8 +640,19 @@ def _simulator_metadata(
         "routing": "interlocking-inputs-to-selected-allen-morphology-branches",
         "target_columns": ["spike", "soma"],
         "soma_target_units": "normalized_neuronio",
+        "custom_catalogues": {
+            "bnn_nmda": str(_nmda_catalogue_path()),
+            "mechanisms": ["bnn::NMDA_CA1_pyr_SC"],
+            "nmda_source": {
+                "modeldb_model": "2019343",
+                "file": "Model/Mods_Tomko/NMDA_CA1_pyr_SC.mod",
+                "url": "https://modeldb.science/getModelFile?embed=True&file=2019343%2FModel%2FMods_Tomko%2FNMDA_CA1_pyr_SC.mod&model=2019343",
+                "defaults": {"tau1_ms": 3.3, "tau2_ms": 102.38, "mg_mM": 1.0, "pf": 0.03},
+                "magnesium_block": "Jahr-Stevens 1990 form: 1/(1 + exp(0.062 * -v) * (mg/3.57))",
+            },
+        },
         "known_limitations": [
-            "Excitatory synapses use conductance-based Exp2Syn AMPA-like kinetics; voltage-dependent NMDA requires a custom Arbor mechanism catalogue.",
+            "NMDA now matches the sourced ModelDB NMDA_CA1_pyr_SC double-exponential conductance mechanism; it is not a full stochastic receptor-state model.",
         ],
     }
 
@@ -643,6 +667,47 @@ def _require_arbor_version(*, require_cuda: bool = True) -> tuple[str, dict[str,
     if require_cuda and config.get("gpu") != "cuda":
         raise ValueError(f"expected a CUDA-enabled Arbor build; found Arbor config {config}")
     return version, dict(config)
+
+
+def _load_nmda_catalogue(A):
+    return A.load_catalogue(str(_nmda_catalogue_path()))
+
+
+def _nmda_catalogue_path() -> Path:
+    build_dir = Path(__file__).resolve().parents[2] / "build" / "arbor_catalogues" / "bnn_nmda"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    catalogue_path = build_dir / "bnn_nmda-catalogue.so"
+    mod_source = resources.files("bnn_sim.mechanisms").joinpath("nmda.mod")
+    source_text = mod_source.read_text(encoding="utf-8")
+    mod_dir = build_dir / "mod"
+    mod_dir.mkdir(exist_ok=True)
+    mod_path = mod_dir / "NMDA_CA1_pyr_SC.mod"
+    if not mod_path.exists() or mod_path.read_text(encoding="utf-8") != source_text:
+        mod_path.write_text(source_text, encoding="utf-8")
+    stamp_path = build_dir / "source.stamp"
+    if catalogue_path.exists() and stamp_path.exists() and stamp_path.read_text(encoding="utf-8") == source_text:
+        return catalogue_path
+    command = [
+        "arbor-build-catalogue",
+        "bnn_nmda",
+        str(mod_dir),
+        "--cpu",
+        "True",
+        "--gpu",
+        "cuda",
+        "--quiet",
+    ]
+    try:
+        subprocess.run(command, cwd=build_dir, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as error:
+        detail = ""
+        if isinstance(error, subprocess.CalledProcessError):
+            detail = f"\nstdout:\n{error.stdout}\nstderr:\n{error.stderr}"
+        raise ValueError(f"failed to build Arbor NMDA catalogue with {' '.join(command)}{detail}") from error
+    stamp_path.write_text(source_text, encoding="utf-8")
+    if not catalogue_path.exists():
+        raise ValueError(f"Arbor NMDA catalogue build did not produce {catalogue_path}")
+    return catalogue_path
 
 
 @lru_cache(maxsize=1)

@@ -28,7 +28,7 @@ bnn-sim = "bnn_sim.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-bnn_sim = ["assets/*.swc", "assets/*.json"]
+bnn_sim = ["assets/*.swc", "assets/*.json", "mechanisms/*.mod"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

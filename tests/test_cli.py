@@ -83,6 +83,9 @@ def test_cli_make_arbor_hetero_data_writes_shards_and_report(tmp_path):
     assert report["samples"] == 1
     assert report["backend"] == "arbor"
     assert report["simulator"]["name"] == "arbor"
+    assert "bnn::NMDA_CA1_pyr_SC" in report["simulator"]["custom_catalogues"]["mechanisms"]
+    assert report["simulator"]["custom_catalogues"]["nmda_source"]["modeldb_model"] == "2019343"
+    assert "nmda_weight_scale" in report["simulator"]["heterogeneity_names"]
     assert (data_dir / "manifest.json").exists()
     assert (data_dir / "generation_report.json").exists()
 
