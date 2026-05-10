@@ -32,6 +32,12 @@ from bnn_sim.inference_benchmark import (
     parse_int_list,
     write_inference_benchmark,
 )
+from bnn_sim.arbor_sim import (
+    ArborHeteroConfig,
+    parse_split_samples,
+    write_arbor_hetero_dataset,
+    write_arbor_hetero_splits,
+)
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.neuronio_raw import convert_neuronio_pickles
 from bnn_sim.official import create_official_elm, load_official_elm_config, load_official_state_dict
@@ -55,6 +61,29 @@ def main(argv: list[str] | None = None) -> int:
     demo.add_argument("--time-steps", type=int, default=32)
     demo.add_argument("--input-dim", type=int, default=64)
     demo.add_argument("--seed", type=int, default=0)
+
+    arbor_data = subparsers.add_parser(
+        "make-arbor-hetero-data",
+        help="write Arbor-backed heterogeneous cable-cell shards for distillation",
+    )
+    arbor_data.add_argument("--output", required=True)
+    arbor_data.add_argument("--samples", type=int, default=128)
+    arbor_data.add_argument("--shards", type=int, default=1)
+    arbor_data.add_argument("--splits", help="comma-separated NAME:SAMPLES pairs, e.g. train:128,val:32,test:32")
+    arbor_data.add_argument("--shards-per-split", type=int, default=1)
+    arbor_data.add_argument("--time-steps", type=int, default=6000)
+    arbor_data.add_argument("--input-dim", type=int, default=1278)
+    arbor_data.add_argument("--branches", type=int, default=45)
+    arbor_data.add_argument("--integration-dt-ms", type=float, default=0.025)
+    arbor_data.add_argument("--base-event-rate-hz", type=float, default=2.0)
+    arbor_data.add_argument("--burst-probability", type=float, default=0.015)
+    arbor_data.add_argument("--burst-event-rate-hz", type=float, default=35.0)
+    arbor_data.add_argument("--arbor-gpu-id", type=int, default=0, help="GPU id for Arbor context; ignored with --cpu-only")
+    arbor_data.add_argument("--cpu-only", action="store_true", help="use Arbor CPU context instead of CUDA")
+    arbor_data.add_argument("--arbor-threads", type=int, default=1)
+    arbor_data.add_argument("--sim-batch-size", type=int, default=32, help="independent cells per Arbor simulation batch")
+    arbor_data.add_argument("--seed", type=int, default=0)
+    arbor_data.add_argument("--report", help="optional path for a copy of the generation report")
 
     convert = subparsers.add_parser("convert-neuronio", help="convert raw NeuronIO pickle files to deterministic shards")
     convert.add_argument("--input", required=True)
@@ -245,6 +274,46 @@ def main(argv: list[str] | None = None) -> int:
             input_dim=args.input_dim,
             seed=args.seed,
         )
+        return 0
+
+    if args.command == "make-arbor-hetero-data":
+        try:
+            config = ArborHeteroConfig(
+                input_dim=args.input_dim,
+                num_branch=args.branches,
+                time_steps=args.time_steps,
+                integration_dt_ms=args.integration_dt_ms,
+                base_event_rate_hz=args.base_event_rate_hz,
+                burst_probability=args.burst_probability,
+                burst_event_rate_hz=args.burst_event_rate_hz,
+                arbor_threads=args.arbor_threads,
+                arbor_gpu_id=None if args.cpu_only else args.arbor_gpu_id,
+                sim_batch_size=args.sim_batch_size,
+            )
+            if args.splits:
+                report = write_arbor_hetero_splits(
+                    args.output,
+                    split_samples=parse_split_samples(args.splits),
+                    shards_per_split=args.shards_per_split,
+                    seed=args.seed,
+                    config=config,
+                )
+            else:
+                report = write_arbor_hetero_dataset(
+                    args.output,
+                    samples=args.samples,
+                    shards=args.shards,
+                    seed=args.seed,
+                    config=config,
+                )
+        except ValueError as error:
+            print(str(error))
+            return 2
+        if args.report:
+            report_path = Path(args.report)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(json.dumps(report, indent=2, sort_keys=True))
         return 0
 
     if args.command == "convert-neuronio":

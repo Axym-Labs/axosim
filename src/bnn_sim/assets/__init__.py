@@ -1,0 +1,1 @@
+"""Bundled simulator template assets."""

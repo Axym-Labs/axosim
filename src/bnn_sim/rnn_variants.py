@@ -288,21 +288,28 @@ class BranchTraceRNN(jit.ScriptModule):
         return self.dynamics_routed(routed, trace_prev, m_prev, v_prev, w_s, kappa_trace, kappa_m, kappa_membrane)
 
     @jit.script_method
-    def forward(self, X):
-        batch_size, T, _ = X.shape
+    def route_sequence(self, X):
+        routed = torch.index_select(X, 2, self.input_to_synapse_indices)
+        return routed * self.valid_indices_mask
+
+    @jit.script_method
+    def forward_routed(self, routed_inputs):
+        batch_size, T, _ = routed_inputs.shape
         w_s = self.w_s
         kappa_trace = self.kappa_trace
         kappa_m = self.kappa_m
         kappa_membrane = self.kappa_membrane
-        trace_prev = torch.zeros(batch_size, self.num_branch, self.trace_banks, device=X.device)
-        m_prev = torch.zeros(batch_size, self.num_memory, device=X.device)
-        v_prev = torch.zeros(batch_size, self.num_memory, device=X.device)
-        outputs = torch.empty(batch_size, T, self.num_output, device=X.device)
-        routed_inputs = torch.index_select(X, 2, self.input_to_synapse_indices)
-        routed_inputs = routed_inputs * self.valid_indices_mask
+        trace_prev = torch.zeros(batch_size, self.num_branch, self.trace_banks, device=routed_inputs.device)
+        m_prev = torch.zeros(batch_size, self.num_memory, device=routed_inputs.device)
+        v_prev = torch.zeros(batch_size, self.num_memory, device=routed_inputs.device)
+        outputs = torch.empty(batch_size, T, self.num_output, device=routed_inputs.device)
         for t in range(T):
             y_t, trace_prev, m_prev, v_prev = self.dynamics_routed(
                 routed_inputs[:, t], trace_prev, m_prev, v_prev, w_s, kappa_trace, kappa_m, kappa_membrane
             )
             outputs[:, t, :] = y_t
         return outputs
+
+    @jit.script_method
+    def forward(self, X):
+        return self.forward_routed(self.route_sequence(X))

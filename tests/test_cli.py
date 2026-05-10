@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import torch
 
@@ -49,6 +50,71 @@ def test_cli_smoke_data_and_evaluate(tmp_path):
     ) == 0
 
     assert Path(metrics_path).exists()
+
+
+def test_cli_make_arbor_hetero_data_writes_shards_and_report(tmp_path):
+    data_dir = tmp_path / "arbor-hetero"
+    report_path = tmp_path / "report.json"
+
+    result = main(
+        [
+            "make-arbor-hetero-data",
+            "--output",
+            str(data_dir),
+            "--samples",
+            "1",
+            "--shards",
+            "1",
+            "--time-steps",
+            "16",
+            "--input-dim",
+            "8",
+            "--branches",
+            "2",
+            "--integration-dt-ms",
+            "0.1",
+            "--report",
+            str(report_path),
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["samples"] == 1
+    assert report["backend"] == "arbor"
+    assert report["simulator"]["name"] == "arbor"
+    assert (data_dir / "manifest.json").exists()
+    assert (data_dir / "generation_report.json").exists()
+
+
+def test_cli_make_arbor_hetero_splits(tmp_path):
+    data_dir = tmp_path / "arbor-hetero-splits"
+
+    result = main(
+        [
+            "make-arbor-hetero-data",
+            "--output",
+            str(data_dir),
+            "--splits",
+            "train:2,val:1",
+            "--shards-per-split",
+            "1",
+            "--time-steps",
+            "8",
+            "--input-dim",
+            "6",
+            "--branches",
+            "2",
+            "--integration-dt-ms",
+            "0.1",
+        ]
+    )
+
+    assert result == 0
+    summary = json.loads((data_dir / "generation_summary.json").read_text(encoding="utf-8"))
+    assert set(summary["splits"]) == {"train", "val"}
+    assert summary["backend"] == "arbor"
+    assert (data_dir / "train" / "manifest.json").exists()
 
 
 def test_cli_evaluate_accepts_window_options(tmp_path):
