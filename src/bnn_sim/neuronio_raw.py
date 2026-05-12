@@ -200,9 +200,10 @@ def _iter_samples(
 
 def _write_shard(output_dir: Path, shard_index: int, inputs: list[np.ndarray], targets: list[np.ndarray], sample_ids: list[str]) -> Path:
     shard_path = output_dir / f"neuronio_{shard_index:05d}.npz"
+    stacked_inputs = np.stack(inputs)
     np.savez_compressed(
         shard_path,
-        inputs=np.stack(inputs).astype(np.float32),
+        inputs=stacked_inputs,
         targets=np.stack(targets).astype(np.float32),
         sample_ids=np.asarray(sample_ids),
     )

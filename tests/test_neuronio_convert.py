@@ -34,6 +34,8 @@ def test_convert_neuronio_pickles_writes_signed_normalized_shards(tmp_path):
     assert first.targets.shape == (6, 2)
     assert first.inputs[1, 2] == -1.0
     assert np.isclose(first.targets[0, 1], 0.77)
+    with np.load(written[0], allow_pickle=False) as data:
+        assert data["inputs"].dtype == np.int8
 
 
 def test_convert_neuronio_pickles_discovers_nested_files_and_writes_windows(tmp_path):
@@ -58,6 +60,24 @@ def test_convert_neuronio_pickles_discovers_nested_files_and_writes_windows(tmp_
     assert dataset[0].sample_id.endswith("@1")
     assert dataset[1].sample_id.endswith("@3")
     assert dataset[2].sample_id.endswith("@1")
+
+
+def test_convert_neuronio_pickles_can_store_full_simulations_without_windowing(tmp_path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    _write_raw_neuronio_pickle(raw_dir / "batch_sim__0")
+    output_dir = tmp_path / "full_shards"
+
+    written = convert_neuronio_pickles(raw_dir, output_dir, shard_size=4)
+
+    assert len(written) == 1
+    dataset = ShardedNeuronIODataset(output_dir)
+    assert len(dataset) == 4
+    assert dataset[0].inputs.shape == (6, 4)
+    assert dataset[0].sample_id.endswith(":0")
+    with np.load(written[0], allow_pickle=False) as data:
+        assert data["inputs"].dtype == np.int8
+        assert data["sample_ids"][0].endswith(":0")
 
 
 def test_convert_neuronio_pickles_appends_after_existing_shards(tmp_path):
