@@ -1,10 +1,8 @@
 # bnn_sim
 
-Deterministic Branch-ELM / official ELM neuron harness inspired by
-`deep-research-report.md`.
-
-This includes the earlier small Branch-ELM-style baseline plus a minimal port of
-the paper repository's Expressive Leaky Memory (ELM) neuron model for NeuronIO.
+Deterministic NeuronIO training and evaluation harness for the official ELM /
+Branch-ELM model family, with a small legacy BranchELM path still available for
+toy-data smoke tests.
 
 ## Install
 
@@ -36,6 +34,41 @@ The dataset download uses a resumable `.zip.part` file. If a large transfer is
 interrupted, rerun the same command and it will continue from the partial file
 when Kaggle's server honors byte ranges.
 
+## Recommended Workflow
+
+List the named presets:
+
+```bash
+python -m bnn_sim.cli list-presets
+```
+
+Train with the current recommended setup:
+
+```bash
+python -m bnn_sim.cli train \
+  --preset paper-random-fulltrace \
+  --data data/full-trace-shards/nmda-train \
+  --val-data data/full-trace-shards/nmda-val \
+  --epochs 10 \
+  --epoch-samples 80000 \
+  --shard-reuse-batches 58 \
+  --checkpoint runs/paper-like.pt \
+  --metrics runs/paper-like-metrics.json
+```
+
+Evaluate with the corrected full-trace metric path:
+
+```bash
+python -m bnn_sim.cli evaluate \
+  --preset fulltrace-paper-metric \
+  --data data/full-trace-shards/nmda-val \
+  --checkpoint runs/paper-like.pt \
+  --output runs/paper-like-val.json
+```
+
+Each `train` and `evaluate` run writes a tiny `experiment-registry.jsonl` next
+to the metrics file by default. Disable that with `--no-registry`.
+
 ## Smoke Workflow
 
 Create deterministic demo NeuronIO-style shards:
@@ -44,10 +77,11 @@ Create deterministic demo NeuronIO-style shards:
 python -m bnn_sim.cli make-demo-data --output runs/demo-data --samples 8 --time-steps 32 --input-dim 64
 ```
 
-Train a small reproducible Branch-ELM baseline:
+Train the small legacy smoke path on toy data:
 
 ```bash
 python -m bnn_sim.cli train \
+  --preset legacy-baseline-smoke \
   --data runs/demo-data \
   --input-dim 64 \
   --memory-units 30 \
@@ -57,16 +91,19 @@ python -m bnn_sim.cli train \
   --metrics runs/train-metrics.json
 ```
 
-Train the official paper-repo ELM shape with the included `num_memory_30`
-configuration:
+Train the official paper-repo ELM shape on toy data:
 
 ```bash
 python -m bnn_sim.cli make-demo-data --output runs/official-demo-data --samples 2 --time-steps 8 --input-dim 1278
 
 python -m bnn_sim.cli train \
+  --preset paper-random-fulltrace \
   --data runs/official-demo-data \
-  --model-kind official \
   --model-config configs/branch_elm_30_official.json \
+  --window-size 8 \
+  --ignore-start 0 \
+  --burn-in 0 \
+  --epoch-samples 2 \
   --epochs 1 \
   --checkpoint runs/official-elm.pt \
   --metrics runs/official-train-metrics.json
@@ -76,6 +113,7 @@ Evaluate a checkpoint:
 
 ```bash
 python -m bnn_sim.cli evaluate \
+  --preset legacy-baseline-smoke \
   --data runs/demo-data \
   --checkpoint runs/branch-elm.pt \
   --output runs/eval-metrics.json
@@ -86,8 +124,8 @@ model config:
 
 ```bash
 python -m bnn_sim.cli evaluate \
+  --preset fulltrace-paper-metric \
   --data runs/neuronio-shards \
-  --model-kind official \
   --model-config configs/branch_elm_30_official.json \
   --checkpoint .external/elmneuron/models/num_memory_30/neuronio_best_model_state.pt \
   --output runs/official-eval-metrics.json
@@ -106,24 +144,16 @@ python -m bnn_sim.cli benchmark \
   --output runs/benchmark.json
 ```
 
-For the official model, replace the model sizing flags with:
-
-```bash
---model-kind official --model-config configs/branch_elm_30_official.json
-```
-
 ## Implemented From The Report
 
 - Deterministic pre-sharded loader for NeuronIO-style `(samples, time, channels)` inputs and two-output spike/soma targets.
-- Branch-ELM recurrent runtime with configurable memory units, branch routing, synaptic trace state, memory state, and spike/soma readout.
-- Branch-ELM-30 default configuration.
+- Official paper-repo ELM / Branch-ELM runtime, routing, synaptic trace state, memory state, and spike/soma readout.
+- Legacy simplified BranchELM path kept for smoke tests.
 - BCE + MSE training loop with burn-in support.
 - Checkpoint save/load with model config metadata.
 - Evaluation metrics: soma RMSE and spike AUC.
 - Benchmark command with optional `torch.compile`.
-- Official paper-repo ELM model port, `configs/branch_elm_30_official.json`,
-  official checkpoint-compatible loading, and CLI selection via
-  `--model-kind official`.
+- Named train/evaluate presets and tiny JSONL experiment registry.
 
 ## Not Included
 
@@ -138,8 +168,8 @@ converted directly:
 python -m bnn_sim.cli convert-neuronio --input path/to/raw-neuronio-folder --output runs/neuronio-shards
 ```
 
-Use deterministic fixed windows for the report's 500 ms training/evaluation
-setup:
+The recommended training path is the preset-based full-trace workflow above. If
+you need the older fixed-window path for a compatibility check:
 
 ```bash
 python -m bnn_sim.cli train \
@@ -150,6 +180,12 @@ python -m bnn_sim.cli train \
   --window-stride 350 \
   --ignore-start 500 \
   --burn-in 150 \
+  --shuffle-mode shard \
+  --cache-shards 1 \
   --checkpoint runs/branch-elm-30.pt \
   --metrics runs/branch-elm-30-train.json
 ```
+
+`--shuffle-mode shard` keeps training deterministic while shuffling shard order
+and within-shard sample order. Pair it with `--cache-shards 1` for compressed
+NeuronIO shards so each shard is inflated once while its local samples are used.

@@ -17,12 +17,18 @@ dependencies = [
 dev = [
   "pytest>=8",
 ]
+sim = [
+  "arbor==0.11.0",
+]
 
 [project.scripts]
 bnn-sim = "bnn_sim.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+bnn_sim = ["assets/*.swc", "assets/*.json", "mechanisms/*.mod"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

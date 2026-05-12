@@ -93,6 +93,8 @@ The paper-faithful ELM/Branch-ELM NeuronIO schedule is: **500 ms samples**, **1 
 
 The public repo script is slightly different: the default full-run config uses **35 epochs**, a base learning rate of `5e-4`, **10 workers**, **100 prefetched batches**, and a **500-step input window**. It also builds the NeuronIO data loader with explicit multiprocessing queues. This is close enough to be practical, but not identical, so record carefully whether your baseline is **paper-faithful** or **repo-faithful**. citeturn10view0turn10view1turn10view5turn37view0turn37view3
 
+Future training-efficiency sweeps should include regularization choices, especially L1, L2/weight decay, and AdamW, because they may reduce the presentation budget needed to reach stable validation metrics.
+
 ### Compute, memory, and storage budget
 
 The public constants make the data path large even though the model is small. The NeuronIO constants in the repo are **1278 input channels**, **2 labels**, **6000 time steps per simulation**, and **128 simulations per file**; the README says the NeuronIO-related code requires about **115 GB** of downloaded data. For practical work, I would budget **180–250 GB** of free SSD space, not 115 GB, because you will also want unpacked data, logs, checkpoints, and experiment outputs. That storage target is an estimate, but a realistic one. citeturn16view0turn24view1

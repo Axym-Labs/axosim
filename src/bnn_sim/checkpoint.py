@@ -8,6 +8,7 @@ import torch
 
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.official import ELM, create_official_elm
+from bnn_sim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
 
 
 def save_checkpoint(model: torch.nn.Module, path: str | Path, *, metadata: dict[str, Any] | None = None) -> None:
@@ -30,17 +31,54 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
     if model_kind in {"baseline", "branch_elm"}:
         config = BranchELMConfig(**payload["config"])
         model = BranchELM(config)
+    elif model_kind == "branch-trace-rnn":
+        config = BranchTraceRNNConfig(**payload["config"])
+        model = BranchTraceRNN(config)
+    elif model_kind == "mamba-official":
+        from bnn_sim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
+
+        config = BranchOfficialMambaConfig(**payload["config"])
+        model = BranchOfficialMamba(config)
     elif model_kind == "official":
         model = create_official_elm(payload["config"])
     else:
         raise ValueError(f"unknown model_kind in checkpoint: {model_kind}")
-    model.load_state_dict(payload["state_dict"])
+    strict = model_kind != "branch-trace-rnn"
+    model.load_state_dict(payload["state_dict"], strict=strict)
     return model, dict(payload.get("metadata", {}))
 
 
 def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]]:
     if isinstance(model, BranchELM):
         return "baseline", asdict(model.config)
+    if isinstance(model, BranchTraceRNN):
+        return "branch-trace-rnn", {
+            "num_input": int(model.num_input),
+            "num_output": int(model.num_output),
+            "num_branch": int(model.num_branch),
+            "num_synapse_per_branch": int(model.num_synapse_per_branch),
+            "num_memory": int(model.num_memory),
+            "lambda_value": float(model.lambda_value),
+            "mlp_num_layers": int(model.mlp_num_layers),
+            "mlp_hidden_size": int(model.mlp_hidden_size),
+            "mlp_activation": str(model.mlp_activation),
+            "memory_tau_min": float(model.memory_tau_min),
+            "memory_tau_max": float(model.memory_tau_max),
+            "trace_tau_min": float(model.trace_tau_min),
+            "trace_tau_max": float(model.trace_tau_max),
+            "trace_banks": int(model.trace_banks),
+            "conductance_cell": bool(model.conductance_cell),
+            "membrane_tau": float(model.membrane_tau),
+            "readout_hidden_size": int(model.readout_hidden_size),
+            "w_s_value": float(model.w_s_value),
+            "delta_t": float(model.delta_t),
+            "branch_gain": bool(getattr(model, "branch_gain_enabled", False)),
+            "branch_nonlinearity": str(getattr(model, "branch_nonlinearity", "none")),
+            "soma_multiplicative_gate": bool(getattr(model, "soma_multiplicative_gate_enabled", False)),
+            "branch_readout_skip": bool(getattr(model, "branch_readout_skip_enabled", False)),
+        }
+    if model.__class__.__name__ == "BranchOfficialMamba" and hasattr(model, "config"):
+        return "mamba-official", asdict(model.config)
     if isinstance(model, ELM):
         return "official", {
             "num_input": int(model.num_input),
@@ -59,5 +97,6 @@ def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]
             "num_synapse_per_branch": int(model.num_synapse_per_branch),
             "input_to_synapse_routing": model.input_to_synapse_routing,
             "delta_t": float(model.delta_t),
+            "readout_hidden_size": int(getattr(model, "readout_hidden_size", 0)),
         }
     raise TypeError(f"unsupported checkpoint model type: {type(model).__name__}")

@@ -122,7 +122,7 @@ def build_setup_plan(options: SetupOptions) -> SetupPlan:
     next_steps = (
         "Place kaggle.json under ~/.kaggle/ or set KAGGLE_USERNAME and KAGGLE_KEY before using --download-data.",
         "Convert downloaded raw files with --convert-raw if you did not convert during setup.",
-        "Run a baseline with: python -m bnn_sim.cli train --data <shards> --input-dim 1278 --memory-units 30 --branches 32 --window-size 500 --window-stride 350 --ignore-start 500 --burn-in 150 --checkpoint runs/branch-elm-30.pt --metrics runs/branch-elm-30-train.json",
+        "Run the recommended preset with: python -m bnn_sim.cli train --preset paper-random-fulltrace --data <train-shards> --val-data <val-shards> --epochs 10 --epoch-samples 80000 --shard-reuse-batches 58 --checkpoint runs/paper-like.pt --metrics runs/paper-like-metrics.json",
     )
     return SetupPlan(steps=tuple(steps), next_steps=next_steps)
 

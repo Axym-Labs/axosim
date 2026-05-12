@@ -1,6 +1,7 @@
 import torch
 
 from bnn_sim.model import BranchELM, BranchELMConfig
+from bnn_sim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
 
 
 def test_branch_elm_30_default_has_expected_shape_and_parameter_budget():
@@ -24,3 +25,26 @@ def test_branch_elm_forward_is_deterministic_for_same_seed_and_input():
     x = torch.randn(2, 5, 8)
 
     assert torch.allclose(model_a(x), model_b(x))
+
+
+def test_branch_trace_rnn_forward_routed_matches_forward():
+    torch.manual_seed(0)
+    model = BranchTraceRNN(
+        BranchTraceRNNConfig(
+            num_input=6,
+            num_branch=3,
+            num_synapse_per_branch=2,
+            num_memory=4,
+            trace_banks=2,
+            readout_hidden_size=8,
+        )
+    ).eval()
+    x = torch.randn(2, 5, 6)
+
+    with torch.inference_mode():
+        routed = model.route_sequence(x)
+        direct = model(x)
+        routed_out = model.forward_routed(routed)
+
+    assert routed.shape == (2, 5, 6)
+    assert torch.allclose(direct, routed_out)

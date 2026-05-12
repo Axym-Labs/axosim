@@ -1,0 +1,16 @@
+{
+  "num_input": 1278,
+  "num_output": 2,
+  "num_branch": 45,
+  "num_synapse_per_branch": 100,
+  "input_to_synapse_routing": "neuronio_routing",
+  "model_dim": 64,
+  "num_layers": 2,
+  "state_dim": 16,
+  "conv_kernel": 4,
+  "expansion": 2,
+  "block_type": "mamba1",
+  "dropout": 0.0,
+  "residual_scale_init": 0.1,
+  "branch_gain": true
+}

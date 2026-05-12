@@ -59,6 +59,10 @@ class MLP(nn.Module):
                 layers.append(nn.ReLU())
             elif activation == "silu":
                 layers.append(nn.SiLU())
+            elif activation == "gelu":
+                layers.append(nn.GELU())
+            elif activation == "softplus":
+                layers.append(nn.Softplus())
             else:
                 raise ValueError(f"Unknown activation: {activation}")
             next_input_size = hidden_size
