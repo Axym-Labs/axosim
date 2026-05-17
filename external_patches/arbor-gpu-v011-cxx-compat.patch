@@ -1,0 +1,42 @@
+diff --git a/arbor/include/arbor/cable_cell.hpp b/arbor/include/arbor/cable_cell.hpp
+index 3ef19cbc..b8eac99d 100644
+--- a/arbor/include/arbor/cable_cell.hpp
++++ b/arbor/include/arbor/cable_cell.hpp
+@@ -131,12 +131,12 @@ struct ARB_SYMBOL_VISIBLE cable_probe_point_state {
+     cable_probe_point_state(std::nullptr_t, std::string, std::string) = delete;
+     cable_probe_point_state() = delete;
+ 
+-    constexpr cable_probe_point_state(cell_tag_type t, std::string m, std::string s):
++    cable_probe_point_state(cell_tag_type t, std::string m, std::string s):
+         target(std::move(t)), mechanism(std::move(m)), state(std::move(s)) {}
+-    constexpr cable_probe_point_state(const cable_probe_point_state&) = default;
+-    constexpr cable_probe_point_state(cable_probe_point_state&&) = default;
+-    constexpr cable_probe_point_state& operator=(const cable_probe_point_state&) = default;
+-    constexpr cable_probe_point_state& operator=(cable_probe_point_state&&) = default;
++    cable_probe_point_state(const cable_probe_point_state&) = default;
++    cable_probe_point_state(cable_probe_point_state&&) = default;
++    cable_probe_point_state& operator=(const cable_probe_point_state&) = default;
++    cable_probe_point_state& operator=(cable_probe_point_state&&) = default;
+ };
+ 
+ // Value of state variable `key` in point mechanism `source` at every target
+diff --git a/arbor/include/arbor/common_types.hpp b/arbor/include/arbor/common_types.hpp
+index 8e0206d9..0068a212 100644
+--- a/arbor/include/arbor/common_types.hpp
++++ b/arbor/include/arbor/common_types.hpp
+@@ -131,7 +131,14 @@ struct cell_address_type {
+     cell_address_type& operator=(const cell_address_type&) = default;
+     cell_address_type& operator=(cell_address_type&&) = default;
+ 
+-    auto operator<=>(const cell_address_type&) const = default;
++    bool operator==(const cell_address_type& other) const {
++        return gid == other.gid && tag == other.tag;
++    }
++
++    auto operator<=>(const cell_address_type& other) const {
++        if (auto cmp = gid <=> other.gid; cmp != 0) return cmp;
++        return tag <=> other.tag;
++    }
+ };
+ 
+ struct cell_remote_label_type {
