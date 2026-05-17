@@ -120,6 +120,35 @@ def test_cli_make_arbor_hetero_splits(tmp_path):
     assert (data_dir / "train" / "manifest.json").exists()
 
 
+def test_cli_make_arbor_hetero_data_accepts_config_file(tmp_path):
+    data_dir = tmp_path / "configured-arbor-hetero"
+    report_path = tmp_path / "configured-report.json"
+    config_path = tmp_path / "sim-config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "output": str(data_dir),
+                "samples": 1,
+                "shards": 1,
+                "time_steps": 8,
+                "input_dim": 6,
+                "branches": 2,
+                "integration_dt_ms": 0.1,
+                "report": str(report_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = main(["make-arbor-hetero-data", "--config", str(config_path)])
+
+    assert result == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["samples"] == 1
+    assert report["input_dim"] == 6
+    assert (data_dir / "manifest.json").exists()
+
+
 def test_cli_evaluate_accepts_window_options(tmp_path):
     data_dir = tmp_path / "data"
     metrics_path = tmp_path / "metrics.json"

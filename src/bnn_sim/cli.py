@@ -66,7 +66,8 @@ def main(argv: list[str] | None = None) -> int:
         "make-arbor-hetero-data",
         help="write Arbor-backed heterogeneous cable-cell shards for distillation",
     )
-    arbor_data.add_argument("--output", required=True)
+    arbor_data.add_argument("--config", help="JSON config with make-arbor-hetero-data option names")
+    arbor_data.add_argument("--output")
     arbor_data.add_argument("--samples", type=int, default=128)
     arbor_data.add_argument("--shards", type=int, default=1)
     arbor_data.add_argument("--splits", help="comma-separated NAME:SAMPLES pairs, e.g. train:128,val:32,test:32")
@@ -278,6 +279,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "make-arbor-hetero-data":
         try:
+            _apply_arbor_data_config(args, explicit_dests)
+            if not args.output:
+                raise ValueError("--output is required unless provided by --config")
             config = ArborHeteroConfig(
                 input_dim=args.input_dim,
                 num_branch=args.branches,
@@ -645,6 +649,47 @@ def _load_checkpoint_for_evaluate(args):
         state_dict = load_official_state_dict(args.checkpoint, map_location=args.device)
         model.load_state_dict(state_dict, strict=True)
         return model
+
+
+def _apply_arbor_data_config(args, explicit_dests: set[str]) -> None:
+    config_path = getattr(args, "config", None)
+    if not config_path:
+        return
+    path = Path(config_path)
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise ValueError(f"simulator config not found: {path}") from error
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid simulator config JSON in {path}: {error}") from error
+    if not isinstance(config, dict):
+        raise ValueError("simulator config must be a JSON object")
+    allowed = {
+        "output",
+        "samples",
+        "shards",
+        "splits",
+        "shards_per_split",
+        "time_steps",
+        "input_dim",
+        "branches",
+        "integration_dt_ms",
+        "base_event_rate_hz",
+        "burst_probability",
+        "burst_event_rate_hz",
+        "arbor_gpu_id",
+        "cpu_only",
+        "arbor_threads",
+        "sim_batch_size",
+        "seed",
+        "report",
+    }
+    unknown = sorted(set(config) - allowed)
+    if unknown:
+        raise ValueError(f"unknown simulator config keys: {', '.join(unknown)}")
+    for key, value in config.items():
+        if key not in explicit_dests:
+            setattr(args, key, value)
 
 
 def _explicit_option_dests(parser: argparse.ArgumentParser, argv: list[str], command: str) -> set[str]:

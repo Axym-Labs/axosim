@@ -1,0 +1,17 @@
+{
+  "output": "runs/arbor_nmda_source_exact_gpu_smoke",
+  "samples": 2,
+  "shards": 1,
+  "time_steps": 100,
+  "input_dim": 64,
+  "branches": 8,
+  "integration_dt_ms": 0.05,
+  "base_event_rate_hz": 2.0,
+  "burst_probability": 0.015,
+  "burst_event_rate_hz": 35.0,
+  "arbor_gpu_id": 0,
+  "arbor_threads": 1,
+  "sim_batch_size": 2,
+  "seed": 0,
+  "report": "runs/arbor_nmda_source_exact_gpu_smoke/generation_report.json"
+}

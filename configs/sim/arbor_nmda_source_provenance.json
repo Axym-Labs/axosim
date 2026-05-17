@@ -1,0 +1,24 @@
+{
+  "source": "ModelDB 2019343 Model/Mods_Tomko/NMDA_CA1_pyr_SC.mod",
+  "url": "https://modeldb.science/getModelFile?embed=True&file=2019343%2FModel%2FMods_Tomko%2FNMDA_CA1_pyr_SC.mod&model=2019343",
+  "matched_defaults": {
+    "e_mV": 0,
+    "mg_mM": 1,
+    "pf": 0.03,
+    "tau1_ms": 3.3,
+    "tau2_ms": 102.38
+  },
+  "matched_equations": [
+    "double-exponential conductance state A/B",
+    "g=(B-A)*mgblock(v)",
+    "i=g*(v-e)*(1-pf)",
+    "ica=g*(v-eca)*pf",
+    "mgblock=1/(1+exp(0.062*-v)*(mg/3.57))",
+    "NET_RECEIVE adds weight*factor to A and B"
+  ],
+  "arbor_portability_changes": [
+    "removed NEURON TABLE lookup directive; same formula evaluated directly",
+    "removed redundant i/eca/ica ASSIGNED/RANGE declarations required by Arbor modcc",
+    "copied source as NMDA_CA1_pyr_SC.mod for arbor-build-catalogue output naming"
+  ]
+}

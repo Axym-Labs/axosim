@@ -1,0 +1,17 @@
+{
+  "output": "data/arbor-allen-nmda-source-medium-20260510",
+  "splits": "train:256,val:64,test:64",
+  "shards_per_split": 4,
+  "time_steps": 6000,
+  "input_dim": 1278,
+  "branches": 45,
+  "integration_dt_ms": 0.05,
+  "base_event_rate_hz": 2.0,
+  "burst_probability": 0.015,
+  "burst_event_rate_hz": 35.0,
+  "arbor_gpu_id": 0,
+  "arbor_threads": 1,
+  "sim_batch_size": 32,
+  "seed": 0,
+  "report": "runs/arbor_allen_nmda_source_medium_20260510_summary.json"
+}
