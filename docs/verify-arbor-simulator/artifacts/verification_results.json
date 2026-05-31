@@ -1,0 +1,29 @@
+{
+  "data_dir": "data/arbor-allen-nmda-source-medium-20260510/train",
+  "samples": 256,
+  "time_steps": 6000,
+  "t2_biophysical_plausibility": {
+    "soma_mean_mv": -67.63907623291016,
+    "soma_std_mv": 0.16407136619091034,
+    "soma_min_mv": -67.94829559326172,
+    "soma_max_mv": -66.83943939208984,
+    "resting_in_range": true,
+    "spike_peak_mean": 0.9921875,
+    "spike_peak_max": 1.0,
+    "spike_rate_mean_hz": 70.58723958333333,
+    "spike_rate_min_hz": 0.0,
+    "spike_rate_max_hz": 176.16666666666666,
+    "spike_rate_in_range": true,
+    "no_nan": true,
+    "no_inf": true,
+    "no_pathological": true
+  },
+  "t6_edge_cases": {
+    "has_nan": false,
+    "has_inf": false,
+    "soma_min": -2.4829819202423096,
+    "soma_max": 8.605546951293945,
+    "spike_min": 0.0,
+    "spike_max": 1.0
+  }
+}

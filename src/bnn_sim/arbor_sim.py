@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from functools import lru_cache
 import importlib.resources as resources
 import json
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -136,6 +137,7 @@ def write_arbor_hetero_dataset(
     shards: int = 1,
     seed: int = 0,
     config: ArborHeteroConfig | None = None,
+    param_overrides: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     if samples <= 0:
         raise ValueError("samples must be positive")
@@ -172,7 +174,7 @@ def write_arbor_hetero_dataset(
         for local_idx in range(shard_samples):
             sample_seed = int(rng.integers(0, np.iinfo(np.int32).max))
             sample_rng = np.random.default_rng(sample_seed)
-            params = _sample_heterogeneity(sample_rng)
+            params = _sample_heterogeneity(sample_rng, overrides=param_overrides)
             inputs = _sample_sparse_inputs(config, routing, branch_info["regions"], params, sample_rng)
             global_idx = sample_base + local_idx
             shard_inputs[local_idx] = inputs
@@ -547,9 +549,9 @@ def _threshold_spikes(soma_mv: np.ndarray, threshold_mv: float) -> np.ndarray:
     return spikes
 
 
-def _sample_heterogeneity(rng: np.random.Generator) -> dict[str, float]:
+def _sample_heterogeneity(rng: np.random.Generator, overrides: dict[str, float] | None = None) -> dict[str, float]:
     logn = lambda sigma=0.25: float(np.exp(rng.normal(0.0, sigma)))
-    return {
+    params = {
         "soma_cm_scale": logn(0.18),
         "dend_cm_scale": logn(0.22),
         "apic_cm_scale": logn(0.22),
@@ -598,6 +600,9 @@ def _sample_heterogeneity(rng: np.random.Generator) -> dict[str, float]:
         "apic_synapse_fraction": float(rng.uniform(0.35, 0.75)),
         "spike_threshold_mv": float(rng.uniform(-42.0, -32.0)),
     }
+    if overrides:
+        params.update(overrides)
+    return params
 
 
 def _heterogeneity_vector(params: dict[str, float]) -> np.ndarray:
@@ -688,7 +693,7 @@ def _nmda_catalogue_path() -> Path:
     if catalogue_path.exists() and stamp_path.exists() and stamp_path.read_text(encoding="utf-8") == source_text:
         return catalogue_path
     command = [
-        "arbor-build-catalogue",
+        "/home/davwis/miniconda3/envs/bnn_sim/bin/arbor-build-catalogue",
         "bnn_nmda",
         str(mod_dir),
         "--cpu",
@@ -697,8 +702,10 @@ def _nmda_catalogue_path() -> Path:
         "cuda",
         "--quiet",
     ]
+    env = os.environ.copy()
+    env["PATH"] = "/home/davwis/miniconda3/envs/bnn_sim/bin:/home/davwis/bin:" + env.get("PATH", "")
     try:
-        subprocess.run(command, cwd=build_dir, check=True, capture_output=True, text=True)
+        subprocess.run(command, cwd=build_dir, check=True, capture_output=True, text=True, env=env)
     except (FileNotFoundError, subprocess.CalledProcessError) as error:
         detail = ""
         if isinstance(error, subprocess.CalledProcessError):
