@@ -3,6 +3,41 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- VERIFICATION (2026-06-03 12:10): Full local test suite passed again after
+  adding explicit-input Arbor re-simulation and the dropout-pair experiment:
+  `.venv/bin/python -m pytest -q` (`60 passed, 1 skipped`). Compile check passed
+  for `src/bnn_sim` and all benchmark artifact scripts.
+
+- EXPERIMENT (2026-06-03 12:10): Added and ran the cleaner M4 event-dropout
+  teacher pair via
+  `docs/verify-arbor-simulator/artifacts/run_event_dropout_teacher_pair.py`.
+  Source was the nominal teacher-rate-sweep traces (`n=8`, `3000` steps);
+  intervention dropped `48,005 / 95,715` baseline events (`p=0.5`) and
+  re-simulated the same heterogeneity with Arbor CPU. Artifacts:
+  `docs/verify-arbor-simulator/artifacts/event_dropout_pair/event_dropout_pair.npz`,
+  `event_dropout_report.json`, and `event_dropout_report.md`. Teacher response:
+  event fraction `0.003067 -> 0.001529`, spike rate delta `-26.65` per
+  1000 steps, soma mean delta `-5.343 mV`, direction
+  `lower_event_drive/lower_spiking/hyperpolarized`, response detected. This is
+  cleaner than the low→high balanced-rate shift and is the preferred MVP M4
+  intervention for next model comparisons.
+
+- EXPERIMENT (2026-06-03 12:10): Re-ran the MVP smoke comparison after adding
+  the dropout pair to `run_neuro_bench_mvp.py`. Updated artifacts:
+  `neuro_bench_mvp_smoke_results.json` and `.md`. Current comparison:
+  | model | M1 RMSE mV | M1 AUC | rate soma-delta RMSE | rate spike-delta MAE | dropout soma-delta RMSE | dropout spike-delta MAE |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `branch_elm_30_trained` | `17.9833` | `0.3888` | `21.2951` | `317.0` | `21.8621` | `66.625` |
+  | `mamba_pytorch_best` | `17.5602` | `0.4970` | `23.7367` | `318.25` | `22.2460` | `66.375` |
+  The available checkpoints still fail the intervention-delta task badly, so
+  this is a benchmark validation result, not a model success result.
+
+- IMPLEMENTATION (2026-06-03 12:10): Added
+  `simulate_arbor_targets_for_inputs` to `src/bnn_sim/arbor_sim.py` so benchmark
+  artifacts can re-simulate explicit input interventions with stored
+  heterogeneity vectors. Updated the MVP runner to include an optional
+  event-dropout pair when present.
+
 - VERIFICATION (2026-06-03 12:07): Full local test suite passed:
   `.venv/bin/python -m pytest -q` (`60 passed, 1 skipped`). Compile check also
   passed: `.venv/bin/python -m compileall -q src/bnn_sim

@@ -27,6 +27,7 @@ def main() -> int:
     parser.add_argument("--val-data", default="data/arbor-allen-nmda-source-medium-20260510/val")
     parser.add_argument("--low-input-data", default="runs/verify_t3_low_input")
     parser.add_argument("--high-input-data", default="runs/verify_t3_high_input")
+    parser.add_argument("--event-dropout-pair", default="docs/verify-arbor-simulator/artifacts/event_dropout_pair/event_dropout_pair.npz")
     parser.add_argument("--output-json", default="docs/verify-arbor-simulator/artifacts/neuro_bench_mvp_smoke_results.json")
     parser.add_argument("--output-md", default="docs/verify-arbor-simulator/artifacts/neuro_bench_mvp_smoke_report.md")
     parser.add_argument("--n-val-samples", type=int, default=8)
@@ -52,6 +53,20 @@ def main() -> int:
         ignore_start=args.ignore_start,
         trace_ids=pair_ids,
     )
+    dropout_pair = load_event_dropout_pair(args.event_dropout_pair)
+    dropout_teacher_m4 = None
+    if dropout_pair is not None:
+        dropout_teacher_m4 = compute_paired_event_intervention_metrics(
+            None,
+            dropout_pair["baseline_inputs"],
+            dropout_pair["baseline_targets"],
+            dropout_pair["intervention_inputs"],
+            dropout_pair["intervention_targets"],
+            intervention_name="event_dropout",
+            soma_scale=0.1,
+            ignore_start=args.ignore_start,
+            trace_ids=dropout_pair["trace_ids"],
+        )
     models = available_models(skip_mamba=args.skip_mamba)
     model_reports: dict[str, Any] = {}
     for name, model in models.items():
@@ -89,6 +104,18 @@ def main() -> int:
                 trace_ids=pair_ids,
             ),
         }
+        if dropout_pair is not None:
+            model_reports[name]["m4_event_dropout"] = compute_paired_event_intervention_metrics(
+                model_fn,
+                dropout_pair["baseline_inputs"],
+                dropout_pair["baseline_targets"],
+                dropout_pair["intervention_inputs"],
+                dropout_pair["intervention_targets"],
+                intervention_name="event_dropout",
+                soma_scale=0.1,
+                ignore_start=args.ignore_start,
+                trace_ids=dropout_pair["trace_ids"],
+            )
 
     report = {
         "metadata": {
@@ -103,6 +130,7 @@ def main() -> int:
             "n_intervention_pairs": int(low_inputs.shape[0]),
         },
         "teacher_m4_event_rate_shift": teacher_m4,
+        "teacher_m4_event_dropout": dropout_teacher_m4,
         "models": model_reports,
         "interpretation": interpret_teacher_response(teacher_m4),
     }
@@ -138,6 +166,21 @@ def load_dataset(path: str | Path, *, limit: int | None = None) -> tuple[np.ndar
         target_array = target_array[:limit]
         ids = ids[:limit]
     return input_array, target_array, ids
+
+
+def load_event_dropout_pair(path: str | Path) -> dict[str, Any] | None:
+    pair_path = Path(path)
+    if not pair_path.exists():
+        return None
+    with np.load(pair_path) as data:
+        trace_ids = [str(x) for x in data["sample_ids"].tolist()] if "sample_ids" in data else None
+        return {
+            "baseline_inputs": data["baseline_inputs"],
+            "baseline_targets": data["baseline_targets"],
+            "intervention_inputs": data["intervention_inputs"],
+            "intervention_targets": data["intervention_targets"],
+            "trace_ids": trace_ids,
+        }
 
 
 def paired_trace_ids(low_ids: list[str], high_ids: list[str]) -> list[str]:
@@ -222,6 +265,10 @@ def compact_summary(report: dict[str, Any]) -> dict[str, Any]:
             "m4_soma_delta_rmse_mv": m4["soma_delta_rmse_mv"],
             "m4_spike_count_delta_mae": m4["spike_count_delta_mae_per_trace"],
         }
+        if "m4_event_dropout" in row:
+            dropout = row["m4_event_dropout"]["model_response"]
+            model_summary[name]["dropout_soma_delta_rmse_mv"] = dropout["soma_delta_rmse_mv"]
+            model_summary[name]["dropout_spike_count_delta_mae"] = dropout["spike_count_delta_mae_per_trace"]
     return {
         "metadata": report["metadata"],
         "teacher_interpretation": report["interpretation"],
@@ -245,18 +292,43 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- Direction: `{teacher['teacher_direction']}`",
             f"- Warning: {report['interpretation']['warning'] or 'none'}",
             "",
+            "## Teacher M4 Event Dropout",
+            "",
+        ]
+    )
+    dropout_teacher = report.get("teacher_m4_event_dropout")
+    if dropout_teacher is None:
+        lines.append("- Not run: no paired dropout artifact was found.")
+    else:
+        dropout = dropout_teacher["teacher_response"]
+        lines.extend(
+            [
+                f"- Baseline event fraction: `{dropout['baseline_event_fraction']:.6f}`",
+                f"- Intervention event fraction: `{dropout['intervention_event_fraction']:.6f}`",
+                f"- Delta spike rate / 1000 steps: `{dropout['delta_spike_rate_per_1000_steps']:.4f}`",
+                f"- Delta soma mean mV: `{dropout['delta_soma_mean_mv']:.4f}`",
+                f"- Direction: `{dropout['teacher_direction']}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
             "## Model Smoke Comparison",
             "",
-            "| model | M1 RMSE mV | M1 AUC | M4 soma-delta RMSE mV | M4 spike-count-delta MAE |",
-            "|---|---:|---:|---:|---:|",
+            "| model | M1 RMSE mV | M1 AUC | rate soma-delta RMSE | rate spike-delta MAE | dropout soma-delta RMSE | dropout spike-delta MAE |",
+            "|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for name, row in report["models"].items():
         m1 = row["mvp_trace_report"]["m1_trace_fidelity"]
         m4 = row["m4_event_rate_shift"]["model_response"]
+        dropout = row.get("m4_event_dropout", {}).get("model_response")
+        dropout_soma = f"{dropout['soma_delta_rmse_mv']:.4f}" if dropout else "N/A"
+        dropout_spike = f"{dropout['spike_count_delta_mae_per_trace']:.4f}" if dropout else "N/A"
         lines.append(
             f"| `{name}` | {m1['soma_rmse_mv']:.4f} | {m1['spike_auc']:.4f} | "
-            f"{m4['soma_delta_rmse_mv']:.4f} | {m4['spike_count_delta_mae_per_trace']:.4f} |"
+            f"{m4['soma_delta_rmse_mv']:.4f} | {m4['spike_count_delta_mae_per_trace']:.4f} | "
+            f"{dropout_soma} | {dropout_spike} |"
         )
     lines.extend(
         [

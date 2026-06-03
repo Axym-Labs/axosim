@@ -298,6 +298,53 @@ def simulate_arbor_sample(
     }
 
 
+def simulate_arbor_targets_for_inputs(
+    config: ArborHeteroConfig,
+    *,
+    inputs: np.ndarray,
+    heterogeneity: np.ndarray,
+    heterogeneity_names: list[str] | tuple[str, ...] = HETEROGENEITY_NAMES,
+) -> dict[str, np.ndarray]:
+    """Run the Arbor teacher for explicit inputs and heterogeneity vectors."""
+    inputs = np.asarray(inputs)
+    heterogeneity = np.asarray(heterogeneity)
+    if inputs.ndim != 3:
+        raise ValueError(f"inputs must have shape (batch, time, channels), got {inputs.shape}")
+    if heterogeneity.ndim != 2:
+        raise ValueError(f"heterogeneity must have shape (batch, parameters), got {heterogeneity.shape}")
+    if inputs.shape[0] != heterogeneity.shape[0]:
+        raise ValueError("inputs and heterogeneity must have matching batch size")
+    if inputs.shape[1] != config.time_steps or inputs.shape[2] != config.input_dim:
+        raise ValueError(
+            "inputs shape must match config time_steps/input_dim, got "
+            f"{inputs.shape} for time_steps={config.time_steps}, input_dim={config.input_dim}"
+        )
+    params_list = [
+        {str(name): float(value) for name, value in zip(heterogeneity_names, row)}
+        for row in heterogeneity
+    ]
+    branch_info = _template_branch_info(config.num_branch)
+    routing = _interlocking_branch_routing(config.input_dim, config.num_branch)
+    soma_mv = _simulate_arbor_batch(
+        config,
+        inputs=inputs.astype(np.int8, copy=False),
+        params_list=params_list,
+        routing=routing,
+        branch_ids=branch_info["branch_ids"],
+    )
+    targets = np.zeros((inputs.shape[0], inputs.shape[1], 2), dtype=np.float32)
+    for index, params in enumerate(params_list):
+        spikes = _threshold_spikes(soma_mv[index], params["spike_threshold_mv"])
+        targets[index] = np.stack(
+            [
+                spikes,
+                (soma_mv[index] - config.soma_target_offset_mv) * config.soma_target_scale,
+            ],
+            axis=1,
+        ).astype(np.float32)
+    return {"targets": targets, "soma_mv": soma_mv}
+
+
 def parse_split_samples(value: str) -> dict[str, int]:
     splits: dict[str, int] = {}
     for part in value.split(","):

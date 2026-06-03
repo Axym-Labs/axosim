@@ -7,9 +7,9 @@
     "warning": "Higher event density reduced teacher spike rate in this small pair. Treat M4 as teacher-fidelity/stress testing, not biological robustness, until the teacher protocol is calibrated."
   },
   "metadata": {
-    "created_at": "2026-06-03 12:00:40",
+    "created_at": "2026-06-03 12:10:55",
     "device": "cpu",
-    "elapsed_seconds": 7.888737945000003,
+    "elapsed_seconds": 11.282005451000032,
     "high_input_data": "runs/verify_t3_high_input",
     "ignore_start": 500,
     "low_input_data": "runs/verify_t3_low_input",
@@ -20,6 +20,51 @@
   "models": {
     "branch_elm_30_trained": {
       "checkpoint": "runs/branch_elm_30_trained.pt",
+      "m4_event_dropout": {
+        "intervention_name": "event_dropout",
+        "kind": "paired_event_intervention",
+        "mask": {
+          "evaluated_timesteps_per_trace": 2500,
+          "ignore_start": 500
+        },
+        "model_response": {
+          "direction_agreement": {
+            "soma_mean": true,
+            "spike_count": false
+          },
+          "soma_delta_correlation": 0.018130022448240364,
+          "soma_delta_mae_mv": 13.039188385009766,
+          "soma_delta_rmse_mv": 21.862112045288086,
+          "soma_mean_delta_error_mv": 3.430985450744629,
+          "spike_count_delta_mae_per_trace": 66.625,
+          "spike_count_delta_model_mean": 0.0,
+          "spike_count_delta_teacher_mean": -66.625
+        },
+        "representative_trace_ids": [
+          "arbor_allen_hetero:000001:seed1253549509",
+          "arbor_allen_hetero:000007:seed1455571912",
+          "arbor_allen_hetero:000006:seed1357947117",
+          "arbor_allen_hetero:000003:seed154865765",
+          "arbor_allen_hetero:000005:seed82776754"
+        ],
+        "status": "model_compared",
+        "teacher_response": {
+          "baseline_event_fraction": 0.003066901408450704,
+          "baseline_soma_mean_mv": 5.252760410308838,
+          "baseline_spike_rate_per_1000_steps": 94.7,
+          "delta_soma_abs_mean_mv": 13.597343444824219,
+          "delta_soma_mean_mv": -5.343049049377441,
+          "delta_spike_rate_per_1000_steps": -26.650000000000006,
+          "event_fraction_delta": -0.0015377934272300469,
+          "event_fraction_ratio": 0.498584003061615,
+          "intervention_event_fraction": 0.0015291079812206573,
+          "intervention_soma_mean_mv": -0.09028808772563934,
+          "intervention_spike_rate_per_1000_steps": 68.05,
+          "response_detected": true,
+          "teacher_direction": "lower_event_drive/lower_spiking/hyperpolarized"
+        },
+        "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
+      },
       "m4_event_rate_shift": {
         "intervention_name": "event_rate_shift_low_to_high",
         "kind": "paired_event_intervention",
@@ -538,6 +583,51 @@
     },
     "mamba_pytorch_best": {
       "checkpoint": "runs/mamba_best_trained.pt",
+      "m4_event_dropout": {
+        "intervention_name": "event_dropout",
+        "kind": "paired_event_intervention",
+        "mask": {
+          "evaluated_timesteps_per_trace": 2500,
+          "ignore_start": 500
+        },
+        "model_response": {
+          "direction_agreement": {
+            "soma_mean": false,
+            "spike_count": true
+          },
+          "soma_delta_correlation": 0.004493208382154843,
+          "soma_delta_mae_mv": 13.644820213317871,
+          "soma_delta_rmse_mv": 22.246042251586914,
+          "soma_mean_delta_error_mv": 5.358212947845459,
+          "spike_count_delta_mae_per_trace": 66.375,
+          "spike_count_delta_model_mean": -0.25,
+          "spike_count_delta_teacher_mean": -66.625
+        },
+        "representative_trace_ids": [
+          "arbor_allen_hetero:000001:seed1253549509",
+          "arbor_allen_hetero:000007:seed1455571912",
+          "arbor_allen_hetero:000006:seed1357947117",
+          "arbor_allen_hetero:000003:seed154865765",
+          "arbor_allen_hetero:000005:seed82776754"
+        ],
+        "status": "model_compared",
+        "teacher_response": {
+          "baseline_event_fraction": 0.003066901408450704,
+          "baseline_soma_mean_mv": 5.252760410308838,
+          "baseline_spike_rate_per_1000_steps": 94.7,
+          "delta_soma_abs_mean_mv": 13.597343444824219,
+          "delta_soma_mean_mv": -5.343049049377441,
+          "delta_spike_rate_per_1000_steps": -26.650000000000006,
+          "event_fraction_delta": -0.0015377934272300469,
+          "event_fraction_ratio": 0.498584003061615,
+          "intervention_event_fraction": 0.0015291079812206573,
+          "intervention_soma_mean_mv": -0.09028808772563934,
+          "intervention_spike_rate_per_1000_steps": 68.05,
+          "response_detected": true,
+          "teacher_direction": "lower_event_drive/lower_spiking/hyperpolarized"
+        },
+        "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
+      },
       "m4_event_rate_shift": {
         "intervention_name": "event_rate_shift_low_to_high",
         "kind": "paired_event_intervention",
@@ -1054,6 +1144,39 @@
       },
       "parameter_count": 145858
     }
+  },
+  "teacher_m4_event_dropout": {
+    "intervention_name": "event_dropout",
+    "kind": "paired_event_intervention",
+    "mask": {
+      "evaluated_timesteps_per_trace": 2500,
+      "ignore_start": 500
+    },
+    "model_response": null,
+    "representative_trace_ids": [
+      "arbor_allen_hetero:000001:seed1253549509",
+      "arbor_allen_hetero:000007:seed1455571912",
+      "arbor_allen_hetero:000006:seed1357947117",
+      "arbor_allen_hetero:000003:seed154865765",
+      "arbor_allen_hetero:000005:seed82776754"
+    ],
+    "status": "teacher_only",
+    "teacher_response": {
+      "baseline_event_fraction": 0.003066901408450704,
+      "baseline_soma_mean_mv": 5.252760410308838,
+      "baseline_spike_rate_per_1000_steps": 94.7,
+      "delta_soma_abs_mean_mv": 13.597343444824219,
+      "delta_soma_mean_mv": -5.343049049377441,
+      "delta_spike_rate_per_1000_steps": -26.650000000000006,
+      "event_fraction_delta": -0.0015377934272300469,
+      "event_fraction_ratio": 0.498584003061615,
+      "intervention_event_fraction": 0.0015291079812206573,
+      "intervention_soma_mean_mv": -0.09028808772563934,
+      "intervention_spike_rate_per_1000_steps": 68.05,
+      "response_detected": true,
+      "teacher_direction": "lower_event_drive/lower_spiking/hyperpolarized"
+    },
+    "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
   },
   "teacher_m4_event_rate_shift": {
     "intervention_name": "event_rate_shift_low_to_high",
