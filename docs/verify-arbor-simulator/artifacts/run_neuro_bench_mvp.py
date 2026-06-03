@@ -18,6 +18,7 @@ import numpy as np
 import torch
 
 from bnn_sim.benchmark import BenchmarkSuite, compute_paired_event_intervention_metrics
+from bnn_sim.checkpoint import load_checkpoint
 from bnn_sim.mamba_pytorch import SimpleMambaModel
 from bnn_sim.model import BranchELM, BranchELMConfig
 
@@ -28,6 +29,12 @@ def main() -> int:
     parser.add_argument("--low-input-data", default="runs/verify_t3_low_input")
     parser.add_argument("--high-input-data", default="runs/verify_t3_high_input")
     parser.add_argument("--event-dropout-pair", default="docs/verify-arbor-simulator/artifacts/event_dropout_pair/event_dropout_pair.npz")
+    parser.add_argument(
+        "--extra-checkpoint",
+        action="append",
+        default=[],
+        help="additional checkpoint as NAME=PATH; supports current bnn_sim checkpoint format",
+    )
     parser.add_argument("--output-json", default="docs/verify-arbor-simulator/artifacts/neuro_bench_mvp_smoke_results.json")
     parser.add_argument("--output-md", default="docs/verify-arbor-simulator/artifacts/neuro_bench_mvp_smoke_report.md")
     parser.add_argument("--n-val-samples", type=int, default=8)
@@ -67,7 +74,7 @@ def main() -> int:
             ignore_start=args.ignore_start,
             trace_ids=dropout_pair["trace_ids"],
         )
-    models = available_models(skip_mamba=args.skip_mamba)
+    models = available_models(skip_mamba=args.skip_mamba, extra_checkpoints=args.extra_checkpoint)
     model_reports: dict[str, Any] = {}
     for name, model in models.items():
         model = model.to(args.device).eval()
@@ -188,7 +195,7 @@ def paired_trace_ids(low_ids: list[str], high_ids: list[str]) -> list[str]:
     return [f"low={low_ids[i]} | high={high_ids[i]}" for i in range(n)]
 
 
-def available_models(*, skip_mamba: bool) -> dict[str, torch.nn.Module]:
+def available_models(*, skip_mamba: bool, extra_checkpoints: list[str]) -> dict[str, torch.nn.Module]:
     models: dict[str, torch.nn.Module] = {}
     branch_ckpt = Path("runs/branch_elm_30_trained.pt")
     if branch_ckpt.exists():
@@ -200,6 +207,13 @@ def available_models(*, skip_mamba: bool) -> dict[str, torch.nn.Module]:
         model = load_mamba(mamba_ckpt)
         model._checkpoint_path = str(mamba_ckpt)  # type: ignore[attr-defined]
         models["mamba_pytorch_best"] = model
+    for item in extra_checkpoints:
+        if "=" not in item:
+            raise ValueError(f"--extra-checkpoint must be NAME=PATH, got {item!r}")
+        name, path_text = item.split("=", 1)
+        model, _ = load_checkpoint(path_text, map_location="cpu")
+        model._checkpoint_path = path_text  # type: ignore[attr-defined]
+        models[name] = model
     if not models:
         raise FileNotFoundError("no supported checkpoints found under runs/")
     return models

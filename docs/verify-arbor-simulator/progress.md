@@ -3,6 +3,36 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- VERIFICATION (2026-06-03 12:15): Final checks passed after adding the long
+  benchmark batch runner and extra-checkpoint MVP reporting:
+  `.venv/bin/python -m pytest -q` (`60 passed, 1 skipped`);
+  `.venv/bin/python -m compileall -q src/bnn_sim
+  docs/verify-arbor-simulator/artifacts/run_neuro_bench_mvp.py
+  docs/verify-arbor-simulator/artifacts/run_teacher_rate_sweep.py
+  docs/verify-arbor-simulator/artifacts/run_event_dropout_teacher_pair.py`
+  (passed); `bash -n` passed for `run_long_model_benchmark_batch.sh` and
+  `run_neuro_bench_mvp_experiments.sh`.
+
+- EXPERIMENT (2026-06-03 12:15): Added
+  `docs/verify-arbor-simulator/artifacts/run_long_model_benchmark_batch.sh` as
+  the runnable long-experiment entrypoint. It can train the branch-trace RNN
+  (`RUN_RNN=1`, 8k presentations) and official Mamba (`RUN_MAMBA=1`, 40k
+  presentations), then evaluates all available checkpoints with the MVP
+  benchmark runner using `--extra-checkpoint NAME=PATH`. The script now defaults
+  `DEVICE=auto`, resolving to CPU on this workstation because the current Torch
+  build does not support the visible RTX 5090 `sm_120` CUDA architecture.
+  Smoke command `RUN_RNN=0 RUN_MAMBA=0
+  docs/verify-arbor-simulator/artifacts/run_long_model_benchmark_batch.sh`
+  completed successfully in CPU mode and wrote
+  `docs/verify-arbor-simulator/artifacts/long_model_runs/neuro_bench_long_model_results.json`
+  plus `.md`.
+
+- IMPLEMENTATION (2026-06-03 12:15): Extended
+  `docs/verify-arbor-simulator/artifacts/run_neuro_bench_mvp.py` with
+  `--extra-checkpoint NAME=PATH` support using the repo checkpoint loader. This
+  lets newly trained comparison models be included in the same M1/M1b/M2/M4
+  report without editing the runner.
+
 - VERIFICATION (2026-06-03 12:10): Full local test suite passed again after
   adding explicit-input Arbor re-simulation and the dropout-pair experiment:
   `.venv/bin/python -m pytest -q` (`60 passed, 1 skipped`). Compile check passed
