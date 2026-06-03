@@ -212,13 +212,17 @@ def train_dataset(
             if last_soma_slope_loss is not None:
                 epoch_metrics["train_last_soma_slope_loss"] = last_soma_slope_loss
             if validation_dataset is not None:
+                effective_validation_ignore_start = _effective_validation_ignore_start(
+                    validation_dataset,
+                    validation_metric_ignore_start,
+                )
                 validation_metrics = evaluate_dataset(
                     model,
                     validation_dataset,
                     batch_size=validation_batch_size or batch_size,
                     device=device,
                     soma_units=validation_soma_units,
-                    ignore_start=validation_metric_ignore_start,
+                    ignore_start=effective_validation_ignore_start,
                     mask_mode=validation_metric_mask_mode,
                     stitch_burn_in=validation_metric_stitch_burn_in,
                     soma_affine_calibration=validation_soma_affine_calibration,
@@ -432,6 +436,15 @@ def _stack_batch(dataset: ShardedNeuronIODataset, indices: range) -> tuple[np.nd
         np.stack([sample.inputs for sample in samples]).astype(np.float32, copy=False),
         np.stack([sample.targets for sample in samples]).astype(np.float32, copy=False),
     )
+
+
+def _effective_validation_ignore_start(dataset: ShardedNeuronIODataset, ignore_start: int) -> int:
+    if ignore_start <= 0:
+        return ignore_start
+    if len(dataset) == 0:
+        return ignore_start
+    sequence_length = int(dataset[0].inputs.shape[0])
+    return 0 if ignore_start >= sequence_length else ignore_start
 
 
 def _load_batch(dataset: ShardedNeuronIODataset, indices: range) -> tuple[np.ndarray, np.ndarray]:

@@ -291,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
                 burst_probability=args.burst_probability,
                 burst_event_rate_hz=args.burst_event_rate_hz,
                 arbor_threads=args.arbor_threads,
-                arbor_gpu_id=None if args.cpu_only else args.arbor_gpu_id,
+                arbor_gpu_id=_resolve_arbor_gpu_id(args, explicit_dests),
                 sim_batch_size=args.sim_batch_size,
             )
             if args.splits:
@@ -690,6 +690,20 @@ def _apply_arbor_data_config(args, explicit_dests: set[str]) -> None:
     for key, value in config.items():
         if key not in explicit_dests:
             setattr(args, key, value)
+
+
+def _resolve_arbor_gpu_id(args, explicit_dests: set[str]) -> int | None:
+    if args.cpu_only:
+        return None
+    if "arbor_gpu_id" in explicit_dests:
+        return args.arbor_gpu_id
+    try:
+        import arbor as A
+    except ModuleNotFoundError:
+        return args.arbor_gpu_id
+    if A.config().get("gpu") != "cuda":
+        return None
+    return args.arbor_gpu_id
 
 
 def _explicit_option_dests(parser: argparse.ArgumentParser, argv: list[str], command: str) -> set[str]:

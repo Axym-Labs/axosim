@@ -2,6 +2,10 @@ import numpy as np
 
 from bnn_sim.benchmark.regime_stratified import compute_regime_stratified_metrics
 from bnn_sim.benchmark.suite import BenchmarkSuite
+from bnn_sim.benchmark.structured_intervention import (
+    compute_paired_event_intervention_metrics,
+    make_event_dropout_inputs,
+)
 
 
 def test_benchmark_suite_reports_mvp_schema_and_masked_m1(tmp_path):
@@ -71,3 +75,94 @@ def test_regime_metrics_do_not_leak_spike_windows_across_trace_boundaries():
     assert far["count"] == 7
     assert mvp["near_spike"]["count"] == 3
     assert mvp["far_from_spike_subthreshold"]["count"] == 7
+
+
+def test_event_dropout_only_removes_existing_events_deterministically():
+    inputs = np.zeros((1, 6, 4), dtype=np.int8)
+    inputs[0, 1, 0] = 1
+    inputs[0, 2, 1] = -1
+    inputs[0, 3, 2] = 1
+
+    dropped_a, mask_a = make_event_dropout_inputs(inputs, dropout_probability=0.5, seed=7)
+    dropped_b, mask_b = make_event_dropout_inputs(inputs, dropout_probability=0.5, seed=7)
+
+    assert np.array_equal(dropped_a, dropped_b)
+    assert np.array_equal(mask_a, mask_b)
+    assert np.count_nonzero(dropped_a) <= np.count_nonzero(inputs)
+    assert np.all(dropped_a[inputs == 0] == 0)
+    assert set(np.unique(dropped_a)).issubset({-1, 0, 1})
+
+
+def test_paired_event_intervention_scores_teacher_and_model_delta_alignment():
+    baseline_inputs = np.zeros((2, 4, 3), dtype=np.float32)
+    intervention_inputs = baseline_inputs.copy()
+    baseline_inputs[:, 1:, 0] = 1.0
+
+    baseline_targets = np.zeros((2, 4, 2), dtype=np.float32)
+    intervention_targets = np.zeros_like(baseline_targets)
+    baseline_targets[..., 1] = 2.0
+    intervention_targets[..., 1] = 1.0
+    baseline_targets[:, 2, 0] = 1.0
+
+    def aligned_model(x):
+        out = np.zeros((x.shape[0], x.shape[1], 2), dtype=np.float32)
+        active = np.count_nonzero(x, axis=-1) > 0
+        time_is_spike = np.arange(x.shape[1])[None, :] == 2
+        out[..., 1] = np.where(active, 2.0, 1.0)
+        out[..., 0] = np.where(active & time_is_spike, 8.0, -8.0)
+        return out
+
+    report = compute_paired_event_intervention_metrics(
+        aligned_model,
+        baseline_inputs,
+        baseline_targets,
+        intervention_inputs,
+        intervention_targets,
+        intervention_name="unit_dropout",
+        soma_scale=1.0,
+        ignore_start=1,
+        trace_ids=["a", "b"],
+    )
+
+    assert report["status"] == "model_compared"
+    assert report["teacher_response"]["baseline_event_fraction"] > report["teacher_response"]["intervention_event_fraction"]
+    assert report["teacher_response"]["delta_spike_rate_per_1000_steps"] < 0
+    assert report["model_response"]["soma_delta_rmse_mv"] == 0.0
+    assert report["model_response"]["spike_count_delta_mae_per_trace"] == 0.0
+    assert report["representative_trace_ids"]
+
+
+def test_benchmark_suite_accepts_paired_m4_intervention():
+    inputs = np.zeros((1, 4, 2), dtype=np.float32)
+    targets = np.zeros((1, 4, 2), dtype=np.float32)
+    intervention_inputs = inputs.copy()
+    intervention_targets = targets.copy()
+    inputs[:, 1:, 0] = 1.0
+    targets[..., 1] = 2.0
+    intervention_targets[..., 1] = 1.0
+
+    def model_fn(x):
+        out = np.zeros((x.shape[0], x.shape[1], 2), dtype=np.float32)
+        out[..., 1] = np.where(np.count_nonzero(x, axis=-1) > 0, 2.0, 1.0)
+        out[..., 0] = -8.0
+        return out
+
+    report = BenchmarkSuite().evaluate_model(
+        model_fn,
+        inputs,
+        targets,
+        soma_scale=1.0,
+        ignore_start=1,
+        run_perturbation=False,
+        m4_paired_intervention={
+            "baseline_inputs": inputs,
+            "baseline_targets": targets,
+            "intervention_inputs": intervention_inputs,
+            "intervention_targets": intervention_targets,
+            "intervention_name": "unit_event_dropout",
+        },
+    )
+
+    assert report["m4_intervention"]["status"] == "model_compared"
+    assert report["m4_intervention"]["kind"] == "paired_event_intervention"
+    assert report["m4_intervention"]["model_response"]["soma_delta_rmse_mv"] == 0.0

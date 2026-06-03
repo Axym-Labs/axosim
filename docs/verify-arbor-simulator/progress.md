@@ -3,6 +3,78 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- VERIFICATION (2026-06-03 12:07): Full local test suite passed:
+  `.venv/bin/python -m pytest -q` (`60 passed, 1 skipped`). Compile check also
+  passed: `.venv/bin/python -m compileall -q src/bnn_sim
+  docs/verify-arbor-simulator/artifacts/run_neuro_bench_mvp.py
+  docs/verify-arbor-simulator/artifacts/run_teacher_rate_sweep.py`. Installed
+  missing local test dependencies into `.venv`: `arbor==0.11.0` CPU wheel and
+  `requests>=2.32`. The local PyTorch build cannot execute CUDA kernels on the
+  visible RTX 5090 (`sm_120` unsupported), so the MVP model smoke ran on CPU.
+
+- EXPERIMENT (2026-06-03 12:07): Ran the NEURO-BENCH MVP smoke experiment via
+  `docs/verify-arbor-simulator/artifacts/run_neuro_bench_mvp_experiments.sh`.
+  Artifacts:
+  `docs/verify-arbor-simulator/artifacts/neuro_bench_mvp_smoke_results.json`
+  and `docs/verify-arbor-simulator/artifacts/neuro_bench_mvp_smoke_report.md`.
+  Teacher M4 low→high event-rate pair (`n=4`, ignore first `500` steps): event
+  fraction increased `0.001133 -> 0.008048` (`7.11x`), soma mean increased by
+  `+14.98 mV`, but spike rate decreased by `-23.91` spikes / 1000 steps. This
+  is a response-detected intervention but not a clean biological robustness
+  claim; use it as teacher-fidelity/stress testing until the teacher protocol is
+  calibrated. Model smoke comparison:
+  | model | M1 RMSE mV | M1 AUC | M4 soma-delta RMSE mV | M4 spike-count-delta MAE |
+  |---|---:|---:|---:|---:|
+  | `branch_elm_30_trained` | `17.9833` | `0.3888` | `21.2951` | `317.0` |
+  | `mamba_pytorch_best` | `17.5602` | `0.4970` | `23.7367` | `318.25` |
+  Both checkpoints preserved soma-delta sign but failed spike-count-delta
+  direction; current checkpoints are not useful as final model evidence.
+
+- EXPERIMENT (2026-06-03 12:07): Ran a bounded Arbor teacher rate sweep using
+  the new artifact script
+  `docs/verify-arbor-simulator/artifacts/run_teacher_rate_sweep.py`
+  (`samples=8`, `time_steps=3000`, CPU-only Arbor, elapsed `89.70s`). Artifacts:
+  `docs/verify-arbor-simulator/artifacts/teacher_rate_sweep/rate_sweep_summary.json`
+  and `.md`. Observed:
+  | protocol | event fraction | spike rate Hz | soma mean mV |
+  |---|---:|---:|---:|
+  | `low` | `0.000719` | `32.04` | `-73.89` |
+  | `nominal` | `0.003121` | `94.04` | `-62.48` |
+  | `high` | `0.014364` | `68.58` | `-55.95` |
+  Event fraction and soma mean are monotone increasing, but spike rate is not.
+  This supports keeping M4 but blocks any simple "higher rate should increase
+  spiking" publishable intervention claim under the current balanced E/I
+  protocol.
+
+- IMPLEMENTATION (2026-06-03 12:07): Implemented NEURO-BENCH M4 structured
+  event-intervention metrics in
+  `src/bnn_sim/benchmark/structured_intervention.py`: deterministic event
+  dropout helper, paired teacher response summaries, model-vs-teacher delta
+  RMSE/MAE/correlation, spike-count-delta error, direction agreement, and
+  representative trace IDs. `BenchmarkSuite.evaluate_model` now accepts optional
+  paired M4 intervention data while preserving the debug-only Gaussian
+  perturbation alias. Added tests covering event dropout, paired M4 delta
+  alignment, and suite integration.
+
+- IMPLEMENTATION (2026-06-03 12:07): Added reusable experiment artifacts:
+  `run_neuro_bench_mvp.py`, `run_neuro_bench_mvp_experiments.sh`, and
+  `run_teacher_rate_sweep.py` under
+  `docs/verify-arbor-simulator/artifacts/`. The MVP runner falls back to CPU
+  when local CUDA is visible but unsupported by PyTorch. The shell wrapper can
+  regenerate paired low/high Arbor data before running the smoke comparison.
+
+- IMPLEMENTATION (2026-06-03 12:07): Fixed verification blockers discovered
+  during broader testing. `make-arbor-hetero-data` now falls back to CPU when
+  Arbor is CPU-only and the user did not explicitly request GPU. Official-style
+  full-trace window IDs now preserve parseable source grouping for demo IDs
+  without `:` separators. Full-trace samplers clamp requested sequence length to
+  actual shard length to avoid empty windows. Training validation clamps an
+  impossible default `500`-step ignore to `0` for tiny validation traces.
+
+- USER (2026-06-03 12:07): User asked to continue the benchmarking work beyond
+  implementation into validation and experiments, to script particularly long
+  experiments, and to assume enough time to run most needed runs.
+
 - VERIFICATION (2026-05-31 21:27): Focused checks passed after the benchmark
   MVP schema/M2 repair: `.venv/bin/python -m pytest tests/test_benchmark_suite.py
   tests/test_cli.py::test_cli_benchmark_writes_json_report -q` (`3 passed`);

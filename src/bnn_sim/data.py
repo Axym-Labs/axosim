@@ -326,12 +326,11 @@ class RandomFullTraceWindowDataset:
         return [self._index[int(index)][3] for index in indices]
 
     def _sequence_length(self, shard_idx: int) -> int:
-        if self.sequence_length is not None:
-            return self.sequence_length
         if shard_idx not in self._sequence_lengths:
             with _open_shard(self.base.shards[shard_idx]) as data:
                 self._sequence_lengths[shard_idx] = int(data["inputs"].shape[1])
-        return self._sequence_lengths[shard_idx]
+        actual = self._sequence_lengths[shard_idx]
+        return min(self.sequence_length, actual) if self.sequence_length is not None else actual
 
 
 class OfficialStyleFullTraceWindowDataset:
@@ -409,7 +408,8 @@ class OfficialStyleFullTraceWindowDataset:
                 )
                 for chosen_idx, start in zip(chosen, starts):
                     shard_idx, sample_idx, sample_id = source_samples[int(chosen_idx)]
-                    index.append((shard_idx, sample_idx, int(start), f"{sample_id}@{int(start)}"))
+                    window_id = _window_sample_id(source_id, sample_id, int(start))
+                    index.append((shard_idx, sample_idx, int(start), window_id))
                 batch_count += 1
         self._index = index[: self.samples_per_epoch]
 
@@ -445,12 +445,11 @@ class OfficialStyleFullTraceWindowDataset:
         return self._sequence_length(first_shard_idx)
 
     def _sequence_length(self, shard_idx: int) -> int:
-        if self.sequence_length is not None:
-            return self.sequence_length
         if shard_idx not in self._sequence_lengths:
             with _open_shard(self.base.shards[shard_idx]) as data:
                 self._sequence_lengths[shard_idx] = int(data["inputs"].shape[1])
-        return self._sequence_lengths[shard_idx]
+        actual = self._sequence_lengths[shard_idx]
+        return min(self.sequence_length, actual) if self.sequence_length is not None else actual
 
     def _max_start_exclusive(self) -> int:
         sequence_length = self._global_sequence_length()
@@ -639,4 +638,15 @@ def _group_full_trace_window_entries_by_shard(
 
 
 def _source_id_from_sample_id(sample_id: str) -> str:
-    return sample_id.rsplit(":", 1)[0]
+    base = sample_id.rsplit("@", 1)[0]
+    if ":" in base:
+        return base.rsplit(":", 1)[0]
+    if "_sample" in base:
+        return base.split("_sample", 1)[0]
+    return base
+
+
+def _window_sample_id(source_id: str, sample_id: str, start: int) -> str:
+    if ":" in sample_id:
+        return f"{sample_id}@{start}"
+    return f"{source_id}:{sample_id}@{start}"

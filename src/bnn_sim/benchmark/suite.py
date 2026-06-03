@@ -22,6 +22,7 @@ import numpy as np
 
 from bnn_sim.benchmark.regime_stratified import compute_regime_stratified_metrics
 from bnn_sim.benchmark.perturbation_stability import compute_perturbation_stability
+from bnn_sim.benchmark.structured_intervention import compute_paired_event_intervention_metrics
 
 
 class BenchmarkSuite:
@@ -43,6 +44,7 @@ class BenchmarkSuite:
         model_config: dict[str, Any] | None = None,
         dataset_path: str | None = None,
         trace_ids: list[str] | None = None,
+        m4_paired_intervention: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run full benchmark suite on a model.
 
@@ -85,15 +87,28 @@ class BenchmarkSuite:
                 epsilon_values=perturbation_epsilons,
             )
 
-        m4_intervention = {
-            "status": "debug_only" if run_perturbation else "not_run",
-            "kind": "gaussian_perturbation_sanity_check" if run_perturbation else None,
-            "what_failure_means": (
-                "This is only a numerical brittleness smoke test. It is not "
-                "evidence of biological robustness or global smoothness."
-            ),
-            "structured_intervention_required": True,
-        }
+        if m4_paired_intervention is not None:
+            m4_intervention = compute_paired_event_intervention_metrics(
+                model_fn if m4_paired_intervention.get("compare_model", True) else None,
+                m4_paired_intervention["baseline_inputs"],
+                m4_paired_intervention["baseline_targets"],
+                m4_paired_intervention["intervention_inputs"],
+                m4_paired_intervention["intervention_targets"],
+                intervention_name=m4_paired_intervention.get("intervention_name", "event_intervention"),
+                soma_scale=soma_scale,
+                ignore_start=m4_paired_intervention.get("ignore_start", ignore_start),
+                trace_ids=m4_paired_intervention.get("trace_ids", trace_ids),
+            )
+        else:
+            m4_intervention = {
+                "status": "debug_only" if run_perturbation else "not_run",
+                "kind": "gaussian_perturbation_sanity_check" if run_perturbation else None,
+                "what_failure_means": (
+                    "This is only a numerical brittleness smoke test. It is not "
+                    "evidence of biological robustness or global smoothness."
+                ),
+                "structured_intervention_required": True,
+            }
 
         metadata = {
             "model_name": model_name,
