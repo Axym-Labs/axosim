@@ -3,6 +3,24 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- EXPERIMENT (2026-06-03 18:51): Confirmed local Branch-ELM is our BranchELM
+  surrogate implementation (`model_kind: baseline`) and reused
+  `runs/branch_elm_30_trained.pt` rather than retraining it. Started and
+  completed a bounded branch-trace RNN training/evaluation run with
+  `RUN_RNN=1 RUN_MAMBA=0 OUT_DIR=docs/verify-arbor-simulator/artifacts/rnn_experiment_20260603
+  docs/verify-arbor-simulator/artifacts/run_long_model_benchmark_batch.sh`.
+  Device auto-resolved to CPU because local Torch does not support RTX 5090
+  `sm_120`. Training saved
+  `rnn_branchtanh_fixed_8k.pt` and `rnn_branchtanh_fixed_8k_best.pt` after
+  `8,000` train presentations (`500` batches, `272.5s` total,
+  validation soma RMSE `20.8280 mV`, validation spike AUC `0.5563`). The
+  appended NEURO-BENCH report compared Branch-ELM, existing pure-PyTorch Mamba,
+  and the new RNN. RNN smoke metrics: M1 RMSE `17.4947 mV`, M1 AUC `0.5616`,
+  rate-shift soma-delta RMSE `19.7532`, rate-shift spike-delta MAE `317.0`,
+  dropout soma-delta RMSE `21.5935`, dropout spike-delta MAE `66.625`. This is
+  a useful benchmark-learning signal but still not a successful intervention
+  model, because spike-delta errors remain essentially unchanged.
+
 - VERIFICATION (2026-06-03 12:15): Final checks passed after adding the long
   benchmark batch runner and extra-checkpoint MVP reporting:
   `.venv/bin/python -m pytest -q` (`60 passed, 1 skipped`);
