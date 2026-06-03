@@ -14,6 +14,17 @@ DEVICE="${DEVICE:-auto}"
 
 RUN_RNN="${RUN_RNN:-1}"
 RUN_MAMBA="${RUN_MAMBA:-1}"
+RNN_EPOCHS="${RNN_EPOCHS:-1}"
+RNN_EPOCH_SAMPLES="${RNN_EPOCH_SAMPLES:-8000}"
+RNN_BATCH_SIZE="${RNN_BATCH_SIZE:-16}"
+RNN_LEARNING_RATE="${RNN_LEARNING_RATE:-5e-4}"
+RNN_PREFIX="${RNN_PREFIX:-rnn_branchtanh_fixed_${RNN_EPOCH_SAMPLES}}"
+RNN_UPDATE_LOG_INTERVAL="${RNN_UPDATE_LOG_INTERVAL:-0}"
+MAMBA_EPOCHS="${MAMBA_EPOCHS:-1}"
+MAMBA_EPOCH_SAMPLES="${MAMBA_EPOCH_SAMPLES:-40000}"
+MAMBA_BATCH_SIZE="${MAMBA_BATCH_SIZE:-16}"
+MAMBA_LEARNING_RATE="${MAMBA_LEARNING_RATE:-3e-4}"
+MAMBA_PREFIX="${MAMBA_PREFIX:-mamba_branchtanh_somagate_${MAMBA_EPOCH_SAMPLES}}"
 
 mkdir -p "$OUT_DIR"
 
@@ -44,26 +55,27 @@ if [[ "$RUN_RNN" == "1" ]]; then
     --val-data "$VAL_DATA" \
     --model-kind branch-trace-rnn \
     --model-config configs/branch_trace_rnn_k3_readouthidden64_branchtanh_fixed.json \
-    --checkpoint "$OUT_DIR/rnn_branchtanh_fixed_8k.pt" \
-    --best-checkpoint "$OUT_DIR/rnn_branchtanh_fixed_8k_best.pt" \
-    --metrics "$OUT_DIR/rnn_branchtanh_fixed_8k_metrics.json" \
-    --epochs 1 \
-    --epoch-samples 8000 \
-    --batch-size 16 \
+    --checkpoint "$OUT_DIR/${RNN_PREFIX}.pt" \
+    --best-checkpoint "$OUT_DIR/${RNN_PREFIX}_best.pt" \
+    --metrics "$OUT_DIR/${RNN_PREFIX}_metrics.json" \
+    --epochs "$RNN_EPOCHS" \
+    --epoch-samples "$RNN_EPOCH_SAMPLES" \
+    --batch-size "$RNN_BATCH_SIZE" \
     --window-size 500 \
     --ignore-start 500 \
     --window-sampling random-full-trace \
     --full-trace-length 6000 \
     --shard-reuse-batches 64 \
     --burn-in 150 \
-    --learning-rate 5e-4 \
+    --learning-rate "$RNN_LEARNING_RATE" \
     --optimizer adam \
     --spike-loss-weight 0.5 \
     --soma-loss-weight 0.5 \
     --val-metric-ignore-start 500 \
     --val-soma-affine-calibration \
+    --train-update-log-interval "$RNN_UPDATE_LOG_INTERVAL" \
     --device "$DEVICE"
-  EXTRA_ARGS+=(--extra-checkpoint "rnn_branchtanh_fixed_8k=$OUT_DIR/rnn_branchtanh_fixed_8k_best.pt")
+  EXTRA_ARGS+=(--extra-checkpoint "${RNN_PREFIX}=$OUT_DIR/${RNN_PREFIX}_best.pt")
 fi
 
 if [[ "$RUN_MAMBA" == "1" ]]; then
@@ -72,19 +84,19 @@ if [[ "$RUN_MAMBA" == "1" ]]; then
     --val-data "$VAL_DATA" \
     --model-kind mamba-official \
     --model-config configs/branch_mamba_official_branchgain_integrative_pre_branchtanh_somagate_45x64.json \
-    --checkpoint "$OUT_DIR/mamba_branchtanh_somagate_40k.pt" \
-    --best-checkpoint "$OUT_DIR/mamba_branchtanh_somagate_40k_best.pt" \
-    --metrics "$OUT_DIR/mamba_branchtanh_somagate_40k_metrics.json" \
-    --epochs 1 \
-    --epoch-samples 40000 \
-    --batch-size 16 \
+    --checkpoint "$OUT_DIR/${MAMBA_PREFIX}.pt" \
+    --best-checkpoint "$OUT_DIR/${MAMBA_PREFIX}_best.pt" \
+    --metrics "$OUT_DIR/${MAMBA_PREFIX}_metrics.json" \
+    --epochs "$MAMBA_EPOCHS" \
+    --epoch-samples "$MAMBA_EPOCH_SAMPLES" \
+    --batch-size "$MAMBA_BATCH_SIZE" \
     --window-size 500 \
     --ignore-start 500 \
     --window-sampling random-full-trace \
     --full-trace-length 6000 \
     --shard-reuse-batches 64 \
     --burn-in 150 \
-    --learning-rate 3e-4 \
+    --learning-rate "$MAMBA_LEARNING_RATE" \
     --optimizer adamw \
     --weight-decay 1e-4 \
     --spike-loss-weight 0.5 \
@@ -92,7 +104,7 @@ if [[ "$RUN_MAMBA" == "1" ]]; then
     --val-metric-ignore-start 500 \
     --val-soma-affine-calibration \
     --device "$DEVICE"
-  EXTRA_ARGS+=(--extra-checkpoint "mamba_branchtanh_somagate_40k=$OUT_DIR/mamba_branchtanh_somagate_40k_best.pt")
+  EXTRA_ARGS+=(--extra-checkpoint "${MAMBA_PREFIX}=$OUT_DIR/${MAMBA_PREFIX}_best.pt")
 fi
 
 "$PYTHON_BIN" docs/verify-arbor-simulator/artifacts/run_neuro_bench_mvp.py \

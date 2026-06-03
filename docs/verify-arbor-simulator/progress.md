@@ -3,6 +3,57 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- VERIFICATION (2026-06-03 22:55): Final checks passed after the 200k RNN
+  experiment and runner/logging changes: `.venv/bin/python -m pytest -q`
+  (`60 passed, 1 skipped`); compile check passed for `src/bnn_sim` and all
+  benchmark artifact scripts; `bash -n` passed for
+  `run_long_model_benchmark_batch.sh`.
+
+- EXPERIMENT (2026-06-03 22:53): The 200k branch-trace RNN run completed and
+  automatically evaluated on NEURO-BENCH. Training budget was `200,000`
+  presentations (`12,500` batches) on CPU, total training time `6,450.2s`
+  (`31.0` samples/s). Saved artifacts under
+  `docs/verify-arbor-simulator/artifacts/rnn_experiment_200k_20260603/`:
+  `rnn_branchtanh_fixed_200k.pt`, `rnn_branchtanh_fixed_200k_best.pt`,
+  `rnn_branchtanh_fixed_200k_metrics.json`, update log JSONL, registry entry,
+  and NEURO-BENCH JSON/Markdown reports. Validation improved versus the 8k
+  smoke run: soma RMSE `19.9184 mV`, spike AUC `0.6303`. NEURO-BENCH comparison:
+  | model | M1 RMSE mV | M1 AUC | rate soma-delta RMSE | rate spike-delta MAE | dropout soma-delta RMSE | dropout spike-delta MAE |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `branch_elm_30_trained` | `17.9833` | `0.3888` | `21.2951` | `317.0` | `21.8621` | `66.625` |
+  | `mamba_pytorch_best` | `17.5602` | `0.4970` | `23.7367` | `318.25` | `22.2460` | `66.375` |
+  | `rnn_branchtanh_fixed_200k` | `17.3010` | `0.6259` | `17.6073` | `318.75` | `21.7904` | `65.625` |
+  Interpretation: the RNN has now learned enough to improve M1 discrimination
+  and rate-shift soma-delta fidelity, but it still fails M4 spike-delta
+  preservation. Per spec, this is a real benchmark finding rather than a model
+  success claim; next model work should address spike/intervention response
+  rather than only optimizing trace RMSE.
+
+- USER (2026-06-03 21:05): User corrected the execution mistake: an 8k
+  presentation run is insufficient for a model-learning benchmark and should
+  have been treated only as a smoke test. Continue execution with a run long
+  enough for the model to learn the data, save the models, and evaluate them on
+  NEURO-BENCH.
+
+- IMPLEMENTATION (2026-06-03 21:05): Parameterized
+  `docs/verify-arbor-simulator/artifacts/run_long_model_benchmark_batch.sh`
+  so RNN/Mamba budgets and checkpoint prefixes are explicit via environment
+  variables (`RNN_EPOCH_SAMPLES`, `RNN_EPOCHS`, `RNN_BATCH_SIZE`,
+  `RNN_LEARNING_RATE`, `RNN_PREFIX`, `RNN_UPDATE_LOG_INTERVAL`, and analogous
+  Mamba variables). Also patched `src/bnn_sim/train.py` to flush JSONL update
+  logs after each write for future long-run monitoring.
+
+- EXPERIMENT (2026-06-03 21:05): Started a materially larger branch-trace RNN
+  training/evaluation job:
+  `RUN_RNN=1 RUN_MAMBA=0 RNN_EPOCH_SAMPLES=200000
+  RNN_PREFIX=rnn_branchtanh_fixed_200k RNN_UPDATE_LOG_INTERVAL=500
+  OUT_DIR=docs/verify-arbor-simulator/artifacts/rnn_experiment_200k_20260603
+  docs/verify-arbor-simulator/artifacts/run_long_model_benchmark_batch.sh`.
+  It runs on CPU because the local Torch build still does not support RTX 5090
+  `sm_120`. Expected runtime from measured throughput is roughly two hours,
+  after which the same job saves checkpoints and evaluates Branch-ELM, existing
+  pure-PyTorch Mamba, and the new RNN on NEURO-BENCH.
+
 - EXPERIMENT (2026-06-03 18:51): Confirmed local Branch-ELM is our BranchELM
   surrogate implementation (`model_kind: baseline`) and reused
   `runs/branch_elm_30_trained.pt` rather than retraining it. Started and

@@ -1,0 +1,1795 @@
+{
+  "interpretation": {
+    "delta_soma_mean_mv": 14.983019828796387,
+    "delta_spike_rate_per_1000_steps": -23.909090909090907,
+    "event_fraction_delta": 0.006915492957746478,
+    "teacher_response_detected": true,
+    "warning": "Higher event density reduced teacher spike rate in this small pair. Treat M4 as teacher-fidelity/stress testing, not biological robustness, until the teacher protocol is calibrated."
+  },
+  "metadata": {
+    "created_at": "2026-06-03 22:53:40",
+    "device": "cpu",
+    "elapsed_seconds": 14.421468123997329,
+    "high_input_data": "runs/verify_t3_high_input",
+    "ignore_start": 500,
+    "low_input_data": "runs/verify_t3_low_input",
+    "n_intervention_pairs": 4,
+    "n_val_samples": 8,
+    "val_data": "data/arbor-allen-nmda-source-medium-20260510/val"
+  },
+  "models": {
+    "branch_elm_30_trained": {
+      "checkpoint": "runs/branch_elm_30_trained.pt",
+      "m4_event_dropout": {
+        "intervention_name": "event_dropout",
+        "kind": "paired_event_intervention",
+        "mask": {
+          "evaluated_timesteps_per_trace": 2500,
+          "ignore_start": 500
+        },
+        "model_response": {
+          "direction_agreement": {
+            "soma_mean": true,
+            "spike_count": false
+          },
+          "soma_delta_correlation": 0.018130022448240364,
+          "soma_delta_mae_mv": 13.039188385009766,
+          "soma_delta_rmse_mv": 21.862112045288086,
+          "soma_mean_delta_error_mv": 3.430985450744629,
+          "spike_count_delta_mae_per_trace": 66.625,
+          "spike_count_delta_model_mean": 0.0,
+          "spike_count_delta_teacher_mean": -66.625
+        },
+        "representative_trace_ids": [
+          "arbor_allen_hetero:000001:seed1253549509",
+          "arbor_allen_hetero:000007:seed1455571912",
+          "arbor_allen_hetero:000006:seed1357947117",
+          "arbor_allen_hetero:000003:seed154865765",
+          "arbor_allen_hetero:000005:seed82776754"
+        ],
+        "status": "model_compared",
+        "teacher_response": {
+          "baseline_event_fraction": 0.003066901408450704,
+          "baseline_soma_mean_mv": 5.252760410308838,
+          "baseline_spike_rate_per_1000_steps": 94.7,
+          "delta_soma_abs_mean_mv": 13.597343444824219,
+          "delta_soma_mean_mv": -5.343049049377441,
+          "delta_spike_rate_per_1000_steps": -26.650000000000006,
+          "event_fraction_delta": -0.0015377934272300469,
+          "event_fraction_ratio": 0.498584003061615,
+          "intervention_event_fraction": 0.0015291079812206573,
+          "intervention_soma_mean_mv": -0.09028808772563934,
+          "intervention_spike_rate_per_1000_steps": 68.05,
+          "response_detected": true,
+          "teacher_direction": "lower_event_drive/lower_spiking/hyperpolarized"
+        },
+        "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
+      },
+      "m4_event_rate_shift": {
+        "intervention_name": "event_rate_shift_low_to_high",
+        "kind": "paired_event_intervention",
+        "mask": {
+          "evaluated_timesteps_per_trace": 5500,
+          "ignore_start": 500
+        },
+        "model_response": {
+          "direction_agreement": {
+            "soma_mean": true,
+            "spike_count": false
+          },
+          "soma_delta_correlation": 0.2362163457122777,
+          "soma_delta_mae_mv": 17.823266983032227,
+          "soma_delta_rmse_mv": 21.295080184936523,
+          "soma_mean_delta_error_mv": -11.142505645751953,
+          "spike_count_delta_mae_per_trace": 317.0,
+          "spike_count_delta_model_mean": 0.0,
+          "spike_count_delta_teacher_mean": -131.5
+        },
+        "representative_trace_ids": [
+          "low=arbor_allen_hetero:000000:seed191664963 | high=arbor_allen_hetero:000000:seed191664963",
+          "low=arbor_allen_hetero:000002:seed1405681631 | high=arbor_allen_hetero:000002:seed1405681631",
+          "low=arbor_allen_hetero:000001:seed1662057957 | high=arbor_allen_hetero:000001:seed1662057957",
+          "low=arbor_allen_hetero:000003:seed942484272 | high=arbor_allen_hetero:000003:seed942484272"
+        ],
+        "status": "model_compared",
+        "teacher_response": {
+          "baseline_event_fraction": 0.001132735808792147,
+          "baseline_soma_mean_mv": 4.948914051055908,
+          "baseline_spike_rate_per_1000_steps": 72.9090909090909,
+          "delta_soma_abs_mean_mv": 20.48001480102539,
+          "delta_soma_mean_mv": 14.983019828796387,
+          "delta_spike_rate_per_1000_steps": -23.909090909090907,
+          "event_fraction_delta": 0.006915492957746478,
+          "event_fraction_ratio": 7.105124340617934,
+          "intervention_event_fraction": 0.008048228766538625,
+          "intervention_soma_mean_mv": 19.931934356689453,
+          "intervention_spike_rate_per_1000_steps": 49.0,
+          "response_detected": true,
+          "teacher_direction": "higher_event_drive/lower_spiking/depolarized"
+        },
+        "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
+      },
+      "mvp_trace_report": {
+        "benchmark_version": "0.1.0",
+        "limitations": [
+          "M4 structured intervention is not implemented in the MVP yet.",
+          "Gaussian perturbation output is debug-only when present."
+        ],
+        "m1_open_loop_fidelity": {
+          "auc": 0.38879458893605356,
+          "rmse_mv": 17.983320236206055,
+          "rmse_normalized": 1.7983320951461792
+        },
+        "m1_trace_fidelity": {
+          "soma_mae_mv": 14.344683647155762,
+          "soma_rmse_mv": 17.983320236206055,
+          "soma_rmse_normalized": 1.7983320951461792,
+          "spike_auc": 0.38879458893605356,
+          "spike_brier": 0.0722971260547638,
+          "spike_count_mae_per_trace": 430.375,
+          "spike_log_loss": 0.27571195363998413,
+          "spike_predicted_count": 0,
+          "spike_target_count": 3443,
+          "what_failure_means": {
+            "soma": "Large RMSE/MAE means the surrogate misses open-loop voltage traces under the stated mask.",
+            "spike": "Poor AUC/Brier/log-loss means spike scores do not rank or calibrate event likelihoods well."
+          }
+        },
+        "m1b_feature_fidelity": {
+          "features": {
+            "adaptation_ratio": {
+              "mean_abs_error": null,
+              "prediction_mean": null,
+              "teacher_mean": 2.008341528701876
+            },
+            "firing_rate_per_1000_steps": {
+              "mean_abs_error": 78.25,
+              "prediction_mean": 0.0,
+              "teacher_mean": 78.25
+            },
+            "first_isi_steps": {
+              "mean_abs_error": null,
+              "prediction_mean": null,
+              "teacher_mean": 43.857142857142854
+            },
+            "last_isi_steps": {
+              "mean_abs_error": null,
+              "prediction_mean": null,
+              "teacher_mean": 38.42857142857143
+            },
+            "mean_isi_steps": {
+              "mean_abs_error": null,
+              "prediction_mean": null,
+              "teacher_mean": 69.77224275878163
+            },
+            "non_spiking": {
+              "mean_abs_error": 0.875,
+              "prediction_mean": 1.0,
+              "teacher_mean": 0.125
+            },
+            "peak_voltage_mv": {
+              "mean_abs_error": 50.449647665023804,
+              "prediction_mean": 12.992372989654541,
+              "teacher_mean": 62.38640642166138
+            },
+            "spike_count": {
+              "mean_abs_error": 430.375,
+              "prediction_mean": 0.0,
+              "teacher_mean": 430.375
+            },
+            "trough_voltage_mv": {
+              "mean_abs_error": 17.287841595709324,
+              "prediction_mean": 2.6445223465561867,
+              "teacher_mean": -14.643319249153137
+            }
+          },
+          "what_failure_means": "Feature errors indicate mismatches in practitioner-visible trace properties such as spike count, firing rate, adaptation, and voltage extrema.",
+          "worst_trace_ids": {
+            "adaptation_ratio_abs_error": [],
+            "firing_rate_per_1000_steps_abs_error": [
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081",
+              "arbor_allen_hetero:000005:seed107055199"
+            ],
+            "first_isi_steps_abs_error": [],
+            "last_isi_steps_abs_error": [],
+            "mean_isi_steps_abs_error": [],
+            "non_spiking_abs_error": [
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081",
+              "arbor_allen_hetero:000005:seed107055199"
+            ],
+            "peak_voltage_mv_abs_error": [
+              "arbor_allen_hetero:000000:seed1564250436",
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081"
+            ],
+            "spike_count_abs_error": [
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081",
+              "arbor_allen_hetero:000005:seed107055199"
+            ],
+            "trough_voltage_mv_abs_error": [
+              "arbor_allen_hetero:000000:seed1564250436",
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081"
+            ]
+          }
+        },
+        "m2_regime_stratified": {
+          "global": {
+            "mae_mv": 14.344683647155762,
+            "rmse_mv": 17.983320236206055,
+            "timesteps": 44000
+          },
+          "mvp_regimes": [
+            {
+              "count": 34,
+              "mae": 14.740523338317871,
+              "max_error": 20.75275421142578,
+              "regime_label": "far_from_spike_subthreshold",
+              "rmse": 14.937461853027344
+            },
+            {
+              "count": 15999,
+              "mae": 17.959787368774414,
+              "max_error": 74.58848571777344,
+              "regime_label": "near_spike",
+              "rmse": 23.931251525878906
+            },
+            {
+              "count": 14317,
+              "mae": 11.925187110900879,
+              "max_error": 36.6584587097168,
+              "regime_label": "post_spike_refractory",
+              "rmse": 13.746828079223633
+            },
+            {
+              "count": 43948,
+              "mae": 14.342056274414062,
+              "max_error": 74.58848571777344,
+              "regime_label": "post_input_event",
+              "rmse": 17.982421875
+            }
+          ],
+          "post_event": [
+            {
+              "count": 43948,
+              "mae": 14.342056274414062,
+              "max_error": 74.58848571777344,
+              "regime_label": "post_event",
+              "rmse": 17.982421875
+            },
+            {
+              "count": 52,
+              "mae": 16.56553077697754,
+              "max_error": 65.15387725830078,
+              "regime_label": "no_recent_event",
+              "rmse": 18.72776222229004
+            }
+          ],
+          "slope_regime": [
+            {
+              "bin_high": 1.486312985420227,
+              "bin_low": 0.0,
+              "count": 22000,
+              "mae": 13.298352241516113,
+              "max_error": 31.400009155273438,
+              "regime_label": "low_dvdt",
+              "rmse": 14.244403839111328
+            },
+            {
+              "bin_high": 11.033778381347673,
+              "bin_low": 1.486312985420227,
+              "count": 13200,
+              "mae": 10.632231712341309,
+              "max_error": 36.6584587097168,
+              "regime_label": "medium_dvdt",
+              "rmse": 12.568708419799805
+            },
+            {
+              "bin_high": 53.56681175231933,
+              "bin_low": 11.033778381347673,
+              "count": 6600,
+              "mae": 18.2210750579834,
+              "max_error": 60.99764633178711,
+              "regime_label": "high_dvdt",
+              "rmse": 22.966209411621094
+            },
+            {
+              "bin_high": 93.74469757080078,
+              "bin_low": 53.56681175231933,
+              "count": 2200,
+              "mae": 35.45353698730469,
+              "max_error": 74.58848571777344,
+              "regime_label": "spike_rise",
+              "rmse": 43.68971633911133
+            }
+          ],
+          "spike_proximity": [
+            {
+              "count": 15999,
+              "mae": 17.959787368774414,
+              "max_error": 74.58848571777344,
+              "regime_label": "near_spike",
+              "rmse": 23.931251525878906
+            },
+            {
+              "count": 28001,
+              "mae": 12.279112815856934,
+              "max_error": 31.124710083007812,
+              "regime_label": "far_from_spike",
+              "rmse": 13.451909065246582
+            }
+          ],
+          "spike_timing": {
+            "f1_at_2steps": 0.0,
+            "mean_timing_error_steps": null,
+            "median_timing_error_steps": null,
+            "precision_at_2steps": 0.0,
+            "recall_at_2steps": 0.0
+          },
+          "voltage_regime": [
+            {
+              "bin_high": -6.725292205810547,
+              "bin_low": -23.76850128173828,
+              "count": 11000,
+              "mae": 15.823596954345703,
+              "max_error": 32.23183822631836,
+              "regime_label": "hyperpolarized",
+              "rmse": 16.414203643798828
+            },
+            {
+              "bin_high": -2.0142478942871094,
+              "bin_low": -6.725292205810547,
+              "count": 11000,
+              "mae": 13.121070861816406,
+              "max_error": 26.03450584411621,
+              "regime_label": "resting_low",
+              "rmse": 13.772176742553711
+            },
+            {
+              "bin_high": 9.407604217529297,
+              "bin_low": -2.0142478942871094,
+              "count": 11000,
+              "mae": 5.881697654724121,
+              "max_error": 21.571563720703125,
+              "regime_label": "resting_high",
+              "rmse": 7.250688076019287
+            },
+            {
+              "bin_high": 26.998028182983397,
+              "bin_low": 9.407604217529297,
+              "count": 6600,
+              "mae": 12.649031639099121,
+              "max_error": 24.262401580810547,
+              "regime_label": "depolarized",
+              "rmse": 13.812963485717773
+            },
+            {
+              "bin_high": 82.36771392822266,
+              "bin_low": 26.998028182983397,
+              "count": 4400,
+              "mae": 37.40736389160156,
+              "max_error": 74.58848571777344,
+              "regime_label": "spike_range",
+              "rmse": 40.84878158569336
+            }
+          ]
+        },
+        "m2_regimes": {
+          "global": {
+            "mae_mv": 14.344683647155762,
+            "rmse_mv": 17.983320236206055,
+            "timesteps": 44000
+          },
+          "mvp_regimes": [
+            {
+              "count": 34,
+              "mae": 14.740523338317871,
+              "max_error": 20.75275421142578,
+              "regime_label": "far_from_spike_subthreshold",
+              "rmse": 14.937461853027344
+            },
+            {
+              "count": 15999,
+              "mae": 17.959787368774414,
+              "max_error": 74.58848571777344,
+              "regime_label": "near_spike",
+              "rmse": 23.931251525878906
+            },
+            {
+              "count": 14317,
+              "mae": 11.925187110900879,
+              "max_error": 36.6584587097168,
+              "regime_label": "post_spike_refractory",
+              "rmse": 13.746828079223633
+            },
+            {
+              "count": 43948,
+              "mae": 14.342056274414062,
+              "max_error": 74.58848571777344,
+              "regime_label": "post_input_event",
+              "rmse": 17.982421875
+            }
+          ],
+          "post_event": [
+            {
+              "count": 43948,
+              "mae": 14.342056274414062,
+              "max_error": 74.58848571777344,
+              "regime_label": "post_event",
+              "rmse": 17.982421875
+            },
+            {
+              "count": 52,
+              "mae": 16.56553077697754,
+              "max_error": 65.15387725830078,
+              "regime_label": "no_recent_event",
+              "rmse": 18.72776222229004
+            }
+          ],
+          "slope_regime": [
+            {
+              "bin_high": 1.486312985420227,
+              "bin_low": 0.0,
+              "count": 22000,
+              "mae": 13.298352241516113,
+              "max_error": 31.400009155273438,
+              "regime_label": "low_dvdt",
+              "rmse": 14.244403839111328
+            },
+            {
+              "bin_high": 11.033778381347673,
+              "bin_low": 1.486312985420227,
+              "count": 13200,
+              "mae": 10.632231712341309,
+              "max_error": 36.6584587097168,
+              "regime_label": "medium_dvdt",
+              "rmse": 12.568708419799805
+            },
+            {
+              "bin_high": 53.56681175231933,
+              "bin_low": 11.033778381347673,
+              "count": 6600,
+              "mae": 18.2210750579834,
+              "max_error": 60.99764633178711,
+              "regime_label": "high_dvdt",
+              "rmse": 22.966209411621094
+            },
+            {
+              "bin_high": 93.74469757080078,
+              "bin_low": 53.56681175231933,
+              "count": 2200,
+              "mae": 35.45353698730469,
+              "max_error": 74.58848571777344,
+              "regime_label": "spike_rise",
+              "rmse": 43.68971633911133
+            }
+          ],
+          "spike_proximity": [
+            {
+              "count": 15999,
+              "mae": 17.959787368774414,
+              "max_error": 74.58848571777344,
+              "regime_label": "near_spike",
+              "rmse": 23.931251525878906
+            },
+            {
+              "count": 28001,
+              "mae": 12.279112815856934,
+              "max_error": 31.124710083007812,
+              "regime_label": "far_from_spike",
+              "rmse": 13.451909065246582
+            }
+          ],
+          "spike_timing": {
+            "f1_at_2steps": 0.0,
+            "mean_timing_error_steps": null,
+            "median_timing_error_steps": null,
+            "precision_at_2steps": 0.0,
+            "recall_at_2steps": 0.0
+          },
+          "voltage_regime": [
+            {
+              "bin_high": -6.725292205810547,
+              "bin_low": -23.76850128173828,
+              "count": 11000,
+              "mae": 15.823596954345703,
+              "max_error": 32.23183822631836,
+              "regime_label": "hyperpolarized",
+              "rmse": 16.414203643798828
+            },
+            {
+              "bin_high": -2.0142478942871094,
+              "bin_low": -6.725292205810547,
+              "count": 11000,
+              "mae": 13.121070861816406,
+              "max_error": 26.03450584411621,
+              "regime_label": "resting_low",
+              "rmse": 13.772176742553711
+            },
+            {
+              "bin_high": 9.407604217529297,
+              "bin_low": -2.0142478942871094,
+              "count": 11000,
+              "mae": 5.881697654724121,
+              "max_error": 21.571563720703125,
+              "regime_label": "resting_high",
+              "rmse": 7.250688076019287
+            },
+            {
+              "bin_high": 26.998028182983397,
+              "bin_low": 9.407604217529297,
+              "count": 6600,
+              "mae": 12.649031639099121,
+              "max_error": 24.262401580810547,
+              "regime_label": "depolarized",
+              "rmse": 13.812963485717773
+            },
+            {
+              "bin_high": 82.36771392822266,
+              "bin_low": 26.998028182983397,
+              "count": 4400,
+              "mae": 37.40736389160156,
+              "max_error": 74.58848571777344,
+              "regime_label": "spike_range",
+              "rmse": 40.84878158569336
+            }
+          ]
+        },
+        "m4_intervention": {
+          "kind": null,
+          "status": "not_run",
+          "structured_intervention_required": true,
+          "what_failure_means": "This is only a numerical brittleness smoke test. It is not evidence of biological robustness or global smoothness."
+        },
+        "m4_perturbation_stability": {},
+        "metadata": {
+          "dataset_path": "data/arbor-allen-nmda-source-medium-20260510/val",
+          "mask": {
+            "evaluated_timesteps_per_trace": 5500,
+            "ignore_start": 500,
+            "semantics": "drop the first ignore_start timesteps from every trace before metrics"
+          },
+          "model_config": null,
+          "model_name": "branch_elm_30_trained",
+          "n_samples": 8,
+          "n_timesteps": 6000,
+          "soma_scale": 0.1,
+          "trace_ids": [
+            "arbor_allen_hetero:000000:seed1564250436",
+            "arbor_allen_hetero:000001:seed121333817",
+            "arbor_allen_hetero:000002:seed1304729690",
+            "arbor_allen_hetero:000003:seed702045878",
+            "arbor_allen_hetero:000004:seed563008081",
+            "arbor_allen_hetero:000005:seed107055199",
+            "arbor_allen_hetero:000006:seed1378429312",
+            "arbor_allen_hetero:000007:seed604143882"
+          ]
+        }
+      },
+      "parameter_count": 8154
+    },
+    "mamba_pytorch_best": {
+      "checkpoint": "runs/mamba_best_trained.pt",
+      "m4_event_dropout": {
+        "intervention_name": "event_dropout",
+        "kind": "paired_event_intervention",
+        "mask": {
+          "evaluated_timesteps_per_trace": 2500,
+          "ignore_start": 500
+        },
+        "model_response": {
+          "direction_agreement": {
+            "soma_mean": false,
+            "spike_count": true
+          },
+          "soma_delta_correlation": 0.004493208382154843,
+          "soma_delta_mae_mv": 13.644820213317871,
+          "soma_delta_rmse_mv": 22.246042251586914,
+          "soma_mean_delta_error_mv": 5.358212947845459,
+          "spike_count_delta_mae_per_trace": 66.375,
+          "spike_count_delta_model_mean": -0.25,
+          "spike_count_delta_teacher_mean": -66.625
+        },
+        "representative_trace_ids": [
+          "arbor_allen_hetero:000001:seed1253549509",
+          "arbor_allen_hetero:000007:seed1455571912",
+          "arbor_allen_hetero:000006:seed1357947117",
+          "arbor_allen_hetero:000003:seed154865765",
+          "arbor_allen_hetero:000005:seed82776754"
+        ],
+        "status": "model_compared",
+        "teacher_response": {
+          "baseline_event_fraction": 0.003066901408450704,
+          "baseline_soma_mean_mv": 5.252760410308838,
+          "baseline_spike_rate_per_1000_steps": 94.7,
+          "delta_soma_abs_mean_mv": 13.597343444824219,
+          "delta_soma_mean_mv": -5.343049049377441,
+          "delta_spike_rate_per_1000_steps": -26.650000000000006,
+          "event_fraction_delta": -0.0015377934272300469,
+          "event_fraction_ratio": 0.498584003061615,
+          "intervention_event_fraction": 0.0015291079812206573,
+          "intervention_soma_mean_mv": -0.09028808772563934,
+          "intervention_spike_rate_per_1000_steps": 68.05,
+          "response_detected": true,
+          "teacher_direction": "lower_event_drive/lower_spiking/hyperpolarized"
+        },
+        "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
+      },
+      "m4_event_rate_shift": {
+        "intervention_name": "event_rate_shift_low_to_high",
+        "kind": "paired_event_intervention",
+        "mask": {
+          "evaluated_timesteps_per_trace": 5500,
+          "ignore_start": 500
+        },
+        "model_response": {
+          "direction_agreement": {
+            "soma_mean": true,
+            "spike_count": false
+          },
+          "soma_delta_correlation": 0.010787730285540174,
+          "soma_delta_mae_mv": 20.30476951599121,
+          "soma_delta_rmse_mv": 23.736703872680664,
+          "soma_mean_delta_error_mv": -14.651519775390625,
+          "spike_count_delta_mae_per_trace": 318.25,
+          "spike_count_delta_model_mean": 0.25,
+          "spike_count_delta_teacher_mean": -131.5
+        },
+        "representative_trace_ids": [
+          "low=arbor_allen_hetero:000000:seed191664963 | high=arbor_allen_hetero:000000:seed191664963",
+          "low=arbor_allen_hetero:000002:seed1405681631 | high=arbor_allen_hetero:000002:seed1405681631",
+          "low=arbor_allen_hetero:000001:seed1662057957 | high=arbor_allen_hetero:000001:seed1662057957",
+          "low=arbor_allen_hetero:000003:seed942484272 | high=arbor_allen_hetero:000003:seed942484272"
+        ],
+        "status": "model_compared",
+        "teacher_response": {
+          "baseline_event_fraction": 0.001132735808792147,
+          "baseline_soma_mean_mv": 4.948914051055908,
+          "baseline_spike_rate_per_1000_steps": 72.9090909090909,
+          "delta_soma_abs_mean_mv": 20.48001480102539,
+          "delta_soma_mean_mv": 14.983019828796387,
+          "delta_spike_rate_per_1000_steps": -23.909090909090907,
+          "event_fraction_delta": 0.006915492957746478,
+          "event_fraction_ratio": 7.105124340617934,
+          "intervention_event_fraction": 0.008048228766538625,
+          "intervention_soma_mean_mv": 19.931934356689453,
+          "intervention_spike_rate_per_1000_steps": 49.0,
+          "response_detected": true,
+          "teacher_direction": "higher_event_drive/lower_spiking/depolarized"
+        },
+        "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
+      },
+      "mvp_trace_report": {
+        "benchmark_version": "0.1.0",
+        "limitations": [
+          "M4 structured intervention is not implemented in the MVP yet.",
+          "Gaussian perturbation output is debug-only when present."
+        ],
+        "m1_open_loop_fidelity": {
+          "auc": 0.49704996681019303,
+          "rmse_mv": 17.560192108154297,
+          "rmse_normalized": 1.7560193538665771
+        },
+        "m1_trace_fidelity": {
+          "soma_mae_mv": 13.305789947509766,
+          "soma_rmse_mv": 17.560192108154297,
+          "soma_rmse_normalized": 1.7560193538665771,
+          "spike_auc": 0.49704996681019303,
+          "spike_brier": 0.08994575589895248,
+          "spike_count_mae_per_trace": 430.125,
+          "spike_log_loss": 0.3354596495628357,
+          "spike_predicted_count": 4,
+          "spike_target_count": 3443,
+          "what_failure_means": {
+            "soma": "Large RMSE/MAE means the surrogate misses open-loop voltage traces under the stated mask.",
+            "spike": "Poor AUC/Brier/log-loss means spike scores do not rank or calibrate event likelihoods well."
+          }
+        },
+        "m1b_feature_fidelity": {
+          "features": {
+            "adaptation_ratio": {
+              "mean_abs_error": null,
+              "prediction_mean": null,
+              "teacher_mean": 2.008341528701876
+            },
+            "firing_rate_per_1000_steps": {
+              "mean_abs_error": 78.20454545454545,
+              "prediction_mean": 0.09090909090909091,
+              "teacher_mean": 78.25
+            },
+            "first_isi_steps": {
+              "mean_abs_error": null,
+              "prediction_mean": null,
+              "teacher_mean": 43.857142857142854
+            },
+            "last_isi_steps": {
+              "mean_abs_error": null,
+              "prediction_mean": null,
+              "teacher_mean": 38.42857142857143
+            },
+            "mean_isi_steps": {
+              "mean_abs_error": null,
+              "prediction_mean": null,
+              "teacher_mean": 69.77224275878163
+            },
+            "non_spiking": {
+              "mean_abs_error": 0.625,
+              "prediction_mean": 0.5,
+              "teacher_mean": 0.125
+            },
+            "peak_voltage_mv": {
+              "mean_abs_error": 53.31446552276611,
+              "prediction_mean": 11.969330549240112,
+              "teacher_mean": 62.38640642166138
+            },
+            "spike_count": {
+              "mean_abs_error": 430.125,
+              "prediction_mean": 0.5,
+              "teacher_mean": 430.375
+            },
+            "trough_voltage_mv": {
+              "mean_abs_error": 14.30124257877469,
+              "prediction_mean": -0.3420766703784466,
+              "teacher_mean": -14.643319249153137
+            }
+          },
+          "what_failure_means": "Feature errors indicate mismatches in practitioner-visible trace properties such as spike count, firing rate, adaptation, and voltage extrema.",
+          "worst_trace_ids": {
+            "adaptation_ratio_abs_error": [],
+            "firing_rate_per_1000_steps_abs_error": [
+              "arbor_allen_hetero:000000:seed1564250436",
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081"
+            ],
+            "first_isi_steps_abs_error": [],
+            "last_isi_steps_abs_error": [],
+            "mean_isi_steps_abs_error": [],
+            "non_spiking_abs_error": [
+              "arbor_allen_hetero:000000:seed1564250436",
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000007:seed604143882"
+            ],
+            "peak_voltage_mv_abs_error": [
+              "arbor_allen_hetero:000000:seed1564250436",
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081"
+            ],
+            "spike_count_abs_error": [
+              "arbor_allen_hetero:000000:seed1564250436",
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081"
+            ],
+            "trough_voltage_mv_abs_error": [
+              "arbor_allen_hetero:000000:seed1564250436",
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081"
+            ]
+          }
+        },
+        "m2_regime_stratified": {
+          "global": {
+            "mae_mv": 13.305789947509766,
+            "rmse_mv": 17.560192108154297,
+            "timesteps": 44000
+          },
+          "mvp_regimes": [
+            {
+              "count": 34,
+              "mae": 17.16724395751953,
+              "max_error": 24.458850860595703,
+              "regime_label": "far_from_spike_subthreshold",
+              "rmse": 17.29570198059082
+            },
+            {
+              "count": 15999,
+              "mae": 17.82100486755371,
+              "max_error": 78.26749420166016,
+              "regime_label": "near_spike",
+              "rmse": 24.421438217163086
+            },
+            {
+              "count": 14317,
+              "mae": 11.260275840759277,
+              "max_error": 36.438819885253906,
+              "regime_label": "post_spike_refractory",
+              "rmse": 13.121356010437012
+            },
+            {
+              "count": 43948,
+              "mae": 13.299637794494629,
+              "max_error": 78.26749420166016,
+              "regime_label": "post_input_event",
+              "rmse": 17.55655288696289
+            }
+          ],
+          "post_event": [
+            {
+              "count": 43948,
+              "mae": 13.299637794494629,
+              "max_error": 78.26749420166016,
+              "regime_label": "post_event",
+              "rmse": 17.55655288696289
+            },
+            {
+              "count": 52,
+              "mae": 18.505626678466797,
+              "max_error": 64.75126647949219,
+              "regime_label": "no_recent_event",
+              "rmse": 20.405284881591797
+            }
+          ],
+          "slope_regime": [
+            {
+              "bin_high": 1.486312985420227,
+              "bin_low": 0.0,
+              "count": 22000,
+              "mae": 11.59737491607666,
+              "max_error": 32.04411315917969,
+              "regime_label": "low_dvdt",
+              "rmse": 12.706984519958496
+            },
+            {
+              "bin_high": 11.033778381347673,
+              "bin_low": 1.486312985420227,
+              "count": 13200,
+              "mae": 9.949021339416504,
+              "max_error": 36.438819885253906,
+              "regime_label": "medium_dvdt",
+              "rmse": 12.074204444885254
+            },
+            {
+              "bin_high": 53.56681175231933,
+              "bin_low": 11.033778381347673,
+              "count": 6600,
+              "mae": 18.328596115112305,
+              "max_error": 62.44782638549805,
+              "regime_label": "high_dvdt",
+              "rmse": 23.393169403076172
+            },
+            {
+              "bin_high": 93.74469757080078,
+              "bin_low": 53.56681175231933,
+              "count": 2200,
+              "mae": 35.4621467590332,
+              "max_error": 78.26749420166016,
+              "regime_label": "spike_rise",
+              "rmse": 45.12309265136719
+            }
+          ],
+          "spike_proximity": [
+            {
+              "count": 15999,
+              "mae": 17.82100486755371,
+              "max_error": 78.26749420166016,
+              "regime_label": "near_spike",
+              "rmse": 24.421438217163086
+            },
+            {
+              "count": 28001,
+              "mae": 10.725920677185059,
+              "max_error": 30.72907257080078,
+              "regime_label": "far_from_spike",
+              "rmse": 11.990774154663086
+            }
+          ],
+          "spike_timing": {
+            "f1_at_2steps": 0.0,
+            "mean_timing_error_steps": 3369.6491431890795,
+            "median_timing_error_steps": 3127.0,
+            "precision_at_2steps": 0.0,
+            "recall_at_2steps": 0.0
+          },
+          "voltage_regime": [
+            {
+              "bin_high": -6.725292205810547,
+              "bin_low": -23.76850128173828,
+              "count": 11000,
+              "mae": 15.261568069458008,
+              "max_error": 30.527128219604492,
+              "regime_label": "hyperpolarized",
+              "rmse": 15.515999794006348
+            },
+            {
+              "bin_high": -2.0142478942871094,
+              "bin_low": -6.725292205810547,
+              "count": 11000,
+              "mae": 9.753131866455078,
+              "max_error": 19.208375930786133,
+              "regime_label": "resting_low",
+              "rmse": 9.96897029876709
+            },
+            {
+              "bin_high": 9.407604217529297,
+              "bin_low": -2.0142478942871094,
+              "count": 11000,
+              "mae": 3.9620237350463867,
+              "max_error": 13.285536766052246,
+              "regime_label": "resting_high",
+              "rmse": 4.639274597167969
+            },
+            {
+              "bin_high": 26.998028182983397,
+              "bin_low": 9.407604217529297,
+              "count": 6600,
+              "mae": 14.017608642578125,
+              "max_error": 26.5376033782959,
+              "regime_label": "depolarized",
+              "rmse": 15.142378807067871
+            },
+            {
+              "bin_high": 82.36771392822266,
+              "bin_low": 26.998028182983397,
+              "count": 4400,
+              "mae": 39.58967590332031,
+              "max_error": 78.26749420166016,
+              "regime_label": "spike_range",
+              "rmse": 42.843231201171875
+            }
+          ]
+        },
+        "m2_regimes": {
+          "global": {
+            "mae_mv": 13.305789947509766,
+            "rmse_mv": 17.560192108154297,
+            "timesteps": 44000
+          },
+          "mvp_regimes": [
+            {
+              "count": 34,
+              "mae": 17.16724395751953,
+              "max_error": 24.458850860595703,
+              "regime_label": "far_from_spike_subthreshold",
+              "rmse": 17.29570198059082
+            },
+            {
+              "count": 15999,
+              "mae": 17.82100486755371,
+              "max_error": 78.26749420166016,
+              "regime_label": "near_spike",
+              "rmse": 24.421438217163086
+            },
+            {
+              "count": 14317,
+              "mae": 11.260275840759277,
+              "max_error": 36.438819885253906,
+              "regime_label": "post_spike_refractory",
+              "rmse": 13.121356010437012
+            },
+            {
+              "count": 43948,
+              "mae": 13.299637794494629,
+              "max_error": 78.26749420166016,
+              "regime_label": "post_input_event",
+              "rmse": 17.55655288696289
+            }
+          ],
+          "post_event": [
+            {
+              "count": 43948,
+              "mae": 13.299637794494629,
+              "max_error": 78.26749420166016,
+              "regime_label": "post_event",
+              "rmse": 17.55655288696289
+            },
+            {
+              "count": 52,
+              "mae": 18.505626678466797,
+              "max_error": 64.75126647949219,
+              "regime_label": "no_recent_event",
+              "rmse": 20.405284881591797
+            }
+          ],
+          "slope_regime": [
+            {
+              "bin_high": 1.486312985420227,
+              "bin_low": 0.0,
+              "count": 22000,
+              "mae": 11.59737491607666,
+              "max_error": 32.04411315917969,
+              "regime_label": "low_dvdt",
+              "rmse": 12.706984519958496
+            },
+            {
+              "bin_high": 11.033778381347673,
+              "bin_low": 1.486312985420227,
+              "count": 13200,
+              "mae": 9.949021339416504,
+              "max_error": 36.438819885253906,
+              "regime_label": "medium_dvdt",
+              "rmse": 12.074204444885254
+            },
+            {
+              "bin_high": 53.56681175231933,
+              "bin_low": 11.033778381347673,
+              "count": 6600,
+              "mae": 18.328596115112305,
+              "max_error": 62.44782638549805,
+              "regime_label": "high_dvdt",
+              "rmse": 23.393169403076172
+            },
+            {
+              "bin_high": 93.74469757080078,
+              "bin_low": 53.56681175231933,
+              "count": 2200,
+              "mae": 35.4621467590332,
+              "max_error": 78.26749420166016,
+              "regime_label": "spike_rise",
+              "rmse": 45.12309265136719
+            }
+          ],
+          "spike_proximity": [
+            {
+              "count": 15999,
+              "mae": 17.82100486755371,
+              "max_error": 78.26749420166016,
+              "regime_label": "near_spike",
+              "rmse": 24.421438217163086
+            },
+            {
+              "count": 28001,
+              "mae": 10.725920677185059,
+              "max_error": 30.72907257080078,
+              "regime_label": "far_from_spike",
+              "rmse": 11.990774154663086
+            }
+          ],
+          "spike_timing": {
+            "f1_at_2steps": 0.0,
+            "mean_timing_error_steps": 3369.6491431890795,
+            "median_timing_error_steps": 3127.0,
+            "precision_at_2steps": 0.0,
+            "recall_at_2steps": 0.0
+          },
+          "voltage_regime": [
+            {
+              "bin_high": -6.725292205810547,
+              "bin_low": -23.76850128173828,
+              "count": 11000,
+              "mae": 15.261568069458008,
+              "max_error": 30.527128219604492,
+              "regime_label": "hyperpolarized",
+              "rmse": 15.515999794006348
+            },
+            {
+              "bin_high": -2.0142478942871094,
+              "bin_low": -6.725292205810547,
+              "count": 11000,
+              "mae": 9.753131866455078,
+              "max_error": 19.208375930786133,
+              "regime_label": "resting_low",
+              "rmse": 9.96897029876709
+            },
+            {
+              "bin_high": 9.407604217529297,
+              "bin_low": -2.0142478942871094,
+              "count": 11000,
+              "mae": 3.9620237350463867,
+              "max_error": 13.285536766052246,
+              "regime_label": "resting_high",
+              "rmse": 4.639274597167969
+            },
+            {
+              "bin_high": 26.998028182983397,
+              "bin_low": 9.407604217529297,
+              "count": 6600,
+              "mae": 14.017608642578125,
+              "max_error": 26.5376033782959,
+              "regime_label": "depolarized",
+              "rmse": 15.142378807067871
+            },
+            {
+              "bin_high": 82.36771392822266,
+              "bin_low": 26.998028182983397,
+              "count": 4400,
+              "mae": 39.58967590332031,
+              "max_error": 78.26749420166016,
+              "regime_label": "spike_range",
+              "rmse": 42.843231201171875
+            }
+          ]
+        },
+        "m4_intervention": {
+          "kind": null,
+          "status": "not_run",
+          "structured_intervention_required": true,
+          "what_failure_means": "This is only a numerical brittleness smoke test. It is not evidence of biological robustness or global smoothness."
+        },
+        "m4_perturbation_stability": {},
+        "metadata": {
+          "dataset_path": "data/arbor-allen-nmda-source-medium-20260510/val",
+          "mask": {
+            "evaluated_timesteps_per_trace": 5500,
+            "ignore_start": 500,
+            "semantics": "drop the first ignore_start timesteps from every trace before metrics"
+          },
+          "model_config": null,
+          "model_name": "mamba_pytorch_best",
+          "n_samples": 8,
+          "n_timesteps": 6000,
+          "soma_scale": 0.1,
+          "trace_ids": [
+            "arbor_allen_hetero:000000:seed1564250436",
+            "arbor_allen_hetero:000001:seed121333817",
+            "arbor_allen_hetero:000002:seed1304729690",
+            "arbor_allen_hetero:000003:seed702045878",
+            "arbor_allen_hetero:000004:seed563008081",
+            "arbor_allen_hetero:000005:seed107055199",
+            "arbor_allen_hetero:000006:seed1378429312",
+            "arbor_allen_hetero:000007:seed604143882"
+          ]
+        }
+      },
+      "parameter_count": 145858
+    },
+    "rnn_branchtanh_fixed_200k": {
+      "checkpoint": "docs/verify-arbor-simulator/artifacts/rnn_experiment_200k_20260603/rnn_branchtanh_fixed_200k_best.pt",
+      "m4_event_dropout": {
+        "intervention_name": "event_dropout",
+        "kind": "paired_event_intervention",
+        "mask": {
+          "evaluated_timesteps_per_trace": 2500,
+          "ignore_start": 500
+        },
+        "model_response": {
+          "direction_agreement": {
+            "soma_mean": true,
+            "spike_count": true
+          },
+          "soma_delta_correlation": 0.09963379545537243,
+          "soma_delta_mae_mv": 13.826805114746094,
+          "soma_delta_rmse_mv": 21.790409088134766,
+          "soma_mean_delta_error_mv": -0.6320090293884277,
+          "spike_count_delta_mae_per_trace": 65.625,
+          "spike_count_delta_model_mean": -1.0,
+          "spike_count_delta_teacher_mean": -66.625
+        },
+        "representative_trace_ids": [
+          "arbor_allen_hetero:000001:seed1253549509",
+          "arbor_allen_hetero:000007:seed1455571912",
+          "arbor_allen_hetero:000006:seed1357947117",
+          "arbor_allen_hetero:000003:seed154865765",
+          "arbor_allen_hetero:000005:seed82776754"
+        ],
+        "status": "model_compared",
+        "teacher_response": {
+          "baseline_event_fraction": 0.003066901408450704,
+          "baseline_soma_mean_mv": 5.252760410308838,
+          "baseline_spike_rate_per_1000_steps": 94.7,
+          "delta_soma_abs_mean_mv": 13.597343444824219,
+          "delta_soma_mean_mv": -5.343049049377441,
+          "delta_spike_rate_per_1000_steps": -26.650000000000006,
+          "event_fraction_delta": -0.0015377934272300469,
+          "event_fraction_ratio": 0.498584003061615,
+          "intervention_event_fraction": 0.0015291079812206573,
+          "intervention_soma_mean_mv": -0.09028808772563934,
+          "intervention_spike_rate_per_1000_steps": 68.05,
+          "response_detected": true,
+          "teacher_direction": "lower_event_drive/lower_spiking/hyperpolarized"
+        },
+        "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
+      },
+      "m4_event_rate_shift": {
+        "intervention_name": "event_rate_shift_low_to_high",
+        "kind": "paired_event_intervention",
+        "mask": {
+          "evaluated_timesteps_per_trace": 5500,
+          "ignore_start": 500
+        },
+        "model_response": {
+          "direction_agreement": {
+            "soma_mean": true,
+            "spike_count": false
+          },
+          "soma_delta_correlation": 0.4076032845612853,
+          "soma_delta_mae_mv": 13.562554359436035,
+          "soma_delta_rmse_mv": 17.607332229614258,
+          "soma_mean_delta_error_mv": -4.309815406799316,
+          "spike_count_delta_mae_per_trace": 318.75,
+          "spike_count_delta_model_mean": 3.75,
+          "spike_count_delta_teacher_mean": -131.5
+        },
+        "representative_trace_ids": [
+          "low=arbor_allen_hetero:000000:seed191664963 | high=arbor_allen_hetero:000000:seed191664963",
+          "low=arbor_allen_hetero:000002:seed1405681631 | high=arbor_allen_hetero:000002:seed1405681631",
+          "low=arbor_allen_hetero:000001:seed1662057957 | high=arbor_allen_hetero:000001:seed1662057957",
+          "low=arbor_allen_hetero:000003:seed942484272 | high=arbor_allen_hetero:000003:seed942484272"
+        ],
+        "status": "model_compared",
+        "teacher_response": {
+          "baseline_event_fraction": 0.001132735808792147,
+          "baseline_soma_mean_mv": 4.948914051055908,
+          "baseline_spike_rate_per_1000_steps": 72.9090909090909,
+          "delta_soma_abs_mean_mv": 20.48001480102539,
+          "delta_soma_mean_mv": 14.983019828796387,
+          "delta_spike_rate_per_1000_steps": -23.909090909090907,
+          "event_fraction_delta": 0.006915492957746478,
+          "event_fraction_ratio": 7.105124340617934,
+          "intervention_event_fraction": 0.008048228766538625,
+          "intervention_soma_mean_mv": 19.931934356689453,
+          "intervention_spike_rate_per_1000_steps": 49.0,
+          "response_detected": true,
+          "teacher_direction": "higher_event_drive/lower_spiking/depolarized"
+        },
+        "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
+      },
+      "mvp_trace_report": {
+        "benchmark_version": "0.1.0",
+        "limitations": [
+          "M4 structured intervention is not implemented in the MVP yet.",
+          "Gaussian perturbation output is debug-only when present."
+        ],
+        "m1_open_loop_fidelity": {
+          "auc": 0.6258885929779835,
+          "rmse_mv": 17.30103302001953,
+          "rmse_normalized": 1.7301033735275269
+        },
+        "m1_trace_fidelity": {
+          "soma_mae_mv": 13.026440620422363,
+          "soma_rmse_mv": 17.30103302001953,
+          "soma_rmse_normalized": 1.7301033735275269,
+          "spike_auc": 0.6258885929779835,
+          "spike_brier": 0.07195138186216354,
+          "spike_count_mae_per_trace": 424.375,
+          "spike_log_loss": 0.2721140682697296,
+          "spike_predicted_count": 48,
+          "spike_target_count": 3443,
+          "what_failure_means": {
+            "soma": "Large RMSE/MAE means the surrogate misses open-loop voltage traces under the stated mask.",
+            "spike": "Poor AUC/Brier/log-loss means spike scores do not rank or calibrate event likelihoods well."
+          }
+        },
+        "m1b_feature_fidelity": {
+          "features": {
+            "adaptation_ratio": {
+              "mean_abs_error": 3.310752483750624,
+              "prediction_mean": 4.505877426383044,
+              "teacher_mean": 2.008341528701876
+            },
+            "firing_rate_per_1000_steps": {
+              "mean_abs_error": 77.1590909090909,
+              "prediction_mean": 1.0909090909090908,
+              "teacher_mean": 78.25
+            },
+            "first_isi_steps": {
+              "mean_abs_error": 1534.8,
+              "prediction_mean": 1592.8,
+              "teacher_mean": 43.857142857142854
+            },
+            "last_isi_steps": {
+              "mean_abs_error": 1516.0,
+              "prediction_mean": 1556.8,
+              "teacher_mean": 38.42857142857143
+            },
+            "mean_isi_steps": {
+              "mean_abs_error": 1398.0068959766527,
+              "prediction_mean": 1487.4201307189542,
+              "teacher_mean": 69.77224275878163
+            },
+            "non_spiking": {
+              "mean_abs_error": 0.25,
+              "prediction_mean": 0.375,
+              "teacher_mean": 0.125
+            },
+            "peak_voltage_mv": {
+              "mean_abs_error": 34.9445686340332,
+              "prediction_mean": 33.564998149871826,
+              "teacher_mean": 62.38640642166138
+            },
+            "spike_count": {
+              "mean_abs_error": 424.375,
+              "prediction_mean": 6.0,
+              "teacher_mean": 430.375
+            },
+            "trough_voltage_mv": {
+              "mean_abs_error": 5.433599650859833,
+              "prediction_mean": -9.520647943019867,
+              "teacher_mean": -14.643319249153137
+            }
+          },
+          "what_failure_means": "Feature errors indicate mismatches in practitioner-visible trace properties such as spike count, firing rate, adaptation, and voltage extrema.",
+          "worst_trace_ids": {
+            "adaptation_ratio_abs_error": [
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000004:seed563008081",
+              "arbor_allen_hetero:000006:seed1378429312"
+            ],
+            "firing_rate_per_1000_steps_abs_error": [
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081",
+              "arbor_allen_hetero:000005:seed107055199"
+            ],
+            "first_isi_steps_abs_error": [
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081",
+              "arbor_allen_hetero:000006:seed1378429312",
+              "arbor_allen_hetero:000007:seed604143882"
+            ],
+            "last_isi_steps_abs_error": [
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081",
+              "arbor_allen_hetero:000006:seed1378429312",
+              "arbor_allen_hetero:000007:seed604143882"
+            ],
+            "mean_isi_steps_abs_error": [
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081",
+              "arbor_allen_hetero:000006:seed1378429312",
+              "arbor_allen_hetero:000007:seed604143882"
+            ],
+            "non_spiking_abs_error": [
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000005:seed107055199"
+            ],
+            "peak_voltage_mv_abs_error": [
+              "arbor_allen_hetero:000000:seed1564250436",
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081"
+            ],
+            "spike_count_abs_error": [
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081",
+              "arbor_allen_hetero:000005:seed107055199"
+            ],
+            "trough_voltage_mv_abs_error": [
+              "arbor_allen_hetero:000000:seed1564250436",
+              "arbor_allen_hetero:000001:seed121333817",
+              "arbor_allen_hetero:000002:seed1304729690",
+              "arbor_allen_hetero:000003:seed702045878",
+              "arbor_allen_hetero:000004:seed563008081"
+            ]
+          }
+        },
+        "m2_regime_stratified": {
+          "global": {
+            "mae_mv": 13.026440620422363,
+            "rmse_mv": 17.301034927368164,
+            "timesteps": 44000
+          },
+          "mvp_regimes": [
+            {
+              "count": 34,
+              "mae": 6.490734577178955,
+              "max_error": 26.417137145996094,
+              "regime_label": "far_from_spike_subthreshold",
+              "rmse": 8.956740379333496
+            },
+            {
+              "count": 15999,
+              "mae": 18.435117721557617,
+              "max_error": 82.92167663574219,
+              "regime_label": "near_spike",
+              "rmse": 23.883901596069336
+            },
+            {
+              "count": 14317,
+              "mae": 12.803268432617188,
+              "max_error": 38.42597961425781,
+              "regime_label": "post_spike_refractory",
+              "rmse": 15.197837829589844
+            },
+            {
+              "count": 43948,
+              "mae": 13.028565406799316,
+              "max_error": 82.92167663574219,
+              "regime_label": "post_input_event",
+              "rmse": 17.3022403717041
+            }
+          ],
+          "post_event": [
+            {
+              "count": 43948,
+              "mae": 13.028565406799316,
+              "max_error": 82.92167663574219,
+              "regime_label": "post_event",
+              "rmse": 17.3022403717041
+            },
+            {
+              "count": 52,
+              "mae": 11.230353355407715,
+              "max_error": 61.918556213378906,
+              "regime_label": "no_recent_event",
+              "rmse": 16.249950408935547
+            }
+          ],
+          "slope_regime": [
+            {
+              "bin_high": 1.486312985420227,
+              "bin_low": 0.0,
+              "count": 22000,
+              "mae": 10.063764572143555,
+              "max_error": 37.94903564453125,
+              "regime_label": "low_dvdt",
+              "rmse": 11.96650218963623
+            },
+            {
+              "bin_high": 11.033778381347673,
+              "bin_low": 1.486312985420227,
+              "count": 13200,
+              "mae": 11.548316955566406,
+              "max_error": 41.020912170410156,
+              "regime_label": "medium_dvdt",
+              "rmse": 14.016977310180664
+            },
+            {
+              "bin_high": 53.56681175231933,
+              "bin_low": 11.033778381347673,
+              "count": 6600,
+              "mae": 18.343608856201172,
+              "max_error": 72.52429962158203,
+              "regime_label": "high_dvdt",
+              "rmse": 23.014911651611328
+            },
+            {
+              "bin_high": 93.74469757080078,
+              "bin_low": 53.56681175231933,
+              "count": 2200,
+              "mae": 35.57044982910156,
+              "max_error": 82.92167663574219,
+              "regime_label": "spike_rise",
+              "rmse": 42.26856994628906
+            }
+          ],
+          "spike_proximity": [
+            {
+              "count": 15999,
+              "mae": 18.435117721557617,
+              "max_error": 82.92167663574219,
+              "regime_label": "near_spike",
+              "rmse": 23.883901596069336
+            },
+            {
+              "count": 28001,
+              "mae": 9.93607234954834,
+              "max_error": 41.020912170410156,
+              "regime_label": "far_from_spike",
+              "rmse": 12.017412185668945
+            }
+          ],
+          "spike_timing": {
+            "f1_at_2steps": 0.012003429551300373,
+            "mean_timing_error_steps": 1006.5094394423468,
+            "median_timing_error_steps": 658.0,
+            "precision_at_2steps": 0.375,
+            "recall_at_2steps": 0.006099331977926227
+          },
+          "voltage_regime": [
+            {
+              "bin_high": -6.725292205810547,
+              "bin_low": -23.76850128173828,
+              "count": 11000,
+              "mae": 11.067679405212402,
+              "max_error": 38.42597961425781,
+              "regime_label": "hyperpolarized",
+              "rmse": 14.13144588470459
+            },
+            {
+              "bin_high": -2.0142478942871094,
+              "bin_low": -6.725292205810547,
+              "count": 11000,
+              "mae": 11.773908615112305,
+              "max_error": 36.89422607421875,
+              "regime_label": "resting_low",
+              "rmse": 13.454597473144531
+            },
+            {
+              "bin_high": 9.407604217529297,
+              "bin_low": -2.0142478942871094,
+              "count": 11000,
+              "mae": 8.639704704284668,
+              "max_error": 37.43800735473633,
+              "regime_label": "resting_high",
+              "rmse": 10.45706844329834
+            },
+            {
+              "bin_high": 26.998028182983397,
+              "bin_low": 9.407604217529297,
+              "count": 6600,
+              "mae": 11.707467079162598,
+              "max_error": 35.2745246887207,
+              "regime_label": "depolarized",
+              "rmse": 13.767581939697266
+            },
+            {
+              "bin_high": 82.36771392822266,
+              "bin_low": 26.998028182983397,
+              "count": 4400,
+              "mae": 33.99997329711914,
+              "max_error": 82.92167663574219,
+              "regime_label": "spike_range",
+              "rmse": 38.51951217651367
+            }
+          ]
+        },
+        "m2_regimes": {
+          "global": {
+            "mae_mv": 13.026440620422363,
+            "rmse_mv": 17.301034927368164,
+            "timesteps": 44000
+          },
+          "mvp_regimes": [
+            {
+              "count": 34,
+              "mae": 6.490734577178955,
+              "max_error": 26.417137145996094,
+              "regime_label": "far_from_spike_subthreshold",
+              "rmse": 8.956740379333496
+            },
+            {
+              "count": 15999,
+              "mae": 18.435117721557617,
+              "max_error": 82.92167663574219,
+              "regime_label": "near_spike",
+              "rmse": 23.883901596069336
+            },
+            {
+              "count": 14317,
+              "mae": 12.803268432617188,
+              "max_error": 38.42597961425781,
+              "regime_label": "post_spike_refractory",
+              "rmse": 15.197837829589844
+            },
+            {
+              "count": 43948,
+              "mae": 13.028565406799316,
+              "max_error": 82.92167663574219,
+              "regime_label": "post_input_event",
+              "rmse": 17.3022403717041
+            }
+          ],
+          "post_event": [
+            {
+              "count": 43948,
+              "mae": 13.028565406799316,
+              "max_error": 82.92167663574219,
+              "regime_label": "post_event",
+              "rmse": 17.3022403717041
+            },
+            {
+              "count": 52,
+              "mae": 11.230353355407715,
+              "max_error": 61.918556213378906,
+              "regime_label": "no_recent_event",
+              "rmse": 16.249950408935547
+            }
+          ],
+          "slope_regime": [
+            {
+              "bin_high": 1.486312985420227,
+              "bin_low": 0.0,
+              "count": 22000,
+              "mae": 10.063764572143555,
+              "max_error": 37.94903564453125,
+              "regime_label": "low_dvdt",
+              "rmse": 11.96650218963623
+            },
+            {
+              "bin_high": 11.033778381347673,
+              "bin_low": 1.486312985420227,
+              "count": 13200,
+              "mae": 11.548316955566406,
+              "max_error": 41.020912170410156,
+              "regime_label": "medium_dvdt",
+              "rmse": 14.016977310180664
+            },
+            {
+              "bin_high": 53.56681175231933,
+              "bin_low": 11.033778381347673,
+              "count": 6600,
+              "mae": 18.343608856201172,
+              "max_error": 72.52429962158203,
+              "regime_label": "high_dvdt",
+              "rmse": 23.014911651611328
+            },
+            {
+              "bin_high": 93.74469757080078,
+              "bin_low": 53.56681175231933,
+              "count": 2200,
+              "mae": 35.57044982910156,
+              "max_error": 82.92167663574219,
+              "regime_label": "spike_rise",
+              "rmse": 42.26856994628906
+            }
+          ],
+          "spike_proximity": [
+            {
+              "count": 15999,
+              "mae": 18.435117721557617,
+              "max_error": 82.92167663574219,
+              "regime_label": "near_spike",
+              "rmse": 23.883901596069336
+            },
+            {
+              "count": 28001,
+              "mae": 9.93607234954834,
+              "max_error": 41.020912170410156,
+              "regime_label": "far_from_spike",
+              "rmse": 12.017412185668945
+            }
+          ],
+          "spike_timing": {
+            "f1_at_2steps": 0.012003429551300373,
+            "mean_timing_error_steps": 1006.5094394423468,
+            "median_timing_error_steps": 658.0,
+            "precision_at_2steps": 0.375,
+            "recall_at_2steps": 0.006099331977926227
+          },
+          "voltage_regime": [
+            {
+              "bin_high": -6.725292205810547,
+              "bin_low": -23.76850128173828,
+              "count": 11000,
+              "mae": 11.067679405212402,
+              "max_error": 38.42597961425781,
+              "regime_label": "hyperpolarized",
+              "rmse": 14.13144588470459
+            },
+            {
+              "bin_high": -2.0142478942871094,
+              "bin_low": -6.725292205810547,
+              "count": 11000,
+              "mae": 11.773908615112305,
+              "max_error": 36.89422607421875,
+              "regime_label": "resting_low",
+              "rmse": 13.454597473144531
+            },
+            {
+              "bin_high": 9.407604217529297,
+              "bin_low": -2.0142478942871094,
+              "count": 11000,
+              "mae": 8.639704704284668,
+              "max_error": 37.43800735473633,
+              "regime_label": "resting_high",
+              "rmse": 10.45706844329834
+            },
+            {
+              "bin_high": 26.998028182983397,
+              "bin_low": 9.407604217529297,
+              "count": 6600,
+              "mae": 11.707467079162598,
+              "max_error": 35.2745246887207,
+              "regime_label": "depolarized",
+              "rmse": 13.767581939697266
+            },
+            {
+              "bin_high": 82.36771392822266,
+              "bin_low": 26.998028182983397,
+              "count": 4400,
+              "mae": 33.99997329711914,
+              "max_error": 82.92167663574219,
+              "regime_label": "spike_range",
+              "rmse": 38.51951217651367
+            }
+          ]
+        },
+        "m4_intervention": {
+          "kind": null,
+          "status": "not_run",
+          "structured_intervention_required": true,
+          "what_failure_means": "This is only a numerical brittleness smoke test. It is not evidence of biological robustness or global smoothness."
+        },
+        "m4_perturbation_stability": {},
+        "metadata": {
+          "dataset_path": "data/arbor-allen-nmda-source-medium-20260510/val",
+          "mask": {
+            "evaluated_timesteps_per_trace": 5500,
+            "ignore_start": 500,
+            "semantics": "drop the first ignore_start timesteps from every trace before metrics"
+          },
+          "model_config": null,
+          "model_name": "rnn_branchtanh_fixed_200k",
+          "n_samples": 8,
+          "n_timesteps": 6000,
+          "soma_scale": 0.1,
+          "trace_ids": [
+            "arbor_allen_hetero:000000:seed1564250436",
+            "arbor_allen_hetero:000001:seed121333817",
+            "arbor_allen_hetero:000002:seed1304729690",
+            "arbor_allen_hetero:000003:seed702045878",
+            "arbor_allen_hetero:000004:seed563008081",
+            "arbor_allen_hetero:000005:seed107055199",
+            "arbor_allen_hetero:000006:seed1378429312",
+            "arbor_allen_hetero:000007:seed604143882"
+          ]
+        }
+      },
+      "parameter_count": 27785
+    }
+  },
+  "teacher_m4_event_dropout": {
+    "intervention_name": "event_dropout",
+    "kind": "paired_event_intervention",
+    "mask": {
+      "evaluated_timesteps_per_trace": 2500,
+      "ignore_start": 500
+    },
+    "model_response": null,
+    "representative_trace_ids": [
+      "arbor_allen_hetero:000001:seed1253549509",
+      "arbor_allen_hetero:000007:seed1455571912",
+      "arbor_allen_hetero:000006:seed1357947117",
+      "arbor_allen_hetero:000003:seed154865765",
+      "arbor_allen_hetero:000005:seed82776754"
+    ],
+    "status": "teacher_only",
+    "teacher_response": {
+      "baseline_event_fraction": 0.003066901408450704,
+      "baseline_soma_mean_mv": 5.252760410308838,
+      "baseline_spike_rate_per_1000_steps": 94.7,
+      "delta_soma_abs_mean_mv": 13.597343444824219,
+      "delta_soma_mean_mv": -5.343049049377441,
+      "delta_spike_rate_per_1000_steps": -26.650000000000006,
+      "event_fraction_delta": -0.0015377934272300469,
+      "event_fraction_ratio": 0.498584003061615,
+      "intervention_event_fraction": 0.0015291079812206573,
+      "intervention_soma_mean_mv": -0.09028808772563934,
+      "intervention_spike_rate_per_1000_steps": 68.05,
+      "response_detected": true,
+      "teacher_direction": "lower_event_drive/lower_spiking/hyperpolarized"
+    },
+    "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
+  },
+  "teacher_m4_event_rate_shift": {
+    "intervention_name": "event_rate_shift_low_to_high",
+    "kind": "paired_event_intervention",
+    "mask": {
+      "evaluated_timesteps_per_trace": 5500,
+      "ignore_start": 500
+    },
+    "model_response": null,
+    "representative_trace_ids": [
+      "low=arbor_allen_hetero:000000:seed191664963 | high=arbor_allen_hetero:000000:seed191664963",
+      "low=arbor_allen_hetero:000002:seed1405681631 | high=arbor_allen_hetero:000002:seed1405681631",
+      "low=arbor_allen_hetero:000001:seed1662057957 | high=arbor_allen_hetero:000001:seed1662057957",
+      "low=arbor_allen_hetero:000003:seed942484272 | high=arbor_allen_hetero:000003:seed942484272"
+    ],
+    "status": "teacher_only",
+    "teacher_response": {
+      "baseline_event_fraction": 0.001132735808792147,
+      "baseline_soma_mean_mv": 4.948914051055908,
+      "baseline_spike_rate_per_1000_steps": 72.9090909090909,
+      "delta_soma_abs_mean_mv": 20.48001480102539,
+      "delta_soma_mean_mv": 14.983019828796387,
+      "delta_spike_rate_per_1000_steps": -23.909090909090907,
+      "event_fraction_delta": 0.006915492957746478,
+      "event_fraction_ratio": 7.105124340617934,
+      "intervention_event_fraction": 0.008048228766538625,
+      "intervention_soma_mean_mv": 19.931934356689453,
+      "intervention_spike_rate_per_1000_steps": 49.0,
+      "response_detected": true,
+      "teacher_direction": "higher_event_drive/lower_spiking/depolarized"
+    },
+    "what_failure_means": "If teacher response is weak or counter to the intended protocol, the intervention is not a clean robustness claim. If teacher response is interpretable but model delta error is high, the surrogate does not preserve the teacher's input-shift behavior."
+  }
+}

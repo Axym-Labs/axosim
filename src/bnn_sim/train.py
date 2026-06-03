@@ -193,6 +193,7 @@ def train_dataset(
                     if l1_loss_value is not None:
                         update_row["l1_loss"] = l1_loss_value
                     update_log_file.write(json.dumps(update_row, sort_keys=True) + "\n")
+                    update_log_file.flush()
 
             _synchronize_device(device)
             epoch_seconds = time.perf_counter() - epoch_start_time
