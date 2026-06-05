@@ -153,6 +153,16 @@ class BenchmarkSuite:
             "calibrated_spike_threshold": calibrated_spike_threshold,
         }
 
+        limitations = [
+            "Gaussian perturbation output is debug-only when present.",
+        ]
+        if m4_paired_intervention is None:
+            limitations.append("M4 structured intervention was not run for this report.")
+        else:
+            limitations.append(
+                "M4 structured intervention results are limited to the supplied paired traces and should be expanded before robustness claims."
+            )
+
         results = {
             "benchmark_version": "0.1.0",
             "metadata": metadata,
@@ -160,10 +170,7 @@ class BenchmarkSuite:
             "m1b_feature_fidelity": m1b,
             "m2_regimes": m2,
             "m4_intervention": m4_intervention,
-            "limitations": [
-                "M4 structured intervention is not implemented in the MVP yet.",
-                "Gaussian perturbation output is debug-only when present.",
-            ],
+            "limitations": limitations,
             # Legacy aliases retained for existing scripts while the benchmark
             # report moves to the MVP schema from spec.md.
             "m1_open_loop_fidelity": {

@@ -3,6 +3,20 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-05 23:55): Tightened NEURO-BENCH MVP report
+  guardrails after the current CoreNEURON/Hay smoke comparison. Fixed the
+  top-level `limitations` field so paired M4 reports no longer claim
+  structured M4 is unimplemented; they now state that M4 is limited to the
+  supplied paired traces and needs expansion before robustness claims. Added
+  explicit M2 `what_failure_means` notes for far-subthreshold, near-spike,
+  refractory, post-input-event, and spike-timing failures, plus low-support
+  warnings for underrepresented MVP regimes. Refreshed the current CUDA MVP
+  evaluator on the same three `80k` checkpoints; metrics reproduced the
+  previous report, paired-M4 limitations were corrected, and current M2 support
+  warnings were empty on the `16`-trace validation split. Verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_suite.py tests/test_cli.py -q`
+  passed (`23` tests).
+
 - MILESTONE (2026-06-05 23:50): Returned to the NEURO-BENCH MVP benchmark
   after the simulator/model-selection detour. Added a current-teacher
   CoreNEURON/Hay event-dropout M4 pair generator,

@@ -149,6 +149,21 @@ def _row_for_mask(label: str, residual: np.ndarray, mask: np.ndarray) -> dict[st
     }
 
 
+def _support_warnings(rows: list[dict[str, Any]], total_count: int, min_fraction: float = 0.001) -> list[dict[str, Any]]:
+    min_count = max(1, int(np.ceil(total_count * min_fraction)))
+    warnings = []
+    for row in rows:
+        count = int(row.get("count", 0))
+        if count < min_count:
+            warnings.append({
+                "regime_label": row.get("regime_label"),
+                "count": count,
+                "min_count": min_count,
+                "reason": "regime support is too small for stable aggregate interpretation",
+            })
+    return warnings
+
+
 def compute_regime_stratified_metrics(
     prediction: np.ndarray,
     target: np.ndarray,
@@ -314,6 +329,14 @@ def compute_regime_stratified_metrics(
                 "recent high-input-drive timestep, not merely any single synaptic event; "
                 "this avoids all-trace coverage on high-dimensional sparse event inputs"
             ) if inp is not None else None,
+        },
+        "support_warnings": _support_warnings(mvp_regimes, int(residual_flat.size)),
+        "what_failure_means": {
+            "far_from_spike_subthreshold": "High error here means ordinary subthreshold voltage integration is wrong, not only spike-shape mismatch.",
+            "near_spike": "High error here means the surrogate misses threshold-crossing and AP-neighborhood dynamics where RMSE is often dominated.",
+            "post_spike_refractory": "High error here indicates mismatch in refractory/AHP recovery after teacher spikes.",
+            "post_input_event": "High error here means the model mishandles recent high-drive synaptic input even away from explicit spike labels.",
+            "spike_timing": "Poor precision/recall/F1 means spike scores do not produce temporally aligned events at the stated operating point.",
         },
         "spike_timing": {
             **_spike_timing_summary(pred_spike_binary, tgt_spike_binary),

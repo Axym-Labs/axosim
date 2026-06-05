@@ -47,6 +47,7 @@ def test_benchmark_suite_reports_mvp_schema_and_masked_m1(tmp_path):
     assert report["m1b_feature_fidelity"]["features"]["spike_count"]["teacher_mean"] == 0.5
     assert report["m1b_feature_fidelity"]["worst_trace_ids"]["spike_count_abs_error"] == []
     assert report["m4_intervention"]["status"] == "not_run"
+    assert "M4 structured intervention was not run for this report." in report["limitations"]
     assert (tmp_path / "benchmark_results.json").exists()
 
 
@@ -131,6 +132,9 @@ def test_regime_metrics_do_not_leak_spike_windows_across_trace_boundaries():
     assert far["count"] == 7
     assert mvp["near_spike"]["count"] == 3
     assert mvp["far_from_spike_subthreshold"]["count"] == 7
+    assert "near_spike" in metrics["what_failure_means"]
+    warned = {row["regime_label"] for row in metrics["support_warnings"]}
+    assert {"post_spike_refractory", "post_input_event"}.issubset(warned)
 
 
 def test_regime_post_event_uses_high_drive_for_many_input_channels():
@@ -157,6 +161,7 @@ def test_regime_post_event_uses_high_drive_for_many_input_channels():
     assert post["count"] == 3
     assert no_recent["count"] == 7
     assert mvp["far_from_spike_subthreshold"]["count"] == 7
+    assert "post_input_event" in metrics["what_failure_means"]
 
 
 def test_event_dropout_only_removes_existing_events_deterministically():
@@ -276,3 +281,4 @@ def test_benchmark_suite_accepts_paired_m4_intervention():
     assert report["m4_intervention"]["status"] == "model_compared"
     assert report["m4_intervention"]["kind"] == "paired_event_intervention"
     assert report["m4_intervention"]["model_response"]["soma_delta_rmse_mv"] == 0.0
+    assert "M4 structured intervention results are limited to the supplied paired traces and should be expanded before robustness claims." in report["limitations"]
