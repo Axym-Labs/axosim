@@ -120,6 +120,10 @@ class BenchmarkSuite:
                 soma_bias_mv=soma_bias_mv,
                 ignore_start=m4_paired_intervention.get("ignore_start", ignore_start),
                 trace_ids=m4_paired_intervention.get("trace_ids", trace_ids),
+                model_spike_threshold=m4_paired_intervention.get(
+                    "model_spike_threshold",
+                    calibrated_spike_threshold if calibrated_spike_threshold is not None else 0.0,
+                ),
             )
         else:
             m4_intervention = {

@@ -3,6 +3,39 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- MILESTONE (2026-06-05 23:50): Returned to the NEURO-BENCH MVP benchmark
+  after the simulator/model-selection detour. Added a current-teacher
+  CoreNEURON/Hay event-dropout M4 pair generator,
+  `artifacts/run_coreneuron_event_dropout_pair.py`, fixing output paths to be
+  resolved before NEURON mechanism-directory `chdir`. Generated a `4`-trace
+  accepted-teacher event-dropout pair by dropping `35%` of nonzero input
+  events and re-simulating the Hay/CoreNEURON teacher. Tracked summary:
+  `artifacts/coreneuron_event_dropout_pair_20260605.md`. Teacher response is
+  interpretable and qualitatively expected: event fraction ratio `0.6493`,
+  delta spike rate `-0.6818 / 1000 steps`, delta soma mean `-2.3395 mV`,
+  direction `lower_event_drive/lower_spiking/hyperpolarized`, response
+  detected `true`.
+
+- EXPERIMENT (2026-06-05 23:50): Added and ran the current CoreNEURON/Hay
+  NEURO-BENCH MVP runner, `artifacts/run_coreneuron_neuro_bench_mvp.py`.
+  It evaluates M1, lightweight M1b, repaired M2, and the new M4 event-dropout
+  pair using calibrated spike thresholds learned on the `32`-trace training
+  split and frozen for validation/M4. Tracked report:
+  `artifacts/coreneuron_neuro_bench_mvp_20260605.md`. Model summary on the
+  accepted `16`-trace validation split plus `4`-trace M4 pair:
+  `soma075_calibrated_80k` RMSE/AUC `0.8507 / 0.9666`, calibrated count MAE
+  `3.8125`, calibrated timing F1 `0.1272`, M4 soma-delta RMSE `0.6803`,
+  M4 spike-delta MAE `3.5000`; prior Mamba baseline RMSE/AUC
+  `0.8763 / 0.9632`, calibrated count MAE `2.0625`, M4 spike-delta MAE
+  `1.5000`; RNN RMSE/AUC `0.7987 / 0.9723`, near-spike RMSE `3.9798`, M4
+  soma-delta RMSE `0.6495`. All three models preserve the qualitative
+  M4 event-dropout direction for soma and spike count. Interpretation:
+  `soma075` remains the current Mamba voltage/RMSE path, RNN remains the best
+  trace model, and prior Mamba has stronger calibrated spike-count/M4
+  spike-delta behavior in this small smoke test. Next benchmark priority:
+  expand M4 beyond `4` pairs or add uncertainty/error bars before making
+  robustness claims.
+
 - EXPERIMENT (2026-06-05 23:26): Selected and validated the current Mamba
   metric path: `soma075` Mamba with a learned spike threshold. Artifact:
   `artifacts/coreneuron_soma075_calibrated_20260605.md`. Fresh training used

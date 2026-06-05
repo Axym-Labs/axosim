@@ -45,6 +45,7 @@ def compute_paired_event_intervention_metrics(
     soma_bias_mv: float = -67.7,
     ignore_start: int = 0,
     trace_ids: list[str] | None = None,
+    model_spike_threshold: float = 0.0,
 ) -> dict[str, Any]:
     """Compare teacher and model deltas for one paired event intervention."""
     baseline_inputs = _as_trace_array(np.asarray(baseline_inputs))
@@ -112,6 +113,7 @@ def compute_paired_event_intervention_metrics(
             baseline_targets_m,
             intervention_targets_m,
             soma_scale=soma_scale,
+            model_spike_threshold=model_spike_threshold,
         )
 
     return report
@@ -201,11 +203,15 @@ def _model_delta_summary(
     intervention_targets: np.ndarray,
     *,
     soma_scale: float,
+    model_spike_threshold: float,
 ) -> dict[str, Any]:
     teacher_soma_delta = (intervention_targets[..., 1] - baseline_targets[..., 1]) / soma_scale
     model_soma_delta = (intervention_pred[..., 1] - baseline_pred[..., 1]) / soma_scale
     teacher_spike_delta = (intervention_targets[..., 0] > 0.5).sum(axis=1) - (baseline_targets[..., 0] > 0.5).sum(axis=1)
-    model_spike_delta = (intervention_pred[..., 0] > 0.0).sum(axis=1) - (baseline_pred[..., 0] > 0.0).sum(axis=1)
+    model_spike_delta = (
+        (intervention_pred[..., 0] >= model_spike_threshold).sum(axis=1)
+        - (baseline_pred[..., 0] >= model_spike_threshold).sum(axis=1)
+    )
     soma_delta_error = model_soma_delta - teacher_soma_delta
     return {
         "soma_delta_rmse_mv": float(np.sqrt(np.mean(soma_delta_error ** 2))),
@@ -215,6 +221,7 @@ def _model_delta_summary(
         "spike_count_delta_mae_per_trace": float(np.mean(np.abs(model_spike_delta - teacher_spike_delta))),
         "spike_count_delta_teacher_mean": float(np.mean(teacher_spike_delta)),
         "spike_count_delta_model_mean": float(np.mean(model_spike_delta)),
+        "model_spike_threshold": float(model_spike_threshold),
         "direction_agreement": {
             "soma_mean": bool(np.sign(np.mean(model_soma_delta)) == np.sign(np.mean(teacher_soma_delta))),
             "spike_count": bool(np.sign(np.mean(model_spike_delta)) == np.sign(np.mean(teacher_spike_delta))),

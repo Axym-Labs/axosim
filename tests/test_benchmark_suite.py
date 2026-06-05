@@ -214,6 +214,34 @@ def test_paired_event_intervention_scores_teacher_and_model_delta_alignment():
     assert report["representative_trace_ids"]
 
 
+def test_paired_event_intervention_uses_configured_model_spike_threshold():
+    baseline_inputs = np.zeros((1, 4, 2), dtype=np.float32)
+    intervention_inputs = baseline_inputs.copy()
+    baseline_targets = np.zeros((1, 4, 2), dtype=np.float32)
+    intervention_targets = np.zeros_like(baseline_targets)
+    intervention_targets[:, 2, 0] = 1.0
+
+    def below_zero_spike_model(x):
+        out = np.zeros((x.shape[0], x.shape[1], 2), dtype=np.float32)
+        out[:, 2, 0] = -0.2
+        return out
+
+    report = compute_paired_event_intervention_metrics(
+        below_zero_spike_model,
+        baseline_inputs,
+        baseline_targets,
+        intervention_inputs,
+        intervention_targets,
+        soma_scale=1.0,
+        model_spike_threshold=-0.3,
+    )
+
+    model = report["model_response"]
+    assert model["model_spike_threshold"] == -0.3
+    assert model["spike_count_delta_model_mean"] == 0.0
+    assert model["spike_count_delta_mae_per_trace"] == 1.0
+
+
 def test_benchmark_suite_accepts_paired_m4_intervention():
     inputs = np.zeros((1, 4, 2), dtype=np.float32)
     targets = np.zeros((1, 4, 2), dtype=np.float32)
