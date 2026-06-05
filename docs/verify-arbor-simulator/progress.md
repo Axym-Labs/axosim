@@ -3,6 +3,25 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- ANALYSIS (2026-06-05 22:53): Compared accepted CoreNEURON/Hay
+  `exc_event_keep_prob=0.925` against the old NeuronIO/NMDA setup for both
+  simulator statistics and Mamba metrics. Artifact:
+  `artifacts/simulator_mamba_comparison_20260605.md`. Summary: current
+  CoreNEURON/Hay matches old NMDA closely in input density (`0.010600` vs
+  `0.010554` canonical old), clipped-voltage std (`3.2606` vs `3.2363 mV`),
+  and clipped `|dV/dt|` p95/p99 (`0.4667/0.6706` vs `0.4688/0.6875
+  mV/step`). It is not a full statistical replication: current spike rate is
+  lower than old canonical NMDA (`0.8438` vs `0.9896` spikes/1000), spike
+  counts are less variable (`5.06 +/- 4.34` vs `5.94 +/- 7.88` spikes/trace), and
+  fewer traces are non-spiking (`0.125` vs `0.438`). Mamba `80k` voltage RMSE
+  is better on current CoreNEURON/Hay (`0.8763 mV`) than old NMDA canonical
+  (`0.9286 mV`) and old first-16 sensitivity (`0.9886 mV`), but AUC and
+  prevalence-matched timing are worse (`0.9632` / `0.1468` vs old canonical
+  `0.9777` / `0.2193`). Interpretation: current setup is a similar
+  clipped-voltage dynamic regime and better for Mamba RMSE, but old NeuronIO
+  remains stronger on spike ranking/timing and the spike-distribution mismatch
+  should be reported explicitly.
+
 - EXPERIMENT (2026-06-05 22:35): Corrected the RMSE autoresearch loop after
   the prior conductance-only loop was too narrow. Added
   `artifacts/run_coreneuron_training_autoresearch.sh`, a resumable,
