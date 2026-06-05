@@ -3,6 +3,31 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- MILESTONE (2026-06-06 00:03): Expanded the current-teacher M4 event-dropout
+  benchmark from `4` paired traces to all `16` validation traces. Generated
+  `artifacts/coreneuron_event_dropout_pair16_20260605/` with the accepted
+  Hay/CoreNEURON teacher, `35%` nonzero-event dropout, and the same clipped
+  soma/local-peak spike target policy. Tracked summary:
+  `artifacts/coreneuron_event_dropout_pair16_20260605.md`. Teacher response
+  remains interpretable: event fraction ratio `0.6500`, delta spike rate
+  `-0.8409 / 1000 steps`, delta soma mean `-2.4102 mV`, direction
+  `lower_event_drive/lower_spiking/hyperpolarized`, response detected `true`;
+  generation elapsed `401.0 s`.
+
+- EXPERIMENT (2026-06-06 00:03): Re-ran the CoreNEURON/Hay NEURO-BENCH MVP
+  on the expanded `16`-trace M4 pair using the same three saved `80k`
+  checkpoints and train-split calibrated thresholds. Tracked report:
+  `artifacts/coreneuron_neuro_bench_mvp_pair16_20260605.md`. M1/M2 metrics
+  reproduce the prior eval. Expanded M4 results: `soma075_calibrated_80k`
+  M4 soma-delta RMSE/spike-delta MAE `0.7695 / 3.6875`;
+  `mamba_exc0925_80k` `0.7935 / 2.0000`; `rnn_exc0925_80k`
+  `0.7522 / 4.8125`. All preserve qualitative M4 soma/spike direction.
+  Interpretation: RNN remains strongest for trace and M4 voltage delta,
+  `soma075` remains current Mamba voltage/RMSE path, and prior
+  `mamba_exc0925_80k` remains better for calibrated spike-count/M4
+  spike-delta behavior. This removes the immediate `4`-pair smoke limitation,
+  but broader robustness still needs additional intervention types or seeds.
+
 - IMPLEMENTATION (2026-06-05 23:55): Tightened NEURO-BENCH MVP report
   guardrails after the current CoreNEURON/Hay smoke comparison. Fixed the
   top-level `limitations` field so paired M4 reports no longer claim
