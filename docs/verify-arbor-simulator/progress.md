@@ -3,6 +3,22 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 00:06): Added per-trace uncertainty summaries
+  to paired M4 event-intervention metrics. Teacher reports now include
+  `n_traces`, trace-mean soma-delta intervals, and trace-mean spike-count
+  delta intervals; model reports include per-trace M4 soma-delta RMSE and
+  spike-delta absolute-error intervals. Updated the CoreNEURON MVP runner to
+  surface these intervals and to make the M4 limitation trace-count aware
+  rather than hardcoding the old `4`-trace smoke. Refreshed the `16`-pair MVP
+  report: teacher soma delta interval `[-2.4792, -2.3412] mV`, teacher
+  spike-count delta interval `[-6.6562, -2.5938]`, M4 soma-delta intervals
+  `soma075 [0.6282, 0.8482]`, `mamba_exc0925 [0.6551, 0.8726]`, `rnn [0.5905,
+  0.8345]`; spike-delta MAE intervals `soma075 [2.0602, 5.3148]`,
+  `mamba_exc0925 [1.1801, 2.8199]`, `rnn [2.1876, 7.4374]`. Verification:
+  py_compile for the runner and M4 module passed, and
+  `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_suite.py tests/test_cli.py -q`
+  passed (`23` tests).
+
 - MILESTONE (2026-06-06 00:03): Expanded the current-teacher M4 event-dropout
   benchmark from `4` paired traces to all `16` validation traces. Generated
   `artifacts/coreneuron_event_dropout_pair16_20260605/` with the accepted

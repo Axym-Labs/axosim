@@ -170,9 +170,12 @@ def _teacher_response_summary(
     baseline_events = _event_fraction(baseline_inputs)
     intervention_events = _event_fraction(intervention_inputs)
     soma_delta = intervention_soma_mv - baseline_soma_mv
+    soma_trace_delta = np.mean(soma_delta, axis=1)
+    spike_trace_delta = (intervention_targets[..., 0] > 0.5).sum(axis=1) - (baseline_targets[..., 0] > 0.5).sum(axis=1)
     spike_delta = intervention_rate - baseline_rate
     event_delta = intervention_events - baseline_events
     return {
+        "n_traces": int(baseline_targets.shape[0]),
         "baseline_event_fraction": baseline_events,
         "intervention_event_fraction": intervention_events,
         "event_fraction_delta": event_delta,
@@ -184,6 +187,8 @@ def _teacher_response_summary(
         "intervention_soma_mean_mv": float(np.mean(intervention_soma_mv)),
         "delta_soma_mean_mv": float(np.mean(soma_delta)),
         "delta_soma_abs_mean_mv": float(np.mean(np.abs(soma_delta))),
+        "delta_soma_trace_mean_mv": _mean_interval(soma_trace_delta),
+        "delta_spike_count_trace_mean": _mean_interval(spike_trace_delta),
         "response_detected": bool(abs(spike_delta) >= 0.1 or np.mean(np.abs(soma_delta)) >= 0.1),
         "teacher_direction": _direction_label(event_delta, spike_delta, float(np.mean(soma_delta))),
     }
@@ -213,12 +218,16 @@ def _model_delta_summary(
         - (baseline_pred[..., 0] >= model_spike_threshold).sum(axis=1)
     )
     soma_delta_error = model_soma_delta - teacher_soma_delta
+    per_trace_soma_rmse = np.sqrt(np.mean(soma_delta_error ** 2, axis=1))
+    per_trace_spike_abs_error = np.abs(model_spike_delta - teacher_spike_delta)
     return {
         "soma_delta_rmse_mv": float(np.sqrt(np.mean(soma_delta_error ** 2))),
         "soma_delta_mae_mv": float(np.mean(np.abs(soma_delta_error))),
+        "soma_delta_rmse_per_trace": _mean_interval(per_trace_soma_rmse),
         "soma_delta_correlation": _safe_corr(model_soma_delta.reshape(-1), teacher_soma_delta.reshape(-1)),
         "soma_mean_delta_error_mv": float(np.mean(model_soma_delta) - np.mean(teacher_soma_delta)),
         "spike_count_delta_mae_per_trace": float(np.mean(np.abs(model_spike_delta - teacher_spike_delta))),
+        "spike_count_delta_abs_error_per_trace": _mean_interval(per_trace_spike_abs_error),
         "spike_count_delta_teacher_mean": float(np.mean(teacher_spike_delta)),
         "spike_count_delta_model_mean": float(np.mean(model_spike_delta)),
         "model_spike_threshold": float(model_spike_threshold),
@@ -233,6 +242,28 @@ def _safe_corr(x: np.ndarray, y: np.ndarray) -> float | None:
     if x.size < 2 or y.size < 2 or float(np.std(x)) == 0.0 or float(np.std(y)) == 0.0:
         return None
     return float(np.corrcoef(x, y)[0, 1])
+
+
+def _mean_interval(values: np.ndarray) -> dict[str, float | int | None]:
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    arr = arr[np.isfinite(arr)]
+    n = int(arr.size)
+    if n == 0:
+        return {"n": 0, "mean": None, "std": None, "sem": None, "ci95_low": None, "ci95_high": None}
+    mean = float(np.mean(arr))
+    if n == 1:
+        return {"n": 1, "mean": mean, "std": 0.0, "sem": None, "ci95_low": None, "ci95_high": None}
+    std = float(np.std(arr, ddof=1))
+    sem = float(std / np.sqrt(n))
+    half_width = 1.96 * sem
+    return {
+        "n": n,
+        "mean": mean,
+        "std": std,
+        "sem": sem,
+        "ci95_low": float(mean - half_width),
+        "ci95_high": float(mean + half_width),
+    }
 
 
 def _representative_trace_ids(

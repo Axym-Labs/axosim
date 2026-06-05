@@ -124,7 +124,7 @@ def main() -> int:
         )["m4_intervention"],
         "models": models,
         "limitations": [
-            "M4 event-dropout is a small 4-trace teacher-pair smoke test.",
+            f"M4 event-dropout uses {m4_pair['baseline_inputs'].shape[0]} paired traces from one intervention type.",
             "Spike thresholds are learned on the calibration split and frozen for validation/M4.",
             "This MVP report covers M1/M1b/M2 plus one M4 intervention; M3/M5/M6 remain deferred by spec.",
         ],
@@ -212,7 +212,15 @@ def compact_summary(payload: dict[str, Any]) -> dict[str, Any]:
                 r["rmse"] for r in m2["mvp_regimes"] if r["regime_label"] == "near_spike"
             ),
             "m4_soma_delta_rmse_mv": m4["soma_delta_rmse_mv"],
+            "m4_soma_delta_rmse_ci95": [
+                m4["soma_delta_rmse_per_trace"]["ci95_low"],
+                m4["soma_delta_rmse_per_trace"]["ci95_high"],
+            ],
             "m4_spike_count_delta_mae": m4["spike_count_delta_mae_per_trace"],
+            "m4_spike_count_delta_mae_ci95": [
+                m4["spike_count_delta_abs_error_per_trace"]["ci95_low"],
+                m4["spike_count_delta_abs_error_per_trace"]["ci95_high"],
+            ],
             "m4_direction_agreement": m4["direction_agreement"],
         }
     return {
@@ -249,19 +257,31 @@ def render_markdown(payload: dict[str, Any]) -> str:
         m4 = report["m4_intervention"]["model_response"]
         near = next(r["rmse"] for r in m2["mvp_regimes"] if r["regime_label"] == "near_spike")
         direction = m4["direction_agreement"]
+        soma_interval = m4["soma_delta_rmse_per_trace"]
+        spike_interval = m4["spike_count_delta_abs_error_per_trace"]
+        soma_cell = _format_ci_cell(m4["soma_delta_rmse_mv"], soma_interval)
+        spike_cell = _format_ci_cell(m4["spike_count_delta_mae_per_trace"], spike_interval)
         lines.append(
             f"| `{name}` | `{m1['soma_rmse_mv']:.4f}` | `{m1['spike_auc']:.4f}` | "
             f"`{row['calibrated_spike_threshold']['threshold']:.4f}` | "
             f"`{m1['spike_calibrated_threshold']['count_mae_per_trace']:.4f}` | "
             f"`{m2['spike_timing_calibrated_threshold']['f1_at_2steps']:.4f}` | "
-            f"`{near:.4f}` | `{m4['soma_delta_rmse_mv']:.4f}` | "
-            f"`{m4['spike_count_delta_mae_per_trace']:.4f}` | "
+            f"`{near:.4f}` | {soma_cell} | "
+            f"{spike_cell} | "
             f"`{direction['soma_mean']}/{direction['spike_count']}` |"
         )
     lines.extend(["", "## Limitations", ""])
     lines.extend(f"- {item}" for item in payload["limitations"])
     lines.append("")
     return "\n".join(lines)
+
+
+def _format_ci_cell(value: float, interval: dict[str, Any]) -> str:
+    low = interval.get("ci95_low")
+    high = interval.get("ci95_high")
+    if low is None or high is None:
+        return f"`{value:.4f}`"
+    return f"`{value:.4f}` (`{low:.4f}`, `{high:.4f}`)"
 
 
 if __name__ == "__main__":

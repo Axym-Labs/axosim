@@ -23,6 +23,8 @@ Date: 2026-06-06
 | delta spike rate / 1000 steps | `-0.8409` |
 | delta soma mean mV | `-2.4102` |
 | delta absolute soma mean mV | `2.4246` |
+| trace-mean soma delta 95% interval | `[-2.4792, -2.3412]` |
+| trace-mean spike-count delta 95% interval | `[-6.6562, -2.5938]` |
 | direction | `lower_event_drive/lower_spiking/hyperpolarized` |
 | response detected | `true` |
 

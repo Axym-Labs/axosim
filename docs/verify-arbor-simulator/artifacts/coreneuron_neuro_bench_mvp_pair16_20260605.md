@@ -34,9 +34,9 @@ M4 pair:
 
 | model | RMSE mV | AUC | threshold | count MAE calibrated | timing F1 calibrated | near-spike RMSE | M4 soma-delta RMSE | M4 spike-delta MAE | M4 direction |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `soma075_calibrated_80k` | `0.8507` | `0.9666` | `-2.6941` | `3.8125` | `0.1272` | `4.6228` | `0.7695` | `3.6875` | `True/True` |
-| `mamba_exc0925_80k` | `0.8763` | `0.9632` | `-2.8015` | `2.0625` | `0.0972` | `4.6860` | `0.7935` | `2.0000` | `True/True` |
-| `rnn_exc0925_80k` | `0.7987` | `0.9723` | `-1.6836` | `4.9375` | `0.0762` | `3.9798` | `0.7522` | `4.8125` | `True/True` |
+| `soma075_calibrated_80k` | `0.8507` | `0.9666` | `-2.6941` | `3.8125` | `0.1272` | `4.6228` | `0.7695` (`0.6282`, `0.8482`) | `3.6875` (`2.0602`, `5.3148`) | `True/True` |
+| `mamba_exc0925_80k` | `0.8763` | `0.9632` | `-2.8015` | `2.0625` | `0.0972` | `4.6860` | `0.7935` (`0.6551`, `0.8726`) | `2.0000` (`1.1801`, `2.8199`) | `True/True` |
+| `rnn_exc0925_80k` | `0.7987` | `0.9723` | `-1.6836` | `4.9375` | `0.0762` | `3.9798` | `0.7522` (`0.5905`, `0.8345`) | `4.8125` (`2.1876`, `7.4374`) | `True/True` |
 
 ## Interpretation
 
@@ -47,6 +47,7 @@ M4 pair:
 - `soma075_calibrated_80k` remains the current Mamba voltage/RMSE path.
 - Prior `mamba_exc0925_80k` remains best on calibrated spike-count MAE and M4
   spike-delta MAE in this expanded M4 smoke.
+- Parenthesized M4 values are approximate per-trace `95%` intervals.
 - This is materially stronger than the initial `4`-trace M4 check, but still a
   single intervention type. Further robustness claims need additional
   interventions or seeds.
