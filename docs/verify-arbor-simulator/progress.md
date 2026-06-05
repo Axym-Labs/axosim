@@ -3,6 +3,43 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- EXPERIMENT (2026-06-05 22:35): Corrected the RMSE autoresearch loop after
+  the prior conductance-only loop was too narrow. Added
+  `artifacts/run_coreneuron_training_autoresearch.sh`, a resumable,
+  parallelizable runner with `GPU_IDS`/`MAX_PARALLEL` controls, CPU refusal,
+  and an `80k` presentation cap per candidate. This loop keeps the accepted
+  CoreNEURON/Hay teacher fixed (`exc_event_keep_prob=0.925`,
+  `inh_event_keep_prob=1.0`) and tests training/data-policy interventions, so
+  positive results are metric/training evidence rather than simulator-fidelity
+  evidence. Six Mamba candidates completed on the accepted `32` train / `16`
+  validation split, all with diagnostic plots. Same-loop baseline reproduced
+  prior metrics exactly: RMSE/AUC `0.8763 mV / 0.9632`, near-spike RMSE
+  `4.6860`, timing F1 matched `0.1468`, no sanity flags. Best RMSE was
+  `soma075` (`spike_loss_weight=0.25`, `soma_loss_weight=0.75`) at
+  `0.8507 mV`, AUC `0.9666`, near-spike RMSE `4.6228`, timing F1 `0.1598`,
+  but it triggered `threshold_zero_predicts_no_spikes`, so it is a candidate
+  for fresh-seed validation rather than a default. Cleanest improvement was
+  `longctx1000` (`1000`-step context, `300` burn-in): RMSE `0.8586 mV`,
+  AUC `0.9631`, near-spike RMSE `4.4535`, no sanity flags, but timing F1 fell
+  to `0.1070`. Negative/secondary results: slope loss `0.8774 mV` with a
+  sanity flag; sparse soma loss `0.8808 mV` but clean and slightly better
+  timing; official-style sampling `0.9025 mV` but best AUC/timing in the loop.
+  Consolidated report:
+  `artifacts/coreneuron_training_autoresearch_20260605.md`. Next priority:
+  validate `soma075` and `longctx1000` on a fresh seed/split, then consider a
+  combined long-context plus modest voltage-weight run only if it preserves
+  calibration sanity.
+
+- DECISION (2026-06-05 22:35): Clarified CPU-vs-GPU simulator usage. We chose
+  CPU for the current single-cell CoreNEURON/Hay dataset generation because
+  CPU and GPU CoreNEURON had already matched to floating-point noise on the
+  deterministic Hay validation probe, while the single-cell GPU path was
+  slower on this machine due to CoreNEURON/NVHPC launch/setup overhead
+  (`8 x 500 ms`: CPU `24.9 s`, GPU `131.3 s`). That was a throughput decision
+  after equivalence validation, not a correctness fallback. GPU remains the
+  intended path for population/batched-cell follow-up work where Arbor-like or
+  CoreNEURON parallelism can amortize launch overhead.
+
 - EXPERIMENT (2026-06-05 21:22): Completed a bounded conductance-calibration
   autoresearch loop targeting RMSE improvement without degrading simulator
   defensibility. Added explicit `--exc-gmax-scale`/`--inh-gmax-scale`
