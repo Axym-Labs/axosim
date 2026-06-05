@@ -10,64 +10,37 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class SelectiveScanFn(torch.autograd.Function):
-    """Pure PyTorch selective scan (slow but correct)."""
-
-    @staticmethod
-    def forward(ctx, u, delta, A, B, C, D=None, delta_bias=None,
-                delta_softplus=True, n_rows=1):
-        """
-        u: (batch, dim, length)
-        delta: (batch, dim, length)
-        A: (dim, dstate)
-        B: (batch, dstate, length)
-        C: (batch, dstate, length)
-        D: (dim,)
-        delta_bias: (dim,)
-        """
-        batch, dim, length = u.shape
-        dstate = A.shape[1]
-
-        if delta_bias is not None:
-            delta = delta + delta_bias.unsqueeze(-1)
-        if delta_softplus:
-            delta = F.softplus(delta)
-
-        # Discretize: A_bar = exp(delta * A)
-        # delta: (batch, dim, length), A: (dim, dstate)
-        deltaA = torch.exp(delta.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(2))  # (batch, dim, length, dstate)
-        # B: (batch, dstate, length) -> (batch, 1, length, dstate)
-        B_t = B.transpose(1, 2).unsqueeze(1)
-        deltaB_u = delta.unsqueeze(-1) * B_t * u.unsqueeze(-1)  # (batch, dim, length, dstate)
-
-        # Selective scan
-        x = torch.zeros(batch, dim, dstate, device=u.device, dtype=u.dtype)
-        ys = []
-
-        for i in range(length):
-            x = deltaA[:, :, i, :] * x + deltaB_u[:, :, i, :]
-            y = torch.einsum('bnd,bd->bn', x, C[:, :, i])  # (batch, dim)
-            ys.append(y)
-
-        y = torch.stack(ys, dim=-1)  # (batch, dim, length)
-
-        if D is not None:
-            y = y + u * D.unsqueeze(-1)
-
-        ctx.save_for_backward(u, delta, A, B, C, D, delta_bias)
-        ctx.delta_softplus = delta_softplus
-        return y
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # Simplified backward - not fully optimized
-        return None, None, None, None, None, None, None, None, None
-
-
 def selective_scan_fn(u, delta, A, B, C, D=None, delta_bias=None,
                       delta_softplus=True, n_rows=1):
-    """Wrapper for selective scan."""
-    return SelectiveScanFn.apply(u, delta, A, B, C, D, delta_bias, delta_softplus, n_rows)
+    """Differentiable pure-PyTorch selective scan.
+
+    This fallback is intentionally simple and slow. It must remain ordinary
+    PyTorch code so autograd can train the Mamba trunk when fused kernels are
+    unavailable.
+    """
+    batch, dim, length = u.shape
+    dstate = A.shape[1]
+
+    if delta_bias is not None:
+        delta = delta + delta_bias.unsqueeze(-1)
+    if delta_softplus:
+        delta = F.softplus(delta)
+
+    delta_a = torch.exp(delta.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(2))
+    b_t = B.transpose(1, 2).unsqueeze(1)
+    delta_b_u = delta.unsqueeze(-1) * b_t * u.unsqueeze(-1)
+
+    state = torch.zeros(batch, dim, dstate, device=u.device, dtype=u.dtype)
+    outputs = []
+    for index in range(length):
+        state = delta_a[:, :, index, :] * state + delta_b_u[:, :, index, :]
+        output = torch.einsum("bnd,bd->bn", state, C[:, :, index])
+        outputs.append(output)
+
+    y = torch.stack(outputs, dim=-1)
+    if D is not None:
+        y = y + u * D.unsqueeze(-1)
+    return y
 
 
 class MambaBlock(nn.Module):
@@ -160,6 +133,14 @@ class SimpleMambaModel(nn.Module):
 
     def __init__(self, input_dim, d_model=64, n_layers=2, d_state=16, d_conv=4, expand=2):
         super().__init__()
+        self.config = {
+            "input_dim": int(input_dim),
+            "d_model": int(d_model),
+            "n_layers": int(n_layers),
+            "d_state": int(d_state),
+            "d_conv": int(d_conv),
+            "expand": int(expand),
+        }
         self.input_proj = nn.Linear(input_dim, d_model)
 
         self.layers = nn.ModuleList([

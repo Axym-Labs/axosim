@@ -42,6 +42,7 @@ def compute_paired_event_intervention_metrics(
     *,
     intervention_name: str = "event_intervention",
     soma_scale: float = 0.1,
+    soma_bias_mv: float = -67.7,
     ignore_start: int = 0,
     trace_ids: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -75,6 +76,7 @@ def compute_paired_event_intervention_metrics(
         intervention_inputs_m,
         intervention_targets_m,
         soma_scale=soma_scale,
+        soma_bias_mv=soma_bias_mv,
     )
     report: dict[str, Any] = {
         "status": "teacher_only" if model_fn is None else "model_compared",
@@ -157,9 +159,10 @@ def _teacher_response_summary(
     intervention_targets: np.ndarray,
     *,
     soma_scale: float,
+    soma_bias_mv: float,
 ) -> dict[str, Any]:
-    baseline_soma_mv = baseline_targets[..., 1] / soma_scale
-    intervention_soma_mv = intervention_targets[..., 1] / soma_scale
+    baseline_soma_mv = baseline_targets[..., 1] / soma_scale + soma_bias_mv
+    intervention_soma_mv = intervention_targets[..., 1] / soma_scale + soma_bias_mv
     baseline_rate = _spike_rate_per_1000_steps(baseline_targets)
     intervention_rate = _spike_rate_per_1000_steps(intervention_targets)
     baseline_events = _event_fraction(baseline_inputs)

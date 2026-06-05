@@ -149,6 +149,38 @@ def test_cli_make_arbor_hetero_data_accepts_config_file(tmp_path):
     assert (data_dir / "manifest.json").exists()
 
 
+def test_cli_make_arbor_hetero_data_accepts_param_overrides_config(tmp_path):
+    data_dir = tmp_path / "fixed-arbor-hetero"
+    config_path = tmp_path / "sim-config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "output": str(data_dir),
+                "samples": 1,
+                "shards": 1,
+                "time_steps": 8,
+                "input_dim": 6,
+                "branches": 2,
+                "integration_dt_ms": 0.1,
+                "param_overrides": {
+                    "v_init_mv": -72.0,
+                    "input_rate_scale": 1.0,
+                    "spike_threshold_mv": -38.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = main(["make-arbor-hetero-data", "--config", str(config_path)])
+
+    assert result == 0
+    report = json.loads((data_dir / "generation_report.json").read_text(encoding="utf-8"))
+    assert report["param_overrides"]["v_init_mv"] == -72.0
+    assert report["param_overrides"]["input_rate_scale"] == 1.0
+    assert report["param_overrides"]["spike_threshold_mv"] == -38.0
+
+
 def test_cli_evaluate_accepts_window_options(tmp_path):
     data_dir = tmp_path / "data"
     metrics_path = tmp_path / "metrics.json"

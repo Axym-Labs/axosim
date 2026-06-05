@@ -25,7 +25,7 @@ from bnn_sim.model import BranchELM, BranchELMConfig
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--val-data", default="data/arbor-allen-nmda-source-medium-20260510/val")
+    parser.add_argument("--val-data", default="data/arbor-calibrated-nmda-proxy-20260604/val")
     parser.add_argument("--low-input-data", default="runs/verify_t3_low_input")
     parser.add_argument("--high-input-data", default="runs/verify_t3_high_input")
     parser.add_argument("--event-dropout-pair", default="docs/verify-arbor-simulator/artifacts/event_dropout_pair/event_dropout_pair.npz")
@@ -41,39 +41,52 @@ def main() -> int:
     parser.add_argument("--ignore-start", type=int, default=500)
     parser.add_argument("--device", default=default_torch_device())
     parser.add_argument("--skip-mamba", action="store_true")
+    parser.add_argument("--skip-m4", action="store_true", help="run M1/M1b/M2 only")
+    parser.add_argument(
+        "--allow-mixed-teacher-m4",
+        action="store_true",
+        help="allow M4 pairs from a different teacher/data source than --val-data; stress-test only",
+    )
     args = parser.parse_args()
 
     start = time.perf_counter()
     val_inputs, val_targets, val_ids = load_dataset(args.val_data, limit=args.n_val_samples)
-    low_inputs, low_targets, low_ids = load_dataset(args.low_input_data)
-    high_inputs, high_targets, high_ids = load_dataset(args.high_input_data)
-    pair_ids = paired_trace_ids(low_ids, high_ids)
-
-    teacher_m4 = compute_paired_event_intervention_metrics(
-        None,
-        low_inputs,
-        low_targets,
-        high_inputs,
-        high_targets,
-        intervention_name="event_rate_shift_low_to_high",
-        soma_scale=0.1,
-        ignore_start=args.ignore_start,
-        trace_ids=pair_ids,
-    )
-    dropout_pair = load_event_dropout_pair(args.event_dropout_pair)
-    dropout_teacher_m4 = None
-    if dropout_pair is not None:
-        dropout_teacher_m4 = compute_paired_event_intervention_metrics(
+    run_m4 = (not args.skip_m4) and args.allow_mixed_teacher_m4
+    low_inputs = low_targets = high_inputs = high_targets = None
+    pair_ids: list[str] | None = None
+    dropout_pair = None
+    if run_m4:
+        low_inputs, low_targets, low_ids = load_dataset(args.low_input_data)
+        high_inputs, high_targets, high_ids = load_dataset(args.high_input_data)
+        pair_ids = paired_trace_ids(low_ids, high_ids)
+        teacher_m4 = compute_paired_event_intervention_metrics(
             None,
-            dropout_pair["baseline_inputs"],
-            dropout_pair["baseline_targets"],
-            dropout_pair["intervention_inputs"],
-            dropout_pair["intervention_targets"],
-            intervention_name="event_dropout",
+            low_inputs,
+            low_targets,
+            high_inputs,
+            high_targets,
+            intervention_name="event_rate_shift_low_to_high",
             soma_scale=0.1,
             ignore_start=args.ignore_start,
-            trace_ids=dropout_pair["trace_ids"],
+            trace_ids=pair_ids,
         )
+        dropout_pair = load_event_dropout_pair(args.event_dropout_pair)
+        dropout_teacher_m4 = None
+        if dropout_pair is not None:
+            dropout_teacher_m4 = compute_paired_event_intervention_metrics(
+                None,
+                dropout_pair["baseline_inputs"],
+                dropout_pair["baseline_targets"],
+                dropout_pair["intervention_inputs"],
+                dropout_pair["intervention_targets"],
+                intervention_name="event_dropout",
+                soma_scale=0.1,
+                ignore_start=args.ignore_start,
+                trace_ids=dropout_pair["trace_ids"],
+            )
+    else:
+        teacher_m4 = not_run_m4(args)
+        dropout_teacher_m4 = None
     models = available_models(skip_mamba=args.skip_mamba, extra_checkpoints=args.extra_checkpoint)
     model_reports: dict[str, Any] = {}
     for name, model in models.items():
@@ -99,7 +112,10 @@ def main() -> int:
                 dataset_path=args.val_data,
                 trace_ids=val_ids,
             ),
-            "m4_event_rate_shift": compute_paired_event_intervention_metrics(
+        }
+        if run_m4:
+            assert low_inputs is not None and low_targets is not None and high_inputs is not None and high_targets is not None
+            model_reports[name]["m4_event_rate_shift"] = compute_paired_event_intervention_metrics(
                 model_fn,
                 low_inputs,
                 low_targets,
@@ -109,9 +125,8 @@ def main() -> int:
                 soma_scale=0.1,
                 ignore_start=args.ignore_start,
                 trace_ids=pair_ids,
-            ),
-        }
-        if dropout_pair is not None:
+            )
+        if run_m4 and dropout_pair is not None:
             model_reports[name]["m4_event_dropout"] = compute_paired_event_intervention_metrics(
                 model_fn,
                 dropout_pair["baseline_inputs"],
@@ -132,9 +147,10 @@ def main() -> int:
             "val_data": args.val_data,
             "low_input_data": args.low_input_data,
             "high_input_data": args.high_input_data,
+            "m4_status": "mixed_teacher_stress_test" if run_m4 else "not_run",
             "ignore_start": args.ignore_start,
             "n_val_samples": int(val_inputs.shape[0]),
-            "n_intervention_pairs": int(low_inputs.shape[0]),
+            "n_intervention_pairs": int(low_inputs.shape[0]) if low_inputs is not None else 0,
         },
         "teacher_m4_event_rate_shift": teacher_m4,
         "teacher_m4_event_dropout": dropout_teacher_m4,
@@ -195,6 +211,22 @@ def paired_trace_ids(low_ids: list[str], high_ids: list[str]) -> list[str]:
     return [f"low={low_ids[i]} | high={high_ids[i]}" for i in range(n)]
 
 
+def not_run_m4(args: argparse.Namespace) -> dict[str, Any]:
+    reason = "skipped by --skip-m4" if args.skip_m4 else "skipped to avoid mixing calibrated-Arbor M1 with old-teacher M4 pairs"
+    return {
+        "status": "not_run",
+        "kind": "paired_event_intervention",
+        "reason": reason,
+        "teacher_response": {
+            "response_detected": False,
+            "event_fraction_delta": None,
+            "delta_spike_rate_per_1000_steps": None,
+            "delta_soma_mean_mv": None,
+            "teacher_direction": "not_run",
+        },
+    }
+
+
 def available_models(*, skip_mamba: bool, extra_checkpoints: list[str]) -> dict[str, torch.nn.Module]:
     models: dict[str, torch.nn.Module] = {}
     branch_ckpt = Path("runs/branch_elm_30_trained.pt")
@@ -248,6 +280,14 @@ def load_mamba(path: Path) -> SimpleMambaModel:
 
 
 def interpret_teacher_response(report: dict[str, Any]) -> dict[str, Any]:
+    if report.get("status") == "not_run":
+        return {
+            "teacher_response_detected": False,
+            "event_fraction_delta": None,
+            "delta_spike_rate_per_1000_steps": None,
+            "delta_soma_mean_mv": None,
+            "warning": report.get("reason", "M4 not run"),
+        }
     response = report["teacher_response"]
     event_delta = response["event_fraction_delta"]
     spike_delta = response["delta_spike_rate_per_1000_steps"]
@@ -272,13 +312,14 @@ def compact_summary(report: dict[str, Any]) -> dict[str, Any]:
     model_summary = {}
     for name, row in report["models"].items():
         m1 = row["mvp_trace_report"]["m1_trace_fidelity"]
-        m4 = row["m4_event_rate_shift"]["model_response"]
         model_summary[name] = {
             "m1_soma_rmse_mv": m1["soma_rmse_mv"],
             "m1_spike_auc": m1["spike_auc"],
-            "m4_soma_delta_rmse_mv": m4["soma_delta_rmse_mv"],
-            "m4_spike_count_delta_mae": m4["spike_count_delta_mae_per_trace"],
         }
+        if "m4_event_rate_shift" in row:
+            m4 = row["m4_event_rate_shift"]["model_response"]
+            model_summary[name]["m4_soma_delta_rmse_mv"] = m4["soma_delta_rmse_mv"]
+            model_summary[name]["m4_spike_count_delta_mae"] = m4["spike_count_delta_mae_per_trace"]
         if "m4_event_dropout" in row:
             dropout = row["m4_event_dropout"]["model_response"]
             model_summary[name]["dropout_soma_delta_rmse_mv"] = dropout["soma_delta_rmse_mv"]
@@ -296,20 +337,24 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Teacher M4 Event-Rate Shift",
     ]
-    teacher = report["teacher_m4_event_rate_shift"]["teacher_response"]
-    lines.extend(
-        [
-            f"- Baseline event fraction: `{teacher['baseline_event_fraction']:.6f}`",
-            f"- Intervention event fraction: `{teacher['intervention_event_fraction']:.6f}`",
-            f"- Delta spike rate / 1000 steps: `{teacher['delta_spike_rate_per_1000_steps']:.4f}`",
-            f"- Delta soma mean mV: `{teacher['delta_soma_mean_mv']:.4f}`",
-            f"- Direction: `{teacher['teacher_direction']}`",
-            f"- Warning: {report['interpretation']['warning'] or 'none'}",
-            "",
-            "## Teacher M4 Event Dropout",
-            "",
-        ]
-    )
+    teacher_report = report["teacher_m4_event_rate_shift"]
+    teacher = teacher_report["teacher_response"]
+    if teacher_report.get("status") == "not_run":
+        lines.extend([f"- Not run: {teacher_report['reason']}", "", "## Teacher M4 Event Dropout", ""])
+    else:
+        lines.extend(
+            [
+                f"- Baseline event fraction: `{teacher['baseline_event_fraction']:.6f}`",
+                f"- Intervention event fraction: `{teacher['intervention_event_fraction']:.6f}`",
+                f"- Delta spike rate / 1000 steps: `{teacher['delta_spike_rate_per_1000_steps']:.4f}`",
+                f"- Delta soma mean mV: `{teacher['delta_soma_mean_mv']:.4f}`",
+                f"- Direction: `{teacher['teacher_direction']}`",
+                f"- Warning: {report['interpretation']['warning'] or 'none'}",
+                "",
+                "## Teacher M4 Event Dropout",
+                "",
+            ]
+        )
     dropout_teacher = report.get("teacher_m4_event_dropout")
     if dropout_teacher is None:
         lines.append("- Not run: no paired dropout artifact was found.")
@@ -335,13 +380,15 @@ def render_markdown(report: dict[str, Any]) -> str:
     )
     for name, row in report["models"].items():
         m1 = row["mvp_trace_report"]["m1_trace_fidelity"]
-        m4 = row["m4_event_rate_shift"]["model_response"]
+        m4 = row.get("m4_event_rate_shift", {}).get("model_response")
         dropout = row.get("m4_event_dropout", {}).get("model_response")
+        m4_soma = f"{m4['soma_delta_rmse_mv']:.4f}" if m4 else "N/A"
+        m4_spike = f"{m4['spike_count_delta_mae_per_trace']:.4f}" if m4 else "N/A"
         dropout_soma = f"{dropout['soma_delta_rmse_mv']:.4f}" if dropout else "N/A"
         dropout_spike = f"{dropout['spike_count_delta_mae_per_trace']:.4f}" if dropout else "N/A"
         lines.append(
             f"| `{name}` | {m1['soma_rmse_mv']:.4f} | {m1['spike_auc']:.4f} | "
-            f"{m4['soma_delta_rmse_mv']:.4f} | {m4['spike_count_delta_mae_per_trace']:.4f} | "
+            f"{m4_soma} | {m4_spike} | "
             f"{dropout_soma} | {dropout_spike} |"
         )
     lines.extend(

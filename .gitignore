@@ -8,3 +8,31 @@ data/
 checkpoints/
 *.pt
 .external/
+
+# Agent/local experiment state.
+.codex/
+
+# Generated experiment payloads. Commit source scripts and concise reports,
+# not datasets, checkpoints, plots, compiled mechanisms, or large run dumps.
+*.pyc
+*.npz
+*.svg
+docs/**/artifacts/**/__pycache__/
+docs/**/artifacts/**/x86_64/
+docs/**/artifacts/**/plots/
+docs/**/artifacts/**/*_metrics.json
+docs/**/artifacts/**/*_metrics-updates.jsonl
+docs/**/artifacts/**/experiment-registry.jsonl
+docs/**/artifacts/**/generation_report.json
+docs/**/artifacts/**/generation_summary.json
+docs/**/artifacts/**/manifest.json
+docs/**/artifacts/**/calibration_results.json
+docs/verify-arbor-simulator/artifacts/*.json
+docs/verify-arbor-simulator/artifacts/*_2026*/
+docs/verify-arbor-simulator/artifacts/arbor_*/
+docs/verify-arbor-simulator/artifacts/branch_*/
+docs/verify-arbor-simulator/artifacts/hay_*/
+docs/verify-arbor-simulator/artifacts/mamba_*/
+docs/verify-arbor-simulator/artifacts/nmda_*/
+docs/verify-arbor-simulator/artifacts/official_*/
+docs/verify-arbor-simulator/artifacts/rnn_*/

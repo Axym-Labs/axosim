@@ -66,15 +66,23 @@ class BranchOfficialMambaConfig:
 class BranchOfficialMamba(nn.Module):
     """Branch-routed wrapper around the official mamba-ssm Mamba module."""
 
-    def __init__(self, config: BranchOfficialMambaConfig) -> None:
+    def __init__(
+        self,
+        config: BranchOfficialMambaConfig,
+        *,
+        mamba_classes: tuple[type[nn.Module], type[nn.Module] | None] | None = None,
+    ) -> None:
         super().__init__()
-        try:
-            from mamba_ssm import Mamba, Mamba2
-        except ImportError as error:
-            raise ImportError(
-                "mamba-ssm is required for BranchOfficialMamba. "
-                "Use the mamba-official venv or install a compatible mamba-ssm wheel."
-            ) from error
+        if mamba_classes is None:
+            try:
+                from mamba_ssm import Mamba, Mamba2
+            except ImportError as error:
+                raise ImportError(
+                    "mamba-ssm is required for BranchOfficialMamba. "
+                    "Use the mamba-official venv or install a compatible mamba-ssm wheel."
+                ) from error
+        else:
+            Mamba, Mamba2 = mamba_classes
 
         if config.num_input <= 0:
             raise ValueError("num_input must be positive")
@@ -268,6 +276,8 @@ class BranchOfficialMamba(nn.Module):
                 d_conv=self.config.conv_kernel,
                 expand=self.config.expansion,
             )
+        if mamba2_cls is None:
+            raise ValueError("block_type='mamba2' is not supported by this Mamba backend")
         return mamba2_cls(
             d_model=model_dim,
             d_state=self.config.state_dim,
@@ -424,6 +434,17 @@ class BranchOfficialMamba(nn.Module):
         routed = self._route_input_to_synapses(x)
         batch_size, time_steps, _ = routed.shape
         return routed.view(batch_size, time_steps, self.num_branch, -1).sum(dim=-1)
+
+
+class BranchPyTorchMamba(BranchOfficialMamba):
+    """Branch-routed Mamba wrapper using the differentiable PyTorch fallback block."""
+
+    def __init__(self, config: BranchOfficialMambaConfig) -> None:
+        if config.block_type != "mamba1":
+            raise ValueError("BranchPyTorchMamba only supports block_type='mamba1'")
+        from bnn_sim.mamba_pytorch import MambaBlock
+
+        super().__init__(config, mamba_classes=(MambaBlock, None))
 
 
 class _OfficialMambaResidualBlock(nn.Module):

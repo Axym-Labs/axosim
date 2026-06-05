@@ -50,6 +50,36 @@ def test_benchmark_suite_reports_mvp_schema_and_masked_m1(tmp_path):
     assert (tmp_path / "benchmark_results.json").exists()
 
 
+def test_benchmark_voltage_features_and_regime_bins_include_soma_bias():
+    inputs = np.zeros((1, 4, 2), dtype=np.float32)
+    targets = np.zeros((1, 4, 2), dtype=np.float32)
+    predictions = np.zeros_like(targets)
+
+    # Canonical target encoding: normalized = (mV - bias) * scale.
+    # These values should decode to -70, -65, -60, and -55 mV.
+    targets[0, :, 1] = np.array([-0.3, 0.2, 0.7, 1.2], dtype=np.float32)
+    predictions[0, :, 1] = targets[0, :, 1]
+
+    report = BenchmarkSuite().evaluate_model(
+        lambda x: predictions,
+        inputs,
+        targets,
+        soma_scale=0.1,
+        soma_bias_mv=-67.0,
+        ignore_start=0,
+        run_perturbation=False,
+        trace_ids=["trace-a"],
+    )
+
+    features = report["m1b_feature_fidelity"]["features"]
+    assert np.isclose(features["peak_voltage_mv"]["teacher_mean"], -55.0)
+    assert np.isclose(features["trough_voltage_mv"]["teacher_mean"], -70.0)
+
+    voltage_rows = report["m2_regimes"]["voltage_regime"]
+    assert np.isclose(voltage_rows[0]["bin_low"], -70.0)
+    assert np.isclose(voltage_rows[-1]["bin_high"], -55.0)
+
+
 def test_regime_metrics_do_not_leak_spike_windows_across_trace_boundaries():
     predictions = np.zeros((2, 5, 2), dtype=np.float32)
     targets = np.zeros((2, 5, 2), dtype=np.float32)
@@ -74,6 +104,32 @@ def test_regime_metrics_do_not_leak_spike_windows_across_trace_boundaries():
     assert near["count"] == 3
     assert far["count"] == 7
     assert mvp["near_spike"]["count"] == 3
+    assert mvp["far_from_spike_subthreshold"]["count"] == 7
+
+
+def test_regime_post_event_uses_high_drive_for_many_input_channels():
+    predictions = np.zeros((1, 10, 2), dtype=np.float32)
+    targets = np.zeros((1, 10, 2), dtype=np.float32)
+    inputs = np.zeros((1, 10, 128), dtype=np.float32)
+
+    inputs[:, :, :2] = 1.0
+    inputs[:, 4, :64] = 1.0
+
+    metrics = compute_regime_stratified_metrics(
+        predictions,
+        targets,
+        inputs,
+        soma_scale=1.0,
+        soma_bias_mv=0.0,
+        post_event_quantile=0.95,
+    )
+    post = next(row for row in metrics["post_event"] if row["regime_label"] == "post_event")
+    no_recent = next(row for row in metrics["post_event"] if row["regime_label"] == "no_recent_event")
+    mvp = {row["regime_label"]: row for row in metrics["mvp_regimes"]}
+
+    assert metrics["post_event_definition"]["event_count_threshold"] > 2
+    assert post["count"] == 3
+    assert no_recent["count"] == 7
     assert mvp["far_from_spike_subthreshold"]["count"] == 7
 
 

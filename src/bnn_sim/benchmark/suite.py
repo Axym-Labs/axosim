@@ -23,6 +23,7 @@ import numpy as np
 from bnn_sim.benchmark.regime_stratified import compute_regime_stratified_metrics
 from bnn_sim.benchmark.perturbation_stability import compute_perturbation_stability
 from bnn_sim.benchmark.structured_intervention import compute_paired_event_intervention_metrics
+from bnn_sim.official.constants import DEFAULT_Y_TRAIN_SOMA_BIAS
 
 
 class BenchmarkSuite:
@@ -37,6 +38,7 @@ class BenchmarkSuite:
         inputs: np.ndarray,
         targets: np.ndarray,
         soma_scale: float = 0.1,
+        soma_bias_mv: float = DEFAULT_Y_TRAIN_SOMA_BIAS,
         ignore_start: int = 500,
         run_perturbation: bool = True,
         perturbation_epsilons: list[float] | None = None,
@@ -53,6 +55,7 @@ class BenchmarkSuite:
             inputs: Input array (batch, time, channels).
             targets: Target array (batch, time, 2).
             soma_scale: Scale factor for soma voltage.
+            soma_bias_mv: Bias added after inverse soma scaling to recover mV.
             ignore_start: Timesteps to ignore at start.
             run_perturbation: Whether to run perturbation stability.
             perturbation_epsilons: Epsilon values for perturbation test.
@@ -68,12 +71,19 @@ class BenchmarkSuite:
 
         trace_ids = trace_ids or [str(i) for i in range(inputs.shape[0])]
         m1 = _compute_m1_trace_fidelity(predictions, targets, soma_scale, ignore_start)
-        m1b = _compute_m1b_feature_fidelity(predictions, targets, trace_ids, soma_scale, ignore_start)
+        m1b = _compute_m1b_feature_fidelity(
+            predictions,
+            targets,
+            trace_ids,
+            soma_scale,
+            soma_bias_mv,
+            ignore_start,
+        )
 
         # M2: Regime-stratified errors
         m2 = compute_regime_stratified_metrics(
             predictions, targets, inputs,
-            soma_scale=soma_scale, ignore_start=ignore_start,
+            soma_scale=soma_scale, soma_bias_mv=soma_bias_mv, ignore_start=ignore_start,
         )
 
         # M4: Perturbation stability
@@ -96,6 +106,7 @@ class BenchmarkSuite:
                 m4_paired_intervention["intervention_targets"],
                 intervention_name=m4_paired_intervention.get("intervention_name", "event_intervention"),
                 soma_scale=soma_scale,
+                soma_bias_mv=soma_bias_mv,
                 ignore_start=m4_paired_intervention.get("ignore_start", ignore_start),
                 trace_ids=m4_paired_intervention.get("trace_ids", trace_ids),
             )
@@ -118,6 +129,7 @@ class BenchmarkSuite:
             "n_samples": inputs.shape[0],
             "n_timesteps": inputs.shape[1],
             "soma_scale": soma_scale,
+            "soma_bias_mv": soma_bias_mv,
             "mask": {
                 "ignore_start": ignore_start,
                 "evaluated_timesteps_per_trace": max(0, inputs.shape[1] - ignore_start),
@@ -239,9 +251,12 @@ def _compute_m1_trace_fidelity(
     from bnn_sim.metrics import binary_auc
 
     clipped = np.clip(spike_probs, 1e-7, 1.0 - 1e-7)
-    spike_binary = spike_scores > 0.0
     target_binary = spike_labels > 0.5
+    spike_binary = spike_scores > 0.0
+    matched_threshold = _prevalence_matched_threshold(spike_scores, int(target_binary.sum()))
+    matched_binary = spike_scores >= matched_threshold
     pred_counts = spike_binary.sum(axis=1)
+    matched_counts = matched_binary.sum(axis=1)
     target_counts = target_binary.sum(axis=1)
 
     return {
@@ -254,6 +269,18 @@ def _compute_m1_trace_fidelity(
         "spike_target_count": int(target_binary.sum()),
         "spike_predicted_count": int(spike_binary.sum()),
         "spike_count_mae_per_trace": float(np.mean(np.abs(pred_counts - target_counts))),
+        "spike_threshold_zero": {
+            "threshold": 0.0,
+            "predicted_count": int(spike_binary.sum()),
+            "count_mae_per_trace": float(np.mean(np.abs(pred_counts - target_counts))),
+            "semantics": "fixed logit threshold; use this as a calibration/operating-point check",
+        },
+        "spike_prevalence_matched": {
+            "threshold": float(matched_threshold),
+            "predicted_count": int(matched_binary.sum()),
+            "count_mae_per_trace": float(np.mean(np.abs(matched_counts - target_counts))),
+            "semantics": "diagnostic threshold chosen so total predicted spike count matches the teacher under the current mask",
+        },
         "what_failure_means": {
             "soma": "Large RMSE/MAE means the surrogate misses open-loop voltage traces under the stated mask.",
             "spike": "Poor AUC/Brier/log-loss means spike scores do not rank or calibrate event likelihoods well.",
@@ -289,18 +316,59 @@ def _compute_m1b_feature_fidelity(
     targets: np.ndarray,
     trace_ids: list[str],
     soma_scale: float,
+    soma_bias_mv: float,
     ignore_start: int,
 ) -> dict[str, Any]:
     pred = _apply_time_mask(np.asarray(predictions), ignore_start)
     tgt = _apply_time_mask(np.asarray(targets), ignore_start)
     pred_spikes = pred[..., 0] > 0.0
     target_spikes = tgt[..., 0] > 0.5
-    pred_soma_mv = pred[..., 1] / soma_scale
-    target_soma_mv = tgt[..., 1] / soma_scale
+    matched_threshold = _prevalence_matched_threshold(pred[..., 0], int(target_spikes.sum()))
+    matched_pred_spikes = pred[..., 0] >= matched_threshold
+    pred_soma_mv = pred[..., 1] / soma_scale + soma_bias_mv
+    target_soma_mv = tgt[..., 1] / soma_scale + soma_bias_mv
 
+    features, worst = _feature_fidelity_rows(pred_spikes, target_spikes, pred_soma_mv, target_soma_mv, trace_ids)
+    matched_features, matched_worst = _feature_fidelity_rows(
+        matched_pred_spikes,
+        target_spikes,
+        pred_soma_mv,
+        target_soma_mv,
+        trace_ids,
+    )
+
+    return {
+        "features": features,
+        "worst_trace_ids": worst,
+        "threshold_zero": {
+            "threshold": 0.0,
+            "features": features,
+            "worst_trace_ids": worst,
+            "semantics": "fixed logit threshold; use this as a calibration/operating-point check",
+        },
+        "prevalence_matched": {
+            "threshold": float(matched_threshold),
+            "features": matched_features,
+            "worst_trace_ids": matched_worst,
+            "semantics": "diagnostic threshold chosen so total predicted spike count matches the teacher under the current mask",
+        },
+        "what_failure_means": (
+            "Feature errors indicate mismatches in practitioner-visible trace "
+            "properties such as spike count, firing rate, adaptation, and voltage extrema."
+        ),
+    }
+
+
+def _feature_fidelity_rows(
+    pred_spikes: np.ndarray,
+    target_spikes: np.ndarray,
+    pred_soma_mv: np.ndarray,
+    target_soma_mv: np.ndarray,
+    trace_ids: list[str],
+) -> tuple[dict[str, Any], dict[str, list[str]]]:
     pred_features = []
     target_features = []
-    for index in range(pred.shape[0]):
+    for index in range(pred_spikes.shape[0]):
         pred_features.append(_trace_features(pred_spikes[index], pred_soma_mv[index]))
         target_features.append(_trace_features(target_spikes[index], target_soma_mv[index]))
 
@@ -318,12 +386,13 @@ def _compute_m1b_feature_fidelity(
         }
         bad = np.flatnonzero(np.nan_to_num(abs_errors, nan=0.0) > 0)
         worst[f"{name}_abs_error"] = [trace_ids[i] for i in bad[:5]]
+    return features, worst
 
-    return {
-        "features": features,
-        "worst_trace_ids": worst,
-        "what_failure_means": (
-            "Feature errors indicate mismatches in practitioner-visible trace "
-            "properties such as spike count, firing rate, adaptation, and voltage extrema."
-        ),
-    }
+
+def _prevalence_matched_threshold(scores: np.ndarray, positive_count: int) -> float:
+    flat = np.asarray(scores).reshape(-1)
+    if positive_count <= 0:
+        return float("inf")
+    if positive_count >= flat.size:
+        return float("-inf")
+    return float(np.partition(flat, flat.size - positive_count)[flat.size - positive_count])

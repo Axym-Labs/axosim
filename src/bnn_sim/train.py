@@ -50,6 +50,7 @@ def train_dataset(
     sparse_soma_spike_window: int = 5,
     sparse_soma_post_event_window: int = 5,
     soma_slope_loss_weight: float = 0.0,
+    grad_clip_norm: float = 0.0,
     update_log_interval: int = 0,
     update_log_path: str | Path | None = None,
     prefetch_batches: int = 0,
@@ -164,6 +165,8 @@ def train_dataset(
 
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
+                if grad_clip_norm:
+                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
                 optimizer.step()
                 if scheduler is not None:
                     scheduler.step()
@@ -276,6 +279,7 @@ def train_dataset(
         "sparse_soma_spike_window": sparse_soma_spike_window,
         "sparse_soma_post_event_window": sparse_soma_post_event_window,
         "soma_slope_loss_weight": soma_slope_loss_weight,
+        "grad_clip_norm": grad_clip_norm,
         "update_log_interval": update_log_interval,
         "update_log_path": str(update_log_path) if update_log_path is not None else None,
         "prefetch_batches": prefetch_batches,
@@ -331,6 +335,7 @@ def train_and_save(
     sparse_soma_spike_window: int = 5,
     sparse_soma_post_event_window: int = 5,
     soma_slope_loss_weight: float = 0.0,
+    grad_clip_norm: float = 0.0,
     update_log_interval: int = 0,
     update_log_path: str | Path | None = None,
     prefetch_batches: int = 0,
@@ -372,6 +377,7 @@ def train_and_save(
         sparse_soma_spike_window=sparse_soma_spike_window,
         sparse_soma_post_event_window=sparse_soma_post_event_window,
         soma_slope_loss_weight=soma_slope_loss_weight,
+        grad_clip_norm=grad_clip_norm,
         update_log_interval=update_log_interval,
         update_log_path=update_log_path,
         prefetch_batches=prefetch_batches,

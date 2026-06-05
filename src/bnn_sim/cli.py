@@ -46,7 +46,14 @@ from bnn_sim.train import train_and_save
 
 DEFAULT_OFFICIAL_MODEL_CONFIG = "configs/branch_elm_30_official.json"
 DEFAULT_MAMBA_OFFICIAL_MODEL_CONFIG = "configs/branch_mamba_official_45x64.json"
-MODEL_KIND_CHOICES = ["baseline", "official", "mamba-official", "branch-trace-rnn"]
+MODEL_KIND_CHOICES = [
+    "baseline",
+    "official",
+    "mamba-official",
+    "mamba-pytorch",
+    "branch-mamba-pytorch",
+    "branch-trace-rnn",
+]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,6 +83,11 @@ def main(argv: list[str] | None = None) -> int:
     arbor_data.add_argument("--input-dim", type=int, default=1278)
     arbor_data.add_argument("--branches", type=int, default=45)
     arbor_data.add_argument("--integration-dt-ms", type=float, default=0.025)
+    arbor_data.add_argument("--input-protocol", choices=["arbor_poisson", "neuronio_smoothed"], default="arbor_poisson")
+    arbor_data.add_argument("--synapse-routing", choices=["branch", "distributed"], default="branch")
+    arbor_data.add_argument("--distributed-sites-per-polarity", type=int)
+    arbor_data.add_argument("--spike-label-mode", choices=["threshold_crossing", "local_peak"], default="threshold_crossing")
+    arbor_data.add_argument("--spike-peak-threshold-mv", type=float, default=-25.0)
     arbor_data.add_argument("--base-event-rate-hz", type=float, default=2.0)
     arbor_data.add_argument("--burst-probability", type=float, default=0.015)
     arbor_data.add_argument("--burst-event-rate-hz", type=float, default=35.0)
@@ -84,6 +96,10 @@ def main(argv: list[str] | None = None) -> int:
     arbor_data.add_argument("--arbor-threads", type=int, default=1)
     arbor_data.add_argument("--sim-batch-size", type=int, default=32, help="independent cells per Arbor simulation batch")
     arbor_data.add_argument("--seed", type=int, default=0)
+    arbor_data.add_argument(
+        "--param-overrides",
+        help="JSON object or path to a JSON object overriding Arbor heterogeneity parameters for all samples",
+    )
     arbor_data.add_argument("--report", help="optional path for a copy of the generation report")
 
     convert = subparsers.add_parser("convert-neuronio", help="convert raw NeuronIO pickle files to deterministic shards")
@@ -213,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--sparse-soma-spike-window", type=int, default=5)
     train.add_argument("--sparse-soma-post-event-window", type=int, default=5)
     train.add_argument("--soma-slope-loss-weight", type=float, default=0.0)
+    train.add_argument("--grad-clip-norm", type=float, default=0.0)
     train.add_argument("--train-update-log-interval", type=int, default=0)
     train.add_argument("--train-update-log")
     train.add_argument("--prefetch-batches", type=int, default=0)
@@ -287,6 +304,11 @@ def main(argv: list[str] | None = None) -> int:
                 num_branch=args.branches,
                 time_steps=args.time_steps,
                 integration_dt_ms=args.integration_dt_ms,
+                input_protocol=args.input_protocol,
+                synapse_routing=args.synapse_routing,
+                distributed_sites_per_polarity=args.distributed_sites_per_polarity,
+                spike_label_mode=args.spike_label_mode,
+                spike_peak_threshold_mv=args.spike_peak_threshold_mv,
                 base_event_rate_hz=args.base_event_rate_hz,
                 burst_probability=args.burst_probability,
                 burst_event_rate_hz=args.burst_event_rate_hz,
@@ -301,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
                     shards_per_split=args.shards_per_split,
                     seed=args.seed,
                     config=config,
+                    param_overrides=_parse_param_overrides(args.param_overrides),
                 )
             else:
                 report = write_arbor_hetero_dataset(
@@ -309,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
                     shards=args.shards,
                     seed=args.seed,
                     config=config,
+                    param_overrides=_parse_param_overrides(args.param_overrides),
                 )
         except ValueError as error:
             print(str(error))
@@ -483,6 +507,7 @@ def main(argv: list[str] | None = None) -> int:
             sparse_soma_spike_window=args.sparse_soma_spike_window,
             sparse_soma_post_event_window=args.sparse_soma_post_event_window,
             soma_slope_loss_weight=args.soma_slope_loss_weight,
+            grad_clip_norm=args.grad_clip_norm,
             update_log_interval=args.train_update_log_interval,
             update_log_path=args.train_update_log,
             prefetch_batches=args.prefetch_batches,
@@ -634,6 +659,18 @@ def _build_model_from_args(args):
 
         config_path = args.model_config if args.model_config != DEFAULT_OFFICIAL_MODEL_CONFIG else DEFAULT_MAMBA_OFFICIAL_MODEL_CONFIG
         return BranchOfficialMamba(BranchOfficialMambaConfig(**load_official_elm_config(config_path)))
+    if args.model_kind == "branch-mamba-pytorch":
+        from bnn_sim.mamba_official import BranchOfficialMambaConfig, BranchPyTorchMamba
+
+        config_path = args.model_config if args.model_config != DEFAULT_OFFICIAL_MODEL_CONFIG else DEFAULT_MAMBA_OFFICIAL_MODEL_CONFIG
+        return BranchPyTorchMamba(BranchOfficialMambaConfig(**load_official_elm_config(config_path)))
+    if args.model_kind == "mamba-pytorch":
+        from bnn_sim.mamba_pytorch import SimpleMambaModel
+
+        config_path = Path(args.model_config)
+        if args.model_config != DEFAULT_OFFICIAL_MODEL_CONFIG and config_path.exists():
+            return SimpleMambaModel(**load_official_elm_config(config_path))
+        return SimpleMambaModel(input_dim=args.input_dim)
     config = BranchELMConfig(input_dim=args.input_dim, memory_units=args.memory_units, num_branches=args.branches)
     return BranchELM(config)
 
@@ -674,6 +711,11 @@ def _apply_arbor_data_config(args, explicit_dests: set[str]) -> None:
         "input_dim",
         "branches",
         "integration_dt_ms",
+        "input_protocol",
+        "synapse_routing",
+        "distributed_sites_per_polarity",
+        "spike_label_mode",
+        "spike_peak_threshold_mv",
         "base_event_rate_hz",
         "burst_probability",
         "burst_event_rate_hz",
@@ -682,6 +724,7 @@ def _apply_arbor_data_config(args, explicit_dests: set[str]) -> None:
         "arbor_threads",
         "sim_batch_size",
         "seed",
+        "param_overrides",
         "report",
     }
     unknown = sorted(set(config) - allowed)
@@ -690,6 +733,32 @@ def _apply_arbor_data_config(args, explicit_dests: set[str]) -> None:
     for key, value in config.items():
         if key not in explicit_dests:
             setattr(args, key, value)
+
+
+def _parse_param_overrides(value: str | dict[str, object] | None) -> dict[str, float] | None:
+    if value is None:
+        return None
+    raw: object
+    if isinstance(value, dict):
+        raw = value
+    else:
+        text = str(value)
+        path = Path(text)
+        if path.exists():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            raw = json.loads(text)
+    if not isinstance(raw, dict):
+        raise ValueError("param_overrides must be a JSON object")
+    overrides: dict[str, float] = {}
+    for key, item in raw.items():
+        if not isinstance(key, str):
+            raise ValueError("param_overrides keys must be strings")
+        try:
+            overrides[key] = float(item)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"param_overrides value for {key!r} must be numeric") from error
+    return overrides or None
 
 
 def _resolve_arbor_gpu_id(args, explicit_dests: set[str]) -> int | None:

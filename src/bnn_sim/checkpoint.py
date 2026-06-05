@@ -7,6 +7,7 @@ from typing import Any
 import torch
 
 from bnn_sim.model import BranchELM, BranchELMConfig
+from bnn_sim.mamba_pytorch import SimpleMambaModel
 from bnn_sim.official import ELM, create_official_elm
 from bnn_sim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
 
@@ -39,6 +40,13 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
 
         config = BranchOfficialMambaConfig(**payload["config"])
         model = BranchOfficialMamba(config)
+    elif model_kind == "branch-mamba-pytorch":
+        from bnn_sim.mamba_official import BranchOfficialMambaConfig, BranchPyTorchMamba
+
+        config = BranchOfficialMambaConfig(**payload["config"])
+        model = BranchPyTorchMamba(config)
+    elif model_kind == "mamba-pytorch":
+        model = SimpleMambaModel(**payload["config"])
     elif model_kind == "official":
         model = create_official_elm(payload["config"])
     else:
@@ -79,6 +87,10 @@ def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]
         }
     if model.__class__.__name__ == "BranchOfficialMamba" and hasattr(model, "config"):
         return "mamba-official", asdict(model.config)
+    if model.__class__.__name__ == "BranchPyTorchMamba" and hasattr(model, "config"):
+        return "branch-mamba-pytorch", asdict(model.config)
+    if isinstance(model, SimpleMambaModel):
+        return "mamba-pytorch", dict(model.config)
     if isinstance(model, ELM):
         return "official", {
             "num_input": int(model.num_input),

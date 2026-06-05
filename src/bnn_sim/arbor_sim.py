@@ -74,6 +74,20 @@ class ArborHeteroConfig:
     base_event_rate_hz: float = 2.0
     burst_probability: float = 0.015
     burst_event_rate_hz: float = 35.0
+    input_protocol: str = "arbor_poisson"
+    synapse_routing: str = "branch"
+    distributed_sites_per_polarity: int | None = None
+    spike_label_mode: str = "threshold_crossing"
+    spike_peak_threshold_mv: float = -25.0
+    neuronio_min_seg_length_um: float = 10.0
+    neuronio_rate_interval_options_ms: tuple[int, ...] = (25, 30, 35, 40, 45, 55, 60, 65, 70, 75, 80, 85, 90, 100, 150, 200, 300, 450)
+    neuronio_smoothing_sigma_options_ms: tuple[int, ...] = (25, 30, 35, 40, 50, 60, 80, 100, 150, 200, 300, 400, 500, 600)
+    neuronio_rate_interval_jitter_ms: int = 20
+    neuronio_smoothing_sigma_jitter_ms: int = 20
+    neuronio_basal_exc_spikes_per_100ms: tuple[float, float] = (0.0, 800.0)
+    neuronio_apic_exc_spikes_per_100ms: tuple[float, float] = (0.0, 800.0)
+    neuronio_basal_e_minus_i_spikes_per_100ms: tuple[float, float] = (-600.0, 200.0)
+    neuronio_apic_e_minus_i_spikes_per_100ms: tuple[float, float] = (-600.0, 200.0)
     soma_target_offset_mv: float = -67.7
     soma_target_scale: float = 0.1
     cv_max_extent_um: float = 25.0
@@ -89,6 +103,7 @@ def write_arbor_hetero_splits(
     shards_per_split: int = 1,
     seed: int = 0,
     config: ArborHeteroConfig | None = None,
+    param_overrides: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     if not split_samples:
         raise ValueError("split_samples must not be empty")
@@ -108,6 +123,7 @@ def write_arbor_hetero_splits(
             shards=shards_per_split,
             seed=seed + 1009 * split_idx,
             config=config,
+            param_overrides=param_overrides,
         )
         reports[split_name] = report
         total_disk_bytes += int(report["disk_bytes"])
@@ -123,6 +139,8 @@ def write_arbor_hetero_splits(
         "total_disk_bytes": total_disk_bytes,
         "elapsed_seconds": time.perf_counter() - start,
     }
+    if param_overrides:
+        summary["param_overrides"] = {str(key): float(value) for key, value in sorted(param_overrides.items())}
     (output_root / "generation_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -151,7 +169,9 @@ def write_arbor_hetero_dataset(
     output_root.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(seed)
     branch_info = _template_branch_info(config.num_branch)
-    routing = _interlocking_branch_routing(config.input_dim, config.num_branch)
+    site_info = _template_synapse_site_info(config, branch_info)
+    input_routing = site_info["channel_branch_routing"]
+    event_routing = site_info["channel_event_routing"]
     split_counts = _split_counts(samples, shards)
     manifest_entries: list[dict[str, Any]] = []
     disk_paths: list[Path] = []
@@ -175,7 +195,7 @@ def write_arbor_hetero_dataset(
             sample_seed = int(rng.integers(0, np.iinfo(np.int32).max))
             sample_rng = np.random.default_rng(sample_seed)
             params = _sample_heterogeneity(sample_rng, overrides=param_overrides)
-            inputs = _sample_sparse_inputs(config, routing, branch_info["regions"], params, sample_rng)
+            inputs = _sample_sparse_inputs(config, input_routing, branch_info["regions"], params, sample_rng, branch_info["lengths_um"])
             global_idx = sample_base + local_idx
             shard_inputs[local_idx] = inputs
             shard_heterogeneity[local_idx] = _heterogeneity_vector(params)
@@ -189,14 +209,15 @@ def write_arbor_hetero_dataset(
                 config,
                 inputs=shard_inputs[start:stop],
                 params_list=sample_params[start:stop],
-                routing=routing,
+                routing=event_routing,
                 branch_ids=branch_info["branch_ids"],
+                site_info=site_info,
             )
             shard_soma_mv[start:stop] = batch_soma
 
         for local_idx, params in enumerate(sample_params):
             soma_mv = shard_soma_mv[local_idx]
-            spikes = _threshold_spikes(soma_mv, params["spike_threshold_mv"])
+            spikes = _label_spikes(config, soma_mv, params)
             shard_targets[local_idx] = np.stack(
                 [
                     spikes,
@@ -262,6 +283,8 @@ def write_arbor_hetero_dataset(
         "soma_std_mv": float(np.sqrt(max(soma_var, 0.0))),
         "simulator": simulator,
     }
+    if param_overrides:
+        report["param_overrides"] = {str(key): float(value) for key, value in sorted(param_overrides.items())}
     (output_root / "generation_report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -277,15 +300,17 @@ def simulate_arbor_sample(
 ) -> dict[str, np.ndarray]:
     branch_info = _template_branch_info(config.num_branch)
     params = _sample_heterogeneity(rng)
-    inputs = _sample_sparse_inputs(config, routing, branch_info["regions"], params, rng)
+    site_info = _template_synapse_site_info(config, branch_info)
+    inputs = _sample_sparse_inputs(config, site_info["channel_branch_routing"], branch_info["regions"], params, rng, branch_info["lengths_um"])
     soma_mv = _simulate_arbor_batch(
         config,
         inputs=inputs[None, ...],
         params_list=[params],
-        routing=routing,
+        routing=site_info["channel_event_routing"],
         branch_ids=branch_info["branch_ids"],
+        site_info=site_info,
     )[0]
-    spikes = _threshold_spikes(soma_mv, params["spike_threshold_mv"])
+    spikes = _label_spikes(config, soma_mv, params)
     targets = np.stack(
         [spikes, (soma_mv - config.soma_target_offset_mv) * config.soma_target_scale],
         axis=1,
@@ -324,17 +349,18 @@ def simulate_arbor_targets_for_inputs(
         for row in heterogeneity
     ]
     branch_info = _template_branch_info(config.num_branch)
-    routing = _interlocking_branch_routing(config.input_dim, config.num_branch)
+    site_info = _template_synapse_site_info(config, branch_info)
     soma_mv = _simulate_arbor_batch(
         config,
         inputs=inputs.astype(np.int8, copy=False),
         params_list=params_list,
-        routing=routing,
+        routing=site_info["channel_event_routing"],
         branch_ids=branch_info["branch_ids"],
+        site_info=site_info,
     )
     targets = np.zeros((inputs.shape[0], inputs.shape[1], 2), dtype=np.float32)
     for index, params in enumerate(params_list):
-        spikes = _threshold_spikes(soma_mv[index], params["spike_threshold_mv"])
+        spikes = _label_spikes(config, soma_mv[index], params)
         targets[index] = np.stack(
             [
                 spikes,
@@ -372,10 +398,11 @@ def _simulate_arbor_batch(
     params_list: list[dict[str, float]],
     routing: np.ndarray,
     branch_ids: list[int],
+    site_info: dict[str, Any],
 ) -> np.ndarray:
     import arbor as A
 
-    recipe = _make_batch_recipe(A, config, inputs, params_list, routing, branch_ids)
+    recipe = _make_batch_recipe(A, config, inputs, params_list, routing, branch_ids, site_info)
     ctx = A.context(threads=config.arbor_threads, gpu_id=config.arbor_gpu_id)
     decomp = A.partition_load_balance(recipe, ctx)
     sim = A.simulation(recipe, ctx, decomp)
@@ -392,9 +419,9 @@ def _simulate_arbor_batch(
     return soma
 
 
-def _make_batch_recipe(A, config: ArborHeteroConfig, inputs, params_list, routing, branch_ids):
-    cells = [_build_cell(config, params, branch_ids) for params in params_list]
-    event_times = [_branch_event_times(x, routing, config.dt_ms) for x in inputs]
+def _make_batch_recipe(A, config: ArborHeteroConfig, inputs, params_list, routing, branch_ids, site_info):
+    cells = [_build_cell(config, params, branch_ids, site_info) for params in params_list]
+    event_times = [_routed_event_times(x, routing, int(site_info["site_count"]), config.dt_ms) for x in inputs]
 
     class BatchRecipe(A.recipe):
         def __init__(self) -> None:
@@ -437,17 +464,19 @@ def _make_batch_recipe(A, config: ArborHeteroConfig, inputs, params_list, routin
     return BatchRecipe()
 
 
-def _build_cell(config: ArborHeteroConfig, params: dict[str, float], branch_ids: list[int]):
+def _build_cell(config: ArborHeteroConfig, params: dict[str, float], branch_ids: list[int], site_info: dict[str, Any]):
     import arbor as A
 
     U = A.units
     morphology, fit = _load_allen_template()
     labels = A.label_dict().add_swc_tags()
     labels["soma_mid"] = "(location 0 0.5)"
-    for branch_idx, branch_id in enumerate(branch_ids):
-        labels[f"branch_{branch_idx}"] = f"(branch {branch_id})"
-        labels[f"branch_exc_{branch_idx}"] = f"(location {branch_id} 0.65)"
-        labels[f"branch_inh_{branch_idx}"] = f"(location {branch_id} 0.35)"
+    site_branch_ids = np.asarray(site_info["site_branch_ids"], dtype=np.int64)
+    site_exc_pos = np.asarray(site_info["site_exc_positions"], dtype=np.float64)
+    site_inh_pos = np.asarray(site_info["site_inh_positions"], dtype=np.float64)
+    for site_idx, branch_id in enumerate(site_branch_ids.tolist()):
+        labels[f"site_exc_{site_idx}"] = f"(location {branch_id} {site_exc_pos[site_idx]:.6f})"
+        labels[f"site_inh_{site_idx}"] = f"(location {branch_id} {site_inh_pos[site_idx]:.6f})"
 
     decor = A.decor()
     default = fit["default_properties"]
@@ -476,30 +505,30 @@ def _build_cell(config: ArborHeteroConfig, params: dict[str, float], branch_ids:
         painted_name, painted_values = _perturb_mechanism(region, mech, values, params)
         decor.paint(f'"{region}"', A.density(A.mechanism(painted_name, painted_values)))
 
-    for branch_idx in range(len(branch_ids)):
+    for site_idx in range(int(site_info["site_count"])):
         decor.place(
-            f'"branch_exc_{branch_idx}"',
+            f'"site_exc_{site_idx}"',
             A.synapse(
                 "Exp2Syn",
                 {"erev": 0.0, "tau1": params["exc_tau1_ms"], "tau2": params["exc_tau2_ms"]},
             ),
-            f"ampa_{branch_idx}",
+            f"ampa_{site_idx}",
         )
         decor.place(
-            f'"branch_exc_{branch_idx}"',
+            f'"site_exc_{site_idx}"',
             A.synapse(
                 "bnn::NMDA_CA1_pyr_SC",
                 {"e": 0.0, "tau1": 3.3, "tau2": 102.38, "mg": 1.0, "pf": 0.03},
             ),
-            f"nmda_{branch_idx}",
+            f"nmda_{site_idx}",
         )
         decor.place(
-            f'"branch_inh_{branch_idx}"',
+            f'"site_inh_{site_idx}"',
             A.synapse(
                 "Exp2Syn",
                 {"erev": -82.0, "tau1": params["inh_tau1_ms"], "tau2": params["inh_tau2_ms"]},
             ),
-            f"inh_{branch_idx}",
+            f"inh_{site_idx}",
         )
     return A.cable_cell(morphology, decor, labels, A.cv_policy_max_extent(config.cv_max_extent_um))
 
@@ -542,6 +571,30 @@ def _sample_sparse_inputs(
     branch_regions: list[str],
     params: dict[str, float],
     rng: np.random.Generator,
+    branch_lengths_um: list[float] | np.ndarray | None = None,
+) -> np.ndarray:
+    if config.input_protocol == "arbor_poisson":
+        return _sample_arbor_poisson_inputs(config, routing, branch_regions, params, rng)
+    if config.input_protocol == "neuronio_smoothed":
+        if branch_lengths_um is None:
+            branch_lengths_um = np.ones(len(branch_regions), dtype=np.float64)
+        return _sample_neuronio_smoothed_inputs(
+            config,
+            routing,
+            branch_regions,
+            np.asarray(branch_lengths_um, dtype=np.float64),
+            params,
+            rng,
+        )
+    raise ValueError(f"unsupported input_protocol: {config.input_protocol}")
+
+
+def _sample_arbor_poisson_inputs(
+    config: ArborHeteroConfig,
+    routing: np.ndarray,
+    branch_regions: list[str],
+    params: dict[str, float],
+    rng: np.random.Generator,
 ) -> np.ndarray:
     inputs = np.zeros((config.time_steps, config.input_dim), dtype=np.int8)
     exc_channels = config.input_dim // 2
@@ -575,10 +628,101 @@ def _sample_sparse_inputs(
     return inputs
 
 
-def _branch_event_times(inputs: np.ndarray, routing: np.ndarray, dt_ms: float) -> tuple[list[list[float]], list[list[float]]]:
-    num_branch = int(routing.max()) + 1
-    exc_times: list[list[float]] = [[] for _ in range(num_branch)]
-    inh_times: list[list[float]] = [[] for _ in range(num_branch)]
+def _sample_neuronio_smoothed_inputs(
+    config: ArborHeteroConfig,
+    routing: np.ndarray,
+    branch_regions: list[str],
+    branch_lengths_um: np.ndarray,
+    params: dict[str, float],
+    rng: np.random.Generator,
+) -> np.ndarray:
+    inputs = np.zeros((config.time_steps, config.input_dim), dtype=np.int8)
+    branch_regions_array = np.asarray(branch_regions, dtype=str)
+    if branch_regions_array.shape[0] != branch_lengths_um.shape[0]:
+        raise ValueError("branch_regions and branch_lengths_um must have matching length")
+
+    basal = branch_regions_array == "dend"
+    apic = branch_regions_array == "apic"
+    if not basal.any() or not apic.any():
+        raise ValueError("neuronio_smoothed input protocol requires dend and apic branches")
+
+    hold_ms = _jittered_choice(config.neuronio_rate_interval_options_ms, config.neuronio_rate_interval_jitter_ms, rng)
+    smoothing_sigma_ms = _jittered_choice(
+        config.neuronio_smoothing_sigma_options_ms,
+        config.neuronio_smoothing_sigma_jitter_ms,
+        rng,
+    )
+    coarse_steps = int(np.ceil(config.time_steps / hold_ms))
+    exc_rates = np.zeros((len(branch_regions), config.time_steps), dtype=np.float32)
+    inh_rates = np.zeros_like(exc_rates)
+
+    for mask, exc_range, diff_range in (
+        (basal, config.neuronio_basal_exc_spikes_per_100ms, config.neuronio_basal_e_minus_i_spikes_per_100ms),
+        (apic, config.neuronio_apic_exc_spikes_per_100ms, config.neuronio_apic_e_minus_i_spikes_per_100ms),
+    ):
+        exc_counts = rng.uniform(exc_range[0], exc_range[1], size=coarse_steps)
+        inh_low = np.maximum(0.0, exc_counts + diff_range[0])
+        inh_high = np.maximum(inh_low, exc_counts + diff_range[1])
+        inh_counts = rng.uniform(inh_low, inh_high)
+        adjusted_lengths = branch_lengths_um[mask] + config.neuronio_min_seg_length_um
+        total_length = float(adjusted_lengths.sum())
+        exc_coarse = adjusted_lengths[:, None] * (exc_counts[None, :] / max(total_length * 100.0, 1e-12))
+        inh_coarse = adjusted_lengths[:, None] * (inh_counts[None, :] / max(total_length * 100.0, 1e-12))
+        exc_coarse *= rng.uniform(0.5, 1.5, size=exc_coarse.shape)
+        inh_coarse *= rng.uniform(0.5, 1.5, size=inh_coarse.shape)
+        exc_full = np.repeat(exc_coarse, hold_ms, axis=1)[:, : config.time_steps]
+        inh_full = np.repeat(inh_coarse, hold_ms, axis=1)[:, : config.time_steps]
+        exc_rates[mask] = _smooth_branch_rates(exc_full, smoothing_sigma_ms)
+        inh_rates[mask] = _smooth_branch_rates(inh_full, smoothing_sigma_ms)
+
+    rate_scale = params["input_rate_scale"]
+    exc_rates *= rate_scale * max(0.0, 1.0 + params["ei_balance"])
+    inh_rates *= rate_scale * max(0.0, 1.0 - params["ei_balance"])
+
+    exc_channels = config.input_dim // 2
+    channel_branch = np.asarray(routing, dtype=np.int64)
+    channel_is_exc = np.arange(config.input_dim) < exc_channels
+    for sign, sign_mask, rates in ((1, channel_is_exc, exc_rates), (-1, ~channel_is_exc, inh_rates)):
+        channels = np.flatnonzero(sign_mask)
+        counts = np.bincount(channel_branch[channels], minlength=len(branch_regions)).astype(np.float32)
+        per_channel_rates = rates[channel_branch[channels]].T / np.maximum(counts[channel_branch[channels]], 1.0)
+        probabilities = rng.exponential(scale=np.clip(per_channel_rates, 0.0, None)).astype(np.float32, copy=False)
+        events = rng.random(probabilities.shape) < probabilities
+        inputs[:, channels] = np.where(events, sign, 0).astype(np.int8)
+    return inputs
+
+
+def _jittered_choice(options: tuple[int, ...], jitter: int, rng: np.random.Generator) -> int:
+    if not options:
+        raise ValueError("NeuronIO-like input protocol option lists must not be empty")
+    value = int(options[int(rng.integers(0, len(options)))])
+    if jitter > 0:
+        value += int(rng.integers(-jitter, jitter + 1))
+    return max(1, value)
+
+
+def _smooth_branch_rates(rates: np.ndarray, sigma_ms: int) -> np.ndarray:
+    if sigma_ms <= 0:
+        return rates.astype(np.float32, copy=False)
+    width = max(3, int(1 + 7 * sigma_ms))
+    if width % 2 == 0:
+        width += 1
+    offsets = np.arange(width, dtype=np.float32) - width // 2
+    kernel = np.exp(-0.5 * np.square(offsets / float(sigma_ms)))
+    kernel /= kernel.sum()
+    smoothed = []
+    for row in rates:
+        convolved = np.convolve(row, kernel, mode="same")
+        if convolved.shape[0] != row.shape[0]:
+            start = max(0, (convolved.shape[0] - row.shape[0]) // 2)
+            convolved = convolved[start : start + row.shape[0]]
+        smoothed.append(convolved)
+    return np.vstack(smoothed).astype(np.float32, copy=False)
+
+
+def _routed_event_times(inputs: np.ndarray, routing: np.ndarray, site_count: int, dt_ms: float) -> tuple[list[list[float]], list[list[float]]]:
+    exc_times: list[list[float]] = [[] for _ in range(site_count)]
+    inh_times: list[list[float]] = [[] for _ in range(site_count)]
     event_t, event_ch = np.nonzero(inputs)
     for t, ch in zip(event_t.tolist(), event_ch.tolist()):
         branch = int(routing[ch])
@@ -589,10 +733,110 @@ def _branch_event_times(inputs: np.ndarray, routing: np.ndarray, dt_ms: float) -
     return exc_times, inh_times
 
 
+def _template_synapse_site_info(config: ArborHeteroConfig, branch_info: dict[str, Any]) -> dict[str, Any]:
+    branch_ids = np.asarray(branch_info["branch_ids"], dtype=np.int64)
+    branch_regions = np.asarray(branch_info["regions"], dtype=str)
+    branch_lengths = np.asarray(branch_info["lengths_um"], dtype=np.float64)
+    if config.synapse_routing == "branch":
+        channel_branch_routing = _interlocking_branch_routing(config.input_dim, int(branch_ids.shape[0]))
+        return {
+            "mode": "branch",
+            "site_count": int(branch_ids.shape[0]),
+            "site_branch_indices": np.arange(branch_ids.shape[0], dtype=np.int64),
+            "site_branch_ids": branch_ids,
+            "site_regions": branch_regions,
+            "site_exc_positions": np.full(branch_ids.shape[0], 0.65, dtype=np.float64),
+            "site_inh_positions": np.full(branch_ids.shape[0], 0.35, dtype=np.float64),
+            "channel_branch_routing": channel_branch_routing,
+            "channel_event_routing": channel_branch_routing,
+        }
+    if config.synapse_routing != "distributed":
+        raise ValueError(f"unsupported synapse_routing: {config.synapse_routing}")
+    site_count = int(config.distributed_sites_per_polarity or (config.input_dim // 2))
+    if site_count <= 0:
+        raise ValueError("distributed_sites_per_polarity must be positive")
+    site_branch_indices = _allocate_distributed_site_branches(branch_lengths, site_count)
+    site_branch_ids = branch_ids[site_branch_indices]
+    site_regions = branch_regions[site_branch_indices]
+    site_exc_positions = _positions_within_branch_runs(site_branch_indices, low=0.15, high=0.90)
+    site_inh_positions = site_exc_positions.copy()
+    half = config.input_dim // 2
+    channel_event_routing = np.empty(config.input_dim, dtype=np.int64)
+    channel_event_routing[:half] = np.arange(half, dtype=np.int64) % site_count
+    channel_event_routing[half:] = np.arange(config.input_dim - half, dtype=np.int64) % site_count
+    channel_branch_routing = site_branch_indices[channel_event_routing]
+    return {
+        "mode": "distributed",
+        "site_count": site_count,
+        "site_branch_indices": site_branch_indices,
+        "site_branch_ids": site_branch_ids,
+        "site_regions": site_regions,
+        "site_exc_positions": site_exc_positions,
+        "site_inh_positions": site_inh_positions,
+        "channel_branch_routing": channel_branch_routing,
+        "channel_event_routing": channel_event_routing,
+    }
+
+
+def _allocate_distributed_site_branches(branch_lengths_um: np.ndarray, site_count: int) -> np.ndarray:
+    weights = np.asarray(branch_lengths_um, dtype=np.float64)
+    weights = np.clip(weights, 1e-6, None)
+    raw = weights / weights.sum() * site_count
+    counts = np.floor(raw).astype(np.int64)
+    if site_count >= counts.shape[0]:
+        counts = np.maximum(counts, 1)
+    while int(counts.sum()) > site_count:
+        candidates = np.flatnonzero(counts > 1)
+        if candidates.size == 0:
+            break
+        idx = int(candidates[np.argmin(raw[candidates] - counts[candidates])])
+        counts[idx] -= 1
+    remainder = site_count - int(counts.sum())
+    if remainder > 0:
+        order = np.argsort(raw - counts)[::-1]
+        for idx in order[:remainder]:
+            counts[int(idx)] += 1
+    return np.repeat(np.arange(counts.shape[0], dtype=np.int64), counts)[:site_count]
+
+
+def _positions_within_branch_runs(site_branch_indices: np.ndarray, *, low: float, high: float) -> np.ndarray:
+    positions = np.empty(site_branch_indices.shape[0], dtype=np.float64)
+    for branch_idx in np.unique(site_branch_indices):
+        site_indices = np.flatnonzero(site_branch_indices == branch_idx)
+        if site_indices.size == 1:
+            positions[site_indices] = 0.5 * (low + high)
+        else:
+            positions[site_indices] = np.linspace(low, high, site_indices.size)
+    return positions
+
+
 def _threshold_spikes(soma_mv: np.ndarray, threshold_mv: float) -> np.ndarray:
     above = soma_mv >= threshold_mv
     spikes = np.zeros(soma_mv.shape, dtype=np.float32)
     spikes[1:] = np.logical_and(above[1:], np.logical_not(above[:-1])).astype(np.float32)
+    return spikes
+
+
+def _label_spikes(config: ArborHeteroConfig, soma_mv: np.ndarray, params: dict[str, float]) -> np.ndarray:
+    if config.spike_label_mode == "threshold_crossing":
+        return _threshold_spikes(soma_mv, params["spike_threshold_mv"])
+    if config.spike_label_mode == "local_peak":
+        return _local_peak_spikes(soma_mv, config.spike_peak_threshold_mv)
+    raise ValueError(f"unsupported spike_label_mode: {config.spike_label_mode}")
+
+
+def _local_peak_spikes(soma_mv: np.ndarray, threshold_mv: float) -> np.ndarray:
+    spikes = np.zeros(soma_mv.shape, dtype=np.float32)
+    if soma_mv.shape[0] < 3:
+        return spikes
+    peaks = np.logical_and.reduce(
+        (
+            soma_mv[1:-1] > soma_mv[:-2],
+            soma_mv[1:-1] >= soma_mv[2:],
+            soma_mv[1:-1] > threshold_mv,
+        )
+    )
+    spikes[1:-1] = peaks.astype(np.float32)
     return spikes
 
 
@@ -671,6 +915,7 @@ def _simulator_metadata(
     arbor_config: dict[str, Any],
     branch_info: dict[str, Any],
 ) -> dict[str, Any]:
+    site_info = _template_synapse_site_info(config, branch_info)
     return {
         "name": "arbor",
         "arbor_version": arbor_version,
@@ -689,7 +934,18 @@ def _simulator_metadata(
         "heterogeneity_names": list(HETEROGENEITY_NAMES),
         "branch_ids": branch_info["branch_ids"],
         "branch_regions": branch_info["regions"],
-        "routing": "interlocking-inputs-to-selected-allen-morphology-branches",
+        "branch_lengths_um": branch_info["lengths_um"],
+        "routing": {
+            "input": "channel-to-branch routing used for stimulus statistics",
+            "event": "channel-to-physical-synapse-site routing used by Arbor event generators",
+            "synapse_routing": config.synapse_routing,
+            "site_count": int(site_info["site_count"]),
+            "site_regions": np.asarray(site_info["site_regions"], dtype=str).tolist(),
+            "site_branch_indices": np.asarray(site_info["site_branch_indices"], dtype=np.int64).tolist(),
+            "site_exc_positions": np.asarray(site_info["site_exc_positions"], dtype=float).round(6).tolist(),
+            "channel_branch_routing": np.asarray(site_info["channel_branch_routing"], dtype=np.int64).tolist(),
+            "channel_event_routing": np.asarray(site_info["channel_event_routing"], dtype=np.int64).tolist(),
+        },
         "target_columns": ["spike", "soma"],
         "soma_target_units": "normalized_neuronio",
         "custom_catalogues": {
@@ -842,7 +1098,17 @@ def _template_branch_info(num_branch: int) -> dict[str, Any]:
     apical_idx = np.linspace(0, len(apical) - 1, apical_count, dtype=int)
     branch_ids = [basal[idx] for idx in basal_idx] + [apical[idx] for idx in apical_idx]
     regions = ["dend"] * len(basal_idx) + ["apic"] * len(apical_idx)
-    return {"branch_ids": branch_ids, "regions": regions}
+    lengths_um = [_branch_length_um(morphology, branch_id) for branch_id in branch_ids]
+    return {"branch_ids": branch_ids, "regions": regions, "lengths_um": lengths_um}
+
+
+def _branch_length_um(morphology, branch_id: int) -> float:
+    length = 0.0
+    for segment in morphology.branch_segments(branch_id):
+        prox = segment.prox
+        dist = segment.dist
+        length += float(np.sqrt((dist.x - prox.x) ** 2 + (dist.y - prox.y) ** 2 + (dist.z - prox.z) ** 2))
+    return max(length, 1e-6)
 
 
 def _split_counts(samples: int, shards: int) -> list[int]:
@@ -864,3 +1130,9 @@ def _validate_config(config: ArborHeteroConfig) -> None:
         raise ValueError("sim_batch_size must be positive")
     if config.arbor_threads <= 0:
         raise ValueError("arbor_threads must be positive")
+    if config.input_protocol not in {"arbor_poisson", "neuronio_smoothed"}:
+        raise ValueError("input_protocol must be one of: arbor_poisson, neuronio_smoothed")
+    if config.synapse_routing not in {"branch", "distributed"}:
+        raise ValueError("synapse_routing must be one of: branch, distributed")
+    if config.spike_label_mode not in {"threshold_crossing", "local_peak"}:
+        raise ValueError("spike_label_mode must be one of: threshold_crossing, local_peak")

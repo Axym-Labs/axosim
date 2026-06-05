@@ -77,6 +77,59 @@ def _post_event_per_trace(event_mask: np.ndarray, lookback: int) -> np.ndarray:
     return result
 
 
+def _prevalence_matched_threshold(scores: np.ndarray, positive_count: int) -> float:
+    flat = np.asarray(scores).reshape(-1)
+    if positive_count <= 0:
+        return float("inf")
+    if positive_count >= flat.size:
+        return float("-inf")
+    return float(np.partition(flat, flat.size - positive_count)[flat.size - positive_count])
+
+
+def _spike_timing_summary(pred_spike_binary: np.ndarray, tgt_spike_binary: np.ndarray) -> dict[str, Any]:
+    spike_timing_errors = []
+    spike_precision_recall = {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+
+    if tgt_spike_binary.sum() > 0 and pred_spike_binary.sum() > 0:
+        # Compute recall: for each target spike, nearest pred spike.
+        tgt_spike_idx = np.where(tgt_spike_binary)[0]
+        pred_spike_idx = np.where(pred_spike_binary)[0]
+
+        matched_dists = []
+        for t_idx in tgt_spike_idx:
+            dists = np.abs(pred_spike_idx - t_idx)
+            if len(dists) > 0:
+                matched_dists.append(np.min(dists))
+
+        if matched_dists:
+            spike_timing_errors = [float(d) for d in matched_dists]
+            spike_precision_recall["recall"] = float(np.mean(np.array(matched_dists) <= 2))
+
+        # Compute precision: for each pred spike, nearest target spike.
+        matched_dists_pred = []
+        for p_idx in pred_spike_idx:
+            dists = np.abs(tgt_spike_idx - p_idx)
+            if len(dists) > 0:
+                matched_dists_pred.append(np.min(dists))
+
+        if matched_dists_pred:
+            spike_precision_recall["precision"] = float(np.mean(np.array(matched_dists_pred) <= 2))
+
+        if spike_precision_recall["precision"] + spike_precision_recall["recall"] > 0:
+            spike_precision_recall["f1"] = float(
+                2 * spike_precision_recall["precision"] * spike_precision_recall["recall"]
+                / (spike_precision_recall["precision"] + spike_precision_recall["recall"])
+            )
+
+    return {
+        "mean_timing_error_steps": float(np.mean(spike_timing_errors)) if spike_timing_errors else None,
+        "median_timing_error_steps": float(np.median(spike_timing_errors)) if spike_timing_errors else None,
+        "precision_at_2steps": spike_precision_recall["precision"],
+        "recall_at_2steps": spike_precision_recall["recall"],
+        "f1_at_2steps": spike_precision_recall["f1"],
+    }
+
+
 def _row_for_mask(label: str, residual: np.ndarray, mask: np.ndarray) -> dict[str, Any]:
     count = int(mask.sum())
     if count == 0:
@@ -101,7 +154,9 @@ def compute_regime_stratified_metrics(
     target: np.ndarray,
     inputs: np.ndarray | None = None,
     soma_scale: float = 0.1,
+    soma_bias_mv: float = -67.7,
     ignore_start: int = 0,
+    post_event_quantile: float = 0.95,
 ) -> dict[str, Any]:
     """Compute M2: Regime-stratified error metrics.
 
@@ -110,11 +165,15 @@ def compute_regime_stratified_metrics(
         target: Array of shape (..., 2) with [spike_label, soma_voltage] in normalized units.
         inputs: Optional array of shape (...,) or (..., channels) with input events.
         soma_scale: Scale factor to convert normalized soma to mV (default 0.1).
+        soma_bias_mv: Bias added after inverse soma scaling to recover mV.
         ignore_start: Number of initial timesteps to ignore.
+        post_event_quantile: Event-count quantile used to define high input-drive timesteps.
 
     Returns:
         Dictionary with regime-stratified metrics.
     """
+    if not 0.0 <= post_event_quantile <= 1.0:
+        raise ValueError("post_event_quantile must be in [0, 1]")
     pred = _as_trace_array(np.asarray(prediction))
     tgt = _as_trace_array(np.asarray(target))
 
@@ -142,8 +201,8 @@ def compute_regime_stratified_metrics(
     tgt_spike = tgt[..., 0]
 
     # Convert to mV
-    pred_soma_mv = pred_soma / soma_scale
-    tgt_soma_mv = tgt_soma / soma_scale
+    pred_soma_mv = pred_soma / soma_scale + soma_bias_mv
+    tgt_soma_mv = tgt_soma / soma_scale + soma_bias_mv
     residual_mv = pred_soma_mv - tgt_soma_mv
     tgt_soma_flat = tgt_soma_mv.reshape(-1)
     residual_flat = residual_mv.reshape(-1)
@@ -195,56 +254,30 @@ def compute_regime_stratified_metrics(
     # M2d: Post-event error (if inputs provided)
     post_event_rows = []
     post_event_mask = np.zeros_like(spike_mask, dtype=bool)
+    event_count_threshold: float | None = None
     if inp is not None:
         # Count events per timestep
         event_counts = np.count_nonzero(inp, axis=-1)
 
-        # Within-window post-event mask (event at t-2, t-1, or t)
-        post_event_mask = _post_event_per_trace(event_counts > 0, lookback=2)
+        # With thousands of synaptic channels, "any event" can cover almost every
+        # timestep. Use recent high-drive input instead and record the threshold.
+        if np.count_nonzero(event_counts) > 0:
+            event_count_threshold = float(np.quantile(event_counts, post_event_quantile))
+            event_mask = event_counts >= event_count_threshold
+            if event_count_threshold <= 0.0:
+                event_mask = event_counts > 0
+            post_event_mask = _post_event_per_trace(event_mask, lookback=2)
         post_event_rows = [
             _row_for_mask("post_event", residual_mv, post_event_mask),
             _row_for_mask("no_recent_event", residual_mv, ~post_event_mask),
         ]
 
-    # M2e: Spike timing precision
-    # For each predicted spike, find nearest target spike; measure timing error
-    spike_timing_errors = []
-    spike_precision_recall = {"precision": 0.0, "recall": 0.0, "f1": 0.0}
-
-    # Simple threshold-based spike detection on predictions
+    # M2e: Spike timing precision. The fixed threshold is a calibration check;
+    # the prevalence-matched threshold is a diagnostic event-timing operating point.
     pred_spike_binary = pred_spike_flat > 0.0
     tgt_spike_binary = tgt_spike_flat > 0.5
-
-    if tgt_spike_binary.sum() > 0 and pred_spike_binary.sum() > 0:
-        # Compute recall: for each target spike, nearest pred spike
-        tgt_spike_idx = np.where(tgt_spike_binary)[0]
-        pred_spike_idx = np.where(pred_spike_binary)[0]
-
-        matched_dists = []
-        for t_idx in tgt_spike_idx:
-            dists = np.abs(pred_spike_idx - t_idx)
-            if len(dists) > 0:
-                matched_dists.append(np.min(dists))
-
-        if matched_dists:
-            spike_timing_errors = [float(d) for d in matched_dists]
-            spike_precision_recall["recall"] = float(np.mean(np.array(matched_dists) <= 2))
-
-        # Compute precision: for each pred spike, nearest target spike
-        matched_dists_pred = []
-        for p_idx in pred_spike_idx:
-            dists = np.abs(tgt_spike_idx - p_idx)
-            if len(dists) > 0:
-                matched_dists_pred.append(np.min(dists))
-
-        if matched_dists_pred:
-            spike_precision_recall["precision"] = float(np.mean(np.array(matched_dists_pred) <= 2))
-
-        if spike_precision_recall["precision"] + spike_precision_recall["recall"] > 0:
-            spike_precision_recall["f1"] = float(
-                2 * spike_precision_recall["precision"] * spike_precision_recall["recall"]
-                / (spike_precision_recall["precision"] + spike_precision_recall["recall"])
-            )
+    matched_threshold = _prevalence_matched_threshold(pred_spike_flat, int(tgt_spike_binary.sum()))
+    pred_spike_rate_matched = pred_spike_flat >= matched_threshold
 
     far_subthreshold = (~near_spike_mask) & (~post_event_mask)
     mvp_regimes = [
@@ -265,11 +298,23 @@ def compute_regime_stratified_metrics(
         "slope_regime": slope_rows,
         "spike_proximity": spike_proximity_rows,
         "post_event": post_event_rows,
+        "post_event_definition": {
+            "event_count_quantile": post_event_quantile if inp is not None else None,
+            "event_count_threshold": event_count_threshold,
+            "lookback_steps": 2 if inp is not None else None,
+            "semantics": (
+                "recent high-input-drive timestep, not merely any single synaptic event; "
+                "this avoids all-trace coverage on high-dimensional sparse event inputs"
+            ) if inp is not None else None,
+        },
         "spike_timing": {
-            "mean_timing_error_steps": float(np.mean(spike_timing_errors)) if spike_timing_errors else None,
-            "median_timing_error_steps": float(np.median(spike_timing_errors)) if spike_timing_errors else None,
-            "precision_at_2steps": spike_precision_recall["precision"],
-            "recall_at_2steps": spike_precision_recall["recall"],
-            "f1_at_2steps": spike_precision_recall["f1"],
+            **_spike_timing_summary(pred_spike_binary, tgt_spike_binary),
+            "threshold": 0.0,
+            "semantics": "fixed logit threshold; use this as a calibration/operating-point check",
+        },
+        "spike_timing_prevalence_matched": {
+            **_spike_timing_summary(pred_spike_rate_matched, tgt_spike_binary),
+            "threshold": float(matched_threshold),
+            "semantics": "diagnostic threshold chosen so total predicted spike count matches the teacher under the current mask",
         },
     }

@@ -1,0 +1,8 @@
+{
+  "input_dim": 1278,
+  "d_model": 64,
+  "n_layers": 2,
+  "d_state": 16,
+  "d_conv": 4,
+  "expand": 2
+}
