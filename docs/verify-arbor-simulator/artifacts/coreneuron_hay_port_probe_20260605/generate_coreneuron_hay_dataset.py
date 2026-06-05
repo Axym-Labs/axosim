@@ -44,10 +44,14 @@ def main() -> int:
     parser.add_argument("--v-init-mv", type=float, default=-76.0)
     parser.add_argument("--exc-event-keep-prob", type=float, default=1.0)
     parser.add_argument("--inh-event-keep-prob", type=float, default=1.0)
+    parser.add_argument("--exc-gmax-scale", type=float, default=1.0)
+    parser.add_argument("--inh-gmax-scale", type=float, default=1.0)
     args = parser.parse_args()
 
     validate_keep_prob(args.exc_event_keep_prob, "exc-event-keep-prob")
     validate_keep_prob(args.inh_event_keep_prob, "inh-event-keep-prob")
+    validate_positive(args.exc_gmax_scale, "exc-gmax-scale")
+    validate_positive(args.inh_gmax_scale, "inh-gmax-scale")
     output_root = Path(args.output_root).resolve()
     summary = write_splits(
         output_root=output_root,
@@ -61,6 +65,8 @@ def main() -> int:
         v_init_mv=args.v_init_mv,
         exc_event_keep_prob=args.exc_event_keep_prob,
         inh_event_keep_prob=args.inh_event_keep_prob,
+        exc_gmax_scale=args.exc_gmax_scale,
+        inh_gmax_scale=args.inh_gmax_scale,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
@@ -79,6 +85,8 @@ def write_splits(
     v_init_mv: float,
     exc_event_keep_prob: float,
     inh_event_keep_prob: float,
+    exc_gmax_scale: float,
+    inh_gmax_scale: float,
 ) -> dict[str, Any]:
     from neuron import coreneuron, h
     import neuron
@@ -95,8 +103,13 @@ def write_splits(
     output_root.mkdir(parents=True, exist_ok=True)
     os.chdir(mechanism_root)
     load_probe_mechanisms(h, mechanism_root)
-    h.load_file("stdrun.hoc")
-    h.load_file("import3d.hoc")
+    hoc_lib = Path(os.environ.get("NEURONHOME", "")) / "share" / "nrn" / "lib" / "hoc"
+    if hoc_lib.exists():
+        h.load_file(str(hoc_lib / "stdrun.hoc"))
+        h.load_file(str(hoc_lib / "import3d.hoc"))
+    else:
+        h.load_file("stdrun.hoc")
+        h.load_file("import3d.hoc")
     h.load_file(str(source_root / "L5PCbiophys5b.hoc"))
     h.load_file(str(source_root / "L5PCtemplate_2.hoc"))
     h.dt = 0.025
@@ -123,6 +136,8 @@ def write_splits(
             v_init_mv=v_init_mv,
             exc_event_keep_prob=exc_event_keep_prob,
             inh_event_keep_prob=inh_event_keep_prob,
+            exc_gmax_scale=exc_gmax_scale,
+            inh_gmax_scale=inh_gmax_scale,
         )
 
     summary = {
@@ -145,6 +160,10 @@ def write_splits(
             "event_keep_prob": {
                 "excitatory": float(exc_event_keep_prob),
                 "inhibitory": float(inh_event_keep_prob),
+            },
+            "gmax_scale": {
+                "excitatory": float(exc_gmax_scale),
+                "inhibitory": float(inh_gmax_scale),
             },
         },
     }
@@ -170,6 +189,8 @@ def write_split(
     v_init_mv: float,
     exc_event_keep_prob: float,
     inh_event_keep_prob: float,
+    exc_gmax_scale: float,
+    inh_gmax_scale: float,
 ) -> dict[str, Any]:
     rng = np.random.default_rng(seed)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -192,6 +213,8 @@ def write_split(
             v_init_mv=v_init_mv,
             exc_event_keep_prob=exc_event_keep_prob,
             inh_event_keep_prob=inh_event_keep_prob,
+            exc_gmax_scale=exc_gmax_scale,
+            inh_gmax_scale=inh_gmax_scale,
         )
         inputs[sample_index] = trace["inputs"]
         targets[sample_index] = trace["targets"]
@@ -227,6 +250,10 @@ def write_split(
             "event_keep_prob": {
                 "excitatory": float(exc_event_keep_prob),
                 "inhibitory": float(inh_event_keep_prob),
+            },
+            "gmax_scale": {
+                "excitatory": float(exc_gmax_scale),
+                "inhibitory": float(inh_gmax_scale),
             },
         },
         "shards": [
@@ -264,6 +291,8 @@ def simulate_one_trace(
     v_init_mv: float,
     exc_event_keep_prob: float,
     inh_event_keep_prob: float,
+    exc_gmax_scale: float,
+    inh_gmax_scale: float,
 ) -> dict[str, np.ndarray]:
     cell = h.L5PCtemplate(str(source_root / "morphologies" / "cell1.asc"))
     h.CVode().active(0)
@@ -277,7 +306,15 @@ def simulate_one_trace(
     inputs_exc = apply_event_keep(sample_rng, inputs_exc, exc_event_keep_prob)
     inputs_inh = apply_event_keep(sample_rng, inputs_inh, inh_event_keep_prob)
     pc = h.ParallelContext()
-    netcons, synapses, stim_refs = attach_deterministic_synapses(h, pc, segments, inputs_exc, inputs_inh)
+    netcons, synapses, stim_refs = attach_deterministic_synapses(
+        h,
+        pc,
+        segments,
+        inputs_exc,
+        inputs_inh,
+        exc_gmax_scale=exc_gmax_scale,
+        inh_gmax_scale=inh_gmax_scale,
+    )
     t_vec = h.Vector()
     soma_vec = h.Vector()
     t_vec.record(h._ref_t)
@@ -314,6 +351,11 @@ def simulate_one_trace(
 def validate_keep_prob(value: float, name: str) -> None:
     if not 0.0 <= value <= 1.0:
         raise ValueError(f"{name} must be in [0, 1], got {value}")
+
+
+def validate_positive(value: float, name: str) -> None:
+    if value <= 0.0:
+        raise ValueError(f"{name} must be positive, got {value}")
 
 
 def apply_event_keep(rng: np.random.Generator, events: np.ndarray, keep_prob: float) -> np.ndarray:

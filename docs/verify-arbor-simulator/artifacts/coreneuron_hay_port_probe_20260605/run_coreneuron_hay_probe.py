@@ -171,7 +171,16 @@ def run_one(*, h, source_root: Path, backend: str, sample_index: int, sample_rng
     return row
 
 
-def attach_deterministic_synapses(h, pc, segments: list, inputs_exc: np.ndarray, inputs_inh: np.ndarray) -> tuple[list, list, list]:
+def attach_deterministic_synapses(
+    h,
+    pc,
+    segments: list,
+    inputs_exc: np.ndarray,
+    inputs_inh: np.ndarray,
+    *,
+    exc_gmax_scale: float = 1.0,
+    inh_gmax_scale: float = 1.0,
+) -> tuple[list, list, list]:
     netcons = []
     synapses = []
     event_times = []
@@ -183,7 +192,7 @@ def attach_deterministic_synapses(h, pc, segments: list, inputs_exc: np.ndarray,
         ex_syn.tau_d_AMPA = 3.0
         ex_syn.tau_r_NMDA = 2.0
         ex_syn.tau_d_NMDA = 70.0
-        ex_syn.gmax = 0.0004
+        ex_syn.gmax = 0.0004 * exc_gmax_scale
         ex_syn.e = 0
         ex_gid = next_gid
         next_gid += 1
@@ -198,7 +207,7 @@ def attach_deterministic_synapses(h, pc, segments: list, inputs_exc: np.ndarray,
         inh_syn = h.DetGABA(segment)
         inh_syn.tau_r = 0.2
         inh_syn.tau_d = 8.0
-        inh_syn.gmax = 0.001
+        inh_syn.gmax = 0.001 * inh_gmax_scale
         inh_syn.e = -80
         inh_gid = next_gid
         next_gid += 1

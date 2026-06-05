@@ -3,6 +3,28 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- EXPERIMENT (2026-06-05 21:22): Completed a bounded conductance-calibration
+  autoresearch loop targeting RMSE improvement without degrading simulator
+  defensibility. Added explicit `--exc-gmax-scale`/`--inh-gmax-scale`
+  controls to the CoreNEURON/Hay dataset generator and
+  `artifacts/run_coreneuron_gmax_autoresearch.sh`. Seven teacher candidates
+  were ranked on fresh matched `16 x 6s` validation traces using only
+  predeclared teacher statistics, not model metrics. The teacher-stat winner
+  was `exc_gmax_scale=0.925`, `inh_gmax_scale=1.0`, with unchanged event
+  distribution (`0.010959` event fraction), spike rate `0.8958 Hz`, clipped
+  soma mean/std `-68.2684/3.3319 mV`, and clipped `|dV/dt|` p95/p99
+  `0.4465/0.6884`; it slightly beat the existing `exc_event_keep_prob=0.925`
+  teacher objective because it preserves events and matches dV/dt better.
+  However, `80k` Mamba model evaluation on this setting produced worse
+  RMSE/AUC than the current accepted run: `0.9769 mV / 0.9564`, near-spike
+  RMSE `5.2105`, timing F1 `0.1627`, no sanity flags, plots produced. A
+  hotter but still small `exc_gmax_scale=0.95` candidate also failed:
+  RMSE/AUC `1.0438 mV / 0.9592`, near-spike RMSE `4.8532`, no sanity flags,
+  plots produced. Decision: do not replace the provisional default for metric
+  reasons. Conductance scaling is a defensible alternative lever, but this
+  loop is negative evidence for RMSE improvement under the current `80k`
+  protocol.
+
 - MILESTONE (2026-06-05 20:10): Validated the CoreNEURON/Hay GPU execution
   path on this machine using NEURON `9.0.1`, NVIDIA HPC SDK `26.3`, CUDA
   `13.1`, and the RTX `5090`. The installed conda NEURON `8.2.7` remains

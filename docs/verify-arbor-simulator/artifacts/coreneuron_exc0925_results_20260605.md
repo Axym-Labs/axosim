@@ -7,8 +7,10 @@ Date: 2026-06-05
 Arbor is deferred to the population-level follow-up. The current benchmark path
 uses CoreNEURON/Hay because it preserves the source Hay morphology/HOC/channel
 lineage and reproduced fixed-step NEURON exactly in the probe suite. GPU
-execution is still pending because this machine lacks `nvc++`, but the
-simulator path is CoreNEURON-compatible.
+execution is now validated for the deterministic-Hay subset under source-built
+NEURON `9.0.1` with NVIDIA HPC SDK `26.3`/CUDA `13.1`; the exact installed
+conda NEURON `8.2.7` package remains CPU-only and should not be claimed as a
+GPU run.
 
 ## Accepted Simulator Setting
 
@@ -68,3 +70,21 @@ Yes. NEURO-BENCH already reports metrics more sophisticated than RMSE:
 
 For paper writing, RMSE should stay a headline metric for comparability, but
 M1b/M2 should be the defensibility metrics that explain what a given RMSE means.
+
+## Follow-Up Conductance Calibration
+
+Artifact: `artifacts/coreneuron_gmax_autoresearch_20260605.md`.
+
+One bounded follow-up tested whether small deterministic-synapse conductance
+scales could reduce RMSE without changing the input event distribution. This is
+conceptually more defensible than event deletion because it preserves the
+stimulus and calibrates the deterministic replacement synapse efficacy.
+
+Result: the idea did not improve RMSE under the `80k` Mamba cap. The
+teacher-statistic winner, `exc_gmax_scale=0.925`, had a better teacher objective
+than `exc_event_keep_prob=0.925` but worse Mamba RMSE/AUC
+(`0.9769 mV / 0.9564`). A hotter `exc_gmax_scale=0.95` candidate also failed
+to improve RMSE (`1.0438 mV / 0.9592`). Do not switch the default to these
+settings for metric reasons; keep them as documented negative evidence and as a
+possible input-policy-purer simulator variant if future larger-seed validation
+supports it.
