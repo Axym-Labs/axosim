@@ -73,8 +73,13 @@ def run_probe(
 
     os.chdir(mechanism_root)
     load_probe_mechanisms(h, mechanism_root)
-    h.load_file("stdrun.hoc")
-    h.load_file("import3d.hoc")
+    hoc_lib = Path(os.environ.get("NEURONHOME", "")) / "share" / "nrn" / "lib" / "hoc"
+    if hoc_lib.exists():
+        h.load_file(str(hoc_lib / "stdrun.hoc"))
+        h.load_file(str(hoc_lib / "import3d.hoc"))
+    else:
+        h.load_file("stdrun.hoc")
+        h.load_file("import3d.hoc")
     h.load_file(str(source_root / "L5PCbiophys5b.hoc"))
     h.load_file(str(source_root / "L5PCtemplate_2.hoc"))
     h.dt = 0.025
@@ -121,7 +126,11 @@ def run_probe(
 def load_probe_mechanisms(h, mechanism_root: Path) -> None:
     for candidate in (mechanism_root / "x86_64" / ".libs" / "libnrnmech.so", mechanism_root / "x86_64" / "libnrnmech.so"):
         if candidate.exists():
-            h.nrn_load_dll(str(candidate))
+            try:
+                h.nrn_load_dll(str(candidate))
+            except RuntimeError as error:
+                if "user defined name already exists" not in str(error):
+                    raise
             return
     raise FileNotFoundError(f"NEURON mechanism library not found under {mechanism_root / 'x86_64'}")
 

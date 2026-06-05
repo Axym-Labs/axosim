@@ -37,9 +37,19 @@ current time constraint.
   - `x86_64/libcorenrnmech.so`
   - `x86_64/special`
   - `x86_64/special-core`
-- The local NEURON Python package exposes CoreNEURON GPU controls, but this
-  machine currently lacks `nvc++`, so GPU MOD compilation/execution was not
-  validated in this pass.
+- GPU update: the installed conda NEURON `8.2.7` package is CPU-only
+  (`CORENRN_ENABLE_GPU OFF`). A source NEURON `8.2.7` GPU build configured
+  successfully with NVIDIA HPC SDK but failed device linking on
+  `coreneuron::celsius` for Hay ion mechanisms. The validated GPU path is
+  therefore NEURON `9.0.1` from source with NVIDIA HPC SDK `26.3`, CUDA
+  `13.1`, and the RTX `5090`.
+- The NEURON `9.0.1` GPU path compiles the deterministic Hay AMPA/NMDA/GABA
+  generator. Unused `epsp.mod` is excluded because it fails 9.x NMODL
+  translation and is not part of the deterministic source-teacher path.
+- Local toolchain note: CUDA `13.1` on this Ubuntu/GCC/glibc stack required a
+  local NVIDIA SDK header workaround for `rsqrt`/`rsqrtf` exception-spec
+  declarations. The patched file is under the user-local NVIDIA SDK install,
+  not in this repository.
 
 ## Numerical Correctness
 
@@ -75,13 +85,30 @@ regime:
 | clipped soma mean/std | `-67.9793 / 3.7700 mV` |
 | clipped `|dV/dt|` p95/p99 | `0.5085 / 0.8386 mV/step` |
 
+NEURON `9.0.1` CPU and GPU CoreNEURON were then compared on the same
+deterministic mechanism set with `8 x 500 ms` seeded traces:
+
+| metric | value |
+| --- | ---: |
+| CPU elapsed | `24.85 s` |
+| GPU elapsed | `131.30 s` |
+| max spike/event delta | `0.0` |
+| max soma-stat delta | `7.6e-11 mV` |
+| max other voltage-summary delta | `3.4e-12` |
+
+The GPU run reports one RTX `5090` device and uses CoreNEURON GPU execution.
+The single-cell GPU path is slower than CPU at this scale, so the evidence is
+correctness evidence and a path to population-level scaling, not a speed claim
+for one cell.
+
 ## Interpretation
 
 This is a successful simulator-correctness replication for the NEURON-family
 path: CoreNEURON reproduces the fixed-step Hay/NEURON data generator exactly
-on the tested traces, including spiking traces. It is not yet a completed GPU
-benchmark run because the machine is missing the NVIDIA HPC SDK compiler needed
-for GPU mechanism compilation.
+on the tested traces, including spiking traces. GPU execution is now validated
+for the NEURON `9.0.1` deterministic-Hay subset and matches CPU summaries to
+floating-point noise. The exact-version NEURON `8.2.7` GPU path is not
+validated and should not be claimed.
 
 The next implementation step is to turn this probe into the replacement dataset
 generator, preserving the source-Hay target policy and capping model metric

@@ -3,6 +3,24 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- MILESTONE (2026-06-05 20:10): Validated the CoreNEURON/Hay GPU execution
+  path on this machine using NEURON `9.0.1`, NVIDIA HPC SDK `26.3`, CUDA
+  `13.1`, and the RTX `5090`. The installed conda NEURON `8.2.7` remains
+  CPU-only (`CORENRN_ENABLE_GPU OFF`), and a source NEURON `8.2.7` GPU build
+  failed at device linkage for `coreneuron::celsius`, so the working GPU path
+  is explicitly NEURON `9.0.1`. Mechanisms compiled for CPU NEURON and GPU
+  CoreNEURON with the deterministic Hay AMPA/NMDA/GABA subset; unused
+  `epsp.mod` was excluded because it fails 9.x NMODL translation and is not
+  part of the current deterministic generator. CPU-vs-GPU validation on
+  `8 x 500 ms` seeded traces matched to floating-point noise: spike/event
+  metrics exactly equal, maximum row-wise soma-stat deltas `<=7.6e-11 mV`
+  and other voltage-summary deltas `~1e-13` to `1e-12`. Single-cell GPU was
+  slower than CPU (`131.3 s` vs `24.9 s` elapsed), as expected; this is a
+  correctness and future population-scaling milestone, not a single-cell speed
+  claim. Added
+  `artifacts/coreneuron_hay_port_probe_20260605/run_coreneuron_hay_gpu_validation.sh`
+  to reproduce the CPU/GPU comparison from the local NEURON 9 build.
+
 - MILESTONE (2026-06-05 18:50): Completed the first bounded CoreNEURON/Hay
   teacher-distribution calibration pass under the `<=80k` presentation rule.
   Consolidated
