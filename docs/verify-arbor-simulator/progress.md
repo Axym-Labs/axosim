@@ -3,6 +3,38 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- EXPERIMENT (2026-06-05 23:26): Selected and validated the current Mamba
+  metric path: `soma075` Mamba with a learned spike threshold. Artifact:
+  `artifacts/coreneuron_soma075_calibrated_20260605.md`. Fresh training used
+  the accepted CoreNEURON/Hay `exc_event_keep_prob=0.925` teacher, exactly
+  `80k` presentations, `spike_loss_weight=0.25`, `soma_loss_weight=0.75`,
+  and CUDA. The spike threshold was learned on the `32` training traces by
+  matching calibration-set spike prevalence, then frozen for the `16`-trace
+  validation evaluation; this avoids validation-target threshold leakage.
+  Learned threshold: `-2.6941`. Result: RMSE/AUC `0.8507 mV / 0.9666`,
+  near-spike RMSE `4.6228`, calibrated spike-count MAE `3.8125`, calibrated
+  timing F1 `0.1272`, diagnostic plots produced. Raw zero-threshold spike
+  sanity still flags `threshold_zero_predicts_no_spikes`, but calibrated
+  threshold flags are none. Interpretation: accept this as the current
+  voltage/RMSE-oriented Mamba path with explicit reporting of calibrated and
+  raw spike operating points; do not claim spike timing is solved.
+
+- DECISION (2026-06-05 23:26): Current simulator-path framing for paper notes:
+  CoreNEURON/Hay is preferable to the old NeuronIO-only path because it keeps
+  the source Hay morphology/HOC/channel lineage while giving an explicit
+  NEURON/CoreNEURON execution path, reproducible deterministic synapse
+  mechanisms, validated CPU-vs-GPU equivalence on the deterministic subset,
+  much faster data loading/training throughput in the current shard policy,
+  and a clear route to future population-level parallelism. It is preferable
+  to the abandoned Arbor path for Paper 1 because it avoids the unresolved
+  Arbor morphology/mechanism/resting-regime mismatch while basically
+  replicating the old NeuronIO clipped-voltage dynamic regime. Supporting
+  evidence is in `artifacts/simulator_mamba_comparison_20260605.md`: input
+  density, clipped voltage std, and clipped `|dV/dt|` p95/p99 are close to old
+  NMDA (`0.010600` vs `0.010554`; `3.2606` vs `3.2363 mV`;
+  `0.4667/0.6706` vs `0.4688/0.6875 mV/step`). Remaining caveat: spike
+  distribution is not a full replication and must be reported explicitly.
+
 - ANALYSIS (2026-06-05 22:53): Compared accepted CoreNEURON/Hay
   `exc_event_keep_prob=0.925` against the old NeuronIO/NMDA setup for both
   simulator statistics and Mamba metrics. Artifact:

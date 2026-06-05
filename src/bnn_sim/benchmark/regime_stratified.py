@@ -157,6 +157,7 @@ def compute_regime_stratified_metrics(
     soma_bias_mv: float = -67.7,
     ignore_start: int = 0,
     post_event_quantile: float = 0.95,
+    calibrated_spike_threshold: float | None = None,
 ) -> dict[str, Any]:
     """Compute M2: Regime-stratified error metrics.
 
@@ -168,6 +169,8 @@ def compute_regime_stratified_metrics(
         soma_bias_mv: Bias added after inverse soma scaling to recover mV.
         ignore_start: Number of initial timesteps to ignore.
         post_event_quantile: Event-count quantile used to define high input-drive timesteps.
+        calibrated_spike_threshold: Optional fixed logit threshold learned on a
+            separate calibration split.
 
     Returns:
         Dictionary with regime-stratified metrics.
@@ -278,6 +281,11 @@ def compute_regime_stratified_metrics(
     tgt_spike_binary = tgt_spike_flat > 0.5
     matched_threshold = _prevalence_matched_threshold(pred_spike_flat, int(tgt_spike_binary.sum()))
     pred_spike_rate_matched = pred_spike_flat >= matched_threshold
+    pred_spike_calibrated = (
+        pred_spike_flat >= calibrated_spike_threshold
+        if calibrated_spike_threshold is not None
+        else None
+    )
 
     far_subthreshold = (~near_spike_mask) & (~post_event_mask)
     mvp_regimes = [
@@ -287,7 +295,7 @@ def compute_regime_stratified_metrics(
         _row_for_mask("post_input_event", residual_mv, post_event_mask),
     ]
 
-    return {
+    result = {
         "global": {
             "rmse_mv": global_rmse,
             "mae_mv": global_mae,
@@ -318,3 +326,10 @@ def compute_regime_stratified_metrics(
             "semantics": "diagnostic threshold chosen so total predicted spike count matches the teacher under the current mask",
         },
     }
+    if pred_spike_calibrated is not None:
+        result["spike_timing_calibrated_threshold"] = {
+            **_spike_timing_summary(pred_spike_calibrated, tgt_spike_binary),
+            "threshold": float(calibrated_spike_threshold),
+            "semantics": "fixed logit threshold learned on a separate calibration split and frozen before evaluation",
+        }
+    return result

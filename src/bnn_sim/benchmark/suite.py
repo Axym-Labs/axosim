@@ -47,6 +47,7 @@ class BenchmarkSuite:
         dataset_path: str | None = None,
         trace_ids: list[str] | None = None,
         m4_paired_intervention: dict[str, Any] | None = None,
+        calibrated_spike_threshold: float | None = None,
     ) -> dict[str, Any]:
         """Run full benchmark suite on a model.
 
@@ -70,7 +71,13 @@ class BenchmarkSuite:
         predictions = np.asarray(model_fn(inputs))
 
         trace_ids = trace_ids or [str(i) for i in range(inputs.shape[0])]
-        m1 = _compute_m1_trace_fidelity(predictions, targets, soma_scale, ignore_start)
+        m1 = _compute_m1_trace_fidelity(
+            predictions,
+            targets,
+            soma_scale,
+            ignore_start,
+            calibrated_spike_threshold=calibrated_spike_threshold,
+        )
         m1b = _compute_m1b_feature_fidelity(
             predictions,
             targets,
@@ -78,12 +85,16 @@ class BenchmarkSuite:
             soma_scale,
             soma_bias_mv,
             ignore_start,
+            calibrated_spike_threshold=calibrated_spike_threshold,
         )
 
         # M2: Regime-stratified errors
         m2 = compute_regime_stratified_metrics(
             predictions, targets, inputs,
-            soma_scale=soma_scale, soma_bias_mv=soma_bias_mv, ignore_start=ignore_start,
+            soma_scale=soma_scale,
+            soma_bias_mv=soma_bias_mv,
+            ignore_start=ignore_start,
+            calibrated_spike_threshold=calibrated_spike_threshold,
         )
 
         # M4: Perturbation stability
@@ -135,6 +146,7 @@ class BenchmarkSuite:
                 "evaluated_timesteps_per_trace": max(0, inputs.shape[1] - ignore_start),
                 "semantics": "drop the first ignore_start timesteps from every trace before metrics",
             },
+            "calibrated_spike_threshold": calibrated_spike_threshold,
         }
 
         results = {
@@ -234,6 +246,8 @@ def _compute_m1_trace_fidelity(
     targets: np.ndarray,
     soma_scale: float,
     ignore_start: int,
+    *,
+    calibrated_spike_threshold: float | None = None,
 ) -> dict[str, Any]:
     pred = _apply_time_mask(np.asarray(predictions), ignore_start)
     tgt = _apply_time_mask(np.asarray(targets), ignore_start)
@@ -259,7 +273,7 @@ def _compute_m1_trace_fidelity(
     matched_counts = matched_binary.sum(axis=1)
     target_counts = target_binary.sum(axis=1)
 
-    return {
+    result = {
         "soma_rmse_normalized": float(np.sqrt(np.mean(residual ** 2))),
         "soma_rmse_mv": float(np.sqrt(np.mean(residual_mv ** 2))),
         "soma_mae_mv": float(np.mean(np.abs(residual_mv))),
@@ -286,6 +300,16 @@ def _compute_m1_trace_fidelity(
             "spike": "Poor AUC/Brier/log-loss means spike scores do not rank or calibrate event likelihoods well.",
         },
     }
+    if calibrated_spike_threshold is not None:
+        calibrated_binary = spike_scores >= calibrated_spike_threshold
+        calibrated_counts = calibrated_binary.sum(axis=1)
+        result["spike_calibrated_threshold"] = {
+            "threshold": float(calibrated_spike_threshold),
+            "predicted_count": int(calibrated_binary.sum()),
+            "count_mae_per_trace": float(np.mean(np.abs(calibrated_counts - target_counts))),
+            "semantics": "fixed logit threshold learned on a separate calibration split and frozen before evaluation",
+        }
+    return result
 
 
 def _trace_features(spikes: np.ndarray, soma_mv: np.ndarray) -> dict[str, float]:
@@ -318,6 +342,8 @@ def _compute_m1b_feature_fidelity(
     soma_scale: float,
     soma_bias_mv: float,
     ignore_start: int,
+    *,
+    calibrated_spike_threshold: float | None = None,
 ) -> dict[str, Any]:
     pred = _apply_time_mask(np.asarray(predictions), ignore_start)
     tgt = _apply_time_mask(np.asarray(targets), ignore_start)
@@ -337,7 +363,7 @@ def _compute_m1b_feature_fidelity(
         trace_ids,
     )
 
-    return {
+    result = {
         "features": features,
         "worst_trace_ids": worst,
         "threshold_zero": {
@@ -357,6 +383,22 @@ def _compute_m1b_feature_fidelity(
             "properties such as spike count, firing rate, adaptation, and voltage extrema."
         ),
     }
+    if calibrated_spike_threshold is not None:
+        calibrated_pred_spikes = pred[..., 0] >= calibrated_spike_threshold
+        calibrated_features, calibrated_worst = _feature_fidelity_rows(
+            calibrated_pred_spikes,
+            target_spikes,
+            pred_soma_mv,
+            target_soma_mv,
+            trace_ids,
+        )
+        result["calibrated_threshold"] = {
+            "threshold": float(calibrated_spike_threshold),
+            "features": calibrated_features,
+            "worst_trace_ids": calibrated_worst,
+            "semantics": "fixed logit threshold learned on a separate calibration split and frozen before evaluation",
+        }
+    return result
 
 
 def _feature_fidelity_rows(

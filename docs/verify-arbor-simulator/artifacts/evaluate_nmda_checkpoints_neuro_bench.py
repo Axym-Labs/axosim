@@ -37,6 +37,14 @@ def main() -> int:
     parser.add_argument("--ignore-start", type=int, default=500)
     parser.add_argument("--eval-batch-size", type=int, default=4)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--calibration-data", help="optional held-out split used to learn a fixed spike logit threshold")
+    parser.add_argument("--calibration-max-samples", type=int, default=32)
+    parser.add_argument(
+        "--calibration-method",
+        choices=["prevalence"],
+        default="prevalence",
+        help="threshold learning rule; prevalence matches calibration target spike count",
+    )
     parser.add_argument("--plot-count", type=int, default=3)
     parser.add_argument("--report-title", default="NEURO-BENCH Evaluation")
     args = parser.parse_args()
@@ -52,6 +60,14 @@ def main() -> int:
     started = time.perf_counter()
     inputs, targets, trace_ids = load_traces(args.val_data, args.max_samples)
     teacher_stats = trace_stats(targets, inputs)
+    calibration_inputs = None
+    calibration_targets = None
+    calibration_trace_ids: list[str] = []
+    if args.calibration_data:
+        calibration_inputs, calibration_targets, calibration_trace_ids = load_traces(
+            args.calibration_data,
+            args.calibration_max_samples,
+        )
 
     models: dict[str, Any] = {}
     predictions_by_model: dict[str, np.ndarray] = {}
@@ -59,6 +75,21 @@ def main() -> int:
         name, path = parse_checkpoint_arg(item)
         model, metadata = load_checkpoint(path, map_location="cpu")
         model = model.to(args.device).eval()
+        calibrated_threshold = None
+        calibration_summary = None
+        if calibration_inputs is not None and calibration_targets is not None:
+            calibration_predictions = predict_in_batches(
+                model,
+                calibration_inputs,
+                args.device,
+                args.eval_batch_size,
+            )
+            calibrated_threshold, calibration_summary = learn_calibrated_threshold(
+                calibration_predictions,
+                calibration_targets,
+                args.ignore_start,
+                method=args.calibration_method,
+            )
         predictions = predict_in_batches(model, inputs, args.device, args.eval_batch_size)
         suite = BenchmarkSuite()
         report = suite.evaluate_model(
@@ -72,8 +103,9 @@ def main() -> int:
             model_config={"checkpoint": path, "checkpoint_metadata": metadata},
             dataset_path=args.val_data,
             trace_ids=trace_ids,
+            calibrated_spike_threshold=calibrated_threshold,
         )
-        sanity = prediction_sanity(predictions, targets, inputs, args.ignore_start)
+        sanity = prediction_sanity(predictions, targets, inputs, args.ignore_start, calibrated_threshold)
         trace_errors = per_trace_errors(predictions, targets, args.ignore_start)
         plot_paths = write_trace_plots(
             plots_dir,
@@ -92,6 +124,7 @@ def main() -> int:
             "parameter_count": int(sum(p.numel() for p in model.parameters() if p.requires_grad)),
             "benchmark": report,
             "sanity": sanity,
+            "calibration": calibration_summary,
             "trace_error_summary": summarize_trace_errors(trace_errors, trace_ids),
             "plots": [str(path.relative_to(output_dir)) for path in plot_paths],
         }
@@ -109,6 +142,12 @@ def main() -> int:
         "trace_shape": list(inputs.shape),
         "ignore_start": args.ignore_start,
         "teacher_stats": teacher_stats,
+        "calibration": {
+            "data": args.calibration_data,
+            "loaded_samples": len(calibration_trace_ids),
+            "method": args.calibration_method if args.calibration_data else None,
+            "note": "thresholds are learned per model on calibration data and frozen before validation",
+        } if args.calibration_data else None,
         "models": models,
         "plots_produced": any(row["plots"] for row in models.values()),
         "limitations": [
@@ -171,7 +210,42 @@ def trace_stats(targets: np.ndarray, inputs: np.ndarray) -> dict[str, Any]:
     }
 
 
-def prediction_sanity(predictions: np.ndarray, targets: np.ndarray, inputs: np.ndarray, ignore_start: int) -> dict[str, Any]:
+def learn_calibrated_threshold(
+    predictions: np.ndarray,
+    targets: np.ndarray,
+    ignore_start: int,
+    *,
+    method: str,
+) -> tuple[float, dict[str, Any]]:
+    pred = predictions[:, ignore_start:, :]
+    tgt = targets[:, ignore_start:, :]
+    logits = pred[..., 0]
+    target_spikes = tgt[..., 0] > 0.5
+    if method != "prevalence":
+        raise ValueError(f"unsupported calibration method: {method}")
+    threshold = prevalence_matched_threshold(logits, int(target_spikes.sum()))
+    calibrated_spikes = logits >= threshold
+    target_counts = target_spikes.sum(axis=1)
+    calibrated_counts = calibrated_spikes.sum(axis=1)
+    return threshold, {
+        "method": method,
+        "threshold": float(threshold),
+        "target_spike_count": int(target_spikes.sum()),
+        "calibrated_pred_spike_count": int(calibrated_spikes.sum()),
+        "calibrated_count_mae_per_trace": float(np.mean(np.abs(calibrated_counts - target_counts))),
+        "calibration_samples": int(predictions.shape[0]),
+        "calibration_timesteps_per_trace": int(max(0, predictions.shape[1] - ignore_start)),
+        "semantics": "global logit threshold chosen to match target spike prevalence on the calibration split",
+    }
+
+
+def prediction_sanity(
+    predictions: np.ndarray,
+    targets: np.ndarray,
+    inputs: np.ndarray,
+    ignore_start: int,
+    calibrated_threshold: float | None = None,
+) -> dict[str, Any]:
     pred = predictions[:, ignore_start:, :]
     tgt = targets[:, ignore_start:, :]
     pred_soma = soma_mv(predictions)[:, ignore_start:]
@@ -181,8 +255,9 @@ def prediction_sanity(predictions: np.ndarray, targets: np.ndarray, inputs: np.n
     target_spikes = tgt[..., 0] > 0.5
     matched_threshold = prevalence_matched_threshold(logits, int(target_spikes.sum()))
     matched_spikes = logits >= matched_threshold
+    calibrated_spikes = logits >= calibrated_threshold if calibrated_threshold is not None else None
     finite = bool(np.isfinite(predictions).all())
-    return {
+    result = {
         "all_finite": finite,
         "pred_soma_mean_mv": float(pred_soma.mean()),
         "pred_soma_std_mv": float(pred_soma.std()),
@@ -198,6 +273,17 @@ def prediction_sanity(predictions: np.ndarray, targets: np.ndarray, inputs: np.n
         "event_fraction": float(np.count_nonzero(inputs[:, ignore_start:, :]) / max(1, inputs[:, ignore_start:, :].size)),
         "flags": sanity_flags(finite, pred_soma, target_soma, pred_spikes, target_spikes),
     }
+    if calibrated_spikes is not None:
+        result["calibrated_threshold"] = float(calibrated_threshold)
+        result["pred_spike_count_calibrated_threshold"] = int(calibrated_spikes.sum())
+        result["calibrated_threshold_flags"] = sanity_flags(
+            finite,
+            pred_soma,
+            target_soma,
+            calibrated_spikes,
+            target_spikes,
+        )
+    return result
 
 
 def sanity_flags(
@@ -369,24 +455,30 @@ def compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
     rows = {}
     for name, row in summary["models"].items():
         m1 = row["benchmark"]["m1_trace_fidelity"]
-        m1b = row["benchmark"]["m1b_feature_fidelity"]["features"]
         m2 = row["benchmark"]["m2_regimes"]
         near = regime_rmse(m2, "near_spike")
+        calibrated = m1.get("spike_calibrated_threshold")
+        timing_calibrated = m2.get("spike_timing_calibrated_threshold")
         rows[name] = {
             "checkpoint": row["checkpoint"],
             "m1_rmse_mv": m1["soma_rmse_mv"],
             "m1_auc": m1["spike_auc"],
             "spike_count_mae_threshold_zero": m1["spike_threshold_zero"]["count_mae_per_trace"],
             "spike_count_mae_prevalence_matched": m1["spike_prevalence_matched"]["count_mae_per_trace"],
+            "spike_count_mae_calibrated_threshold": calibrated["count_mae_per_trace"] if calibrated else None,
+            "calibrated_threshold": calibrated["threshold"] if calibrated else None,
             "spike_timing_f1_prevalence_matched": row["benchmark"]["m2_regimes"]["spike_timing_prevalence_matched"]["f1_at_2steps"],
+            "spike_timing_f1_calibrated_threshold": timing_calibrated["f1_at_2steps"] if timing_calibrated else None,
             "near_spike_rmse_mv": near,
             "sanity_flags": row["sanity"]["flags"],
+            "calibrated_threshold_flags": row["sanity"].get("calibrated_threshold_flags"),
             "plots": row["plots"],
         }
     return {
         "output": str(Path(summary["output_dir"])),
         "loaded_samples": summary["loaded_samples"],
         "plots_produced": summary["plots_produced"],
+        "calibration": summary.get("calibration"),
         "models": rows,
     }
 
@@ -399,38 +491,68 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"- Samples: `{summary['loaded_samples']}`",
         f"- Ignore start: `{summary['ignore_start']}`",
         f"- Plots produced: `{summary['plots_produced']}`",
+    ]
+    if summary.get("calibration"):
+        calibration = summary["calibration"]
+        lines.extend([
+            f"- Calibration data: `{calibration['data']}`",
+            f"- Calibration samples: `{calibration['loaded_samples']}`",
+            f"- Calibration method: `{calibration['method']}`",
+        ])
+    lines.extend([
         "",
         "## Teacher Subset",
         "",
         "| event fraction | spike rate / 1000 steps | soma mean mV | soma std mV | soma min/max mV |",
         "|---:|---:|---:|---:|---:|",
-    ]
+    ])
     t = summary["teacher_stats"]
     lines.append(
         f"| {t['event_fraction']:.6f} | {t['spike_rate_per_1000_steps']:.4f} | "
         f"{t['soma_mean_mv']:.4f} | {t['soma_std_mv']:.4f} | {t['soma_min_mv']:.2f}/{t['soma_max_mv']:.2f} |"
     )
-    lines.extend([
-        "",
-        "## Models",
-        "",
-        "| model | params | M1 RMSE mV | M1 AUC | spike-count MAE @0 | spike-count MAE rate-matched | timing F1 rate-matched | near-spike RMSE | worst trace RMSE | sanity flags | plots |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
-    ])
+    lines.extend(["", "## Models", ""])
+    has_calibration = any(
+        "spike_calibrated_threshold" in row["benchmark"]["m1_trace_fidelity"]
+        for row in summary["models"].values()
+    )
+    if has_calibration:
+        lines.extend([
+            "| model | params | M1 RMSE mV | M1 AUC | threshold | spike-count MAE @0 | spike-count MAE calibrated | timing F1 calibrated | near-spike RMSE | worst trace RMSE | raw flags | calibrated flags | plots |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
+        ])
+    else:
+        lines.extend([
+            "| model | params | M1 RMSE mV | M1 AUC | spike-count MAE @0 | spike-count MAE rate-matched | timing F1 rate-matched | near-spike RMSE | worst trace RMSE | sanity flags | plots |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+        ])
     for name, row in summary["models"].items():
         m1 = row["benchmark"]["m1_trace_fidelity"]
         m2 = row["benchmark"]["m2_regimes"]
         near = regime_rmse(m2, "near_spike")
         timing_matched = m2["spike_timing_prevalence_matched"]["f1_at_2steps"]
         flags = ", ".join(row["sanity"]["flags"]) or "none"
+        calibrated_flags = ", ".join(row["sanity"].get("calibrated_threshold_flags") or []) or "none"
         plots = ", ".join(f"[plot {i + 1}]({p})" for i, p in enumerate(row["plots"]))
-        lines.append(
-            f"| `{name}` | {row['parameter_count']} | {m1['soma_rmse_mv']:.4f} | {m1['spike_auc']:.4f} | "
-            f"{m1['spike_threshold_zero']['count_mae_per_trace']:.4f} | "
-            f"{m1['spike_prevalence_matched']['count_mae_per_trace']:.4f} | "
-            f"{timing_matched:.4f} | {format_optional_float(near)} | "
-            f"{row['trace_error_summary']['max_rmse_mv']:.4f} | {flags} | {plots} |"
-        )
+        if has_calibration:
+            calibrated = m1.get("spike_calibrated_threshold", {})
+            timing_calibrated = m2.get("spike_timing_calibrated_threshold", {})
+            lines.append(
+                f"| `{name}` | {row['parameter_count']} | {m1['soma_rmse_mv']:.4f} | {m1['spike_auc']:.4f} | "
+                f"{format_optional_float(calibrated.get('threshold'))} | "
+                f"{m1['spike_threshold_zero']['count_mae_per_trace']:.4f} | "
+                f"{format_optional_float(calibrated.get('count_mae_per_trace'))} | "
+                f"{format_optional_float(timing_calibrated.get('f1_at_2steps'))} | {format_optional_float(near)} | "
+                f"{row['trace_error_summary']['max_rmse_mv']:.4f} | {flags} | {calibrated_flags} | {plots} |"
+            )
+        else:
+            lines.append(
+                f"| `{name}` | {row['parameter_count']} | {m1['soma_rmse_mv']:.4f} | {m1['spike_auc']:.4f} | "
+                f"{m1['spike_threshold_zero']['count_mae_per_trace']:.4f} | "
+                f"{m1['spike_prevalence_matched']['count_mae_per_trace']:.4f} | "
+                f"{timing_matched:.4f} | {format_optional_float(near)} | "
+                f"{row['trace_error_summary']['max_rmse_mv']:.4f} | {flags} | {plots} |"
+            )
     lines.extend(["", "## Limitations", ""])
     lines.extend(f"- {item}" for item in summary["limitations"])
     lines.append("")

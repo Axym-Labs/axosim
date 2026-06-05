@@ -50,6 +50,32 @@ def test_benchmark_suite_reports_mvp_schema_and_masked_m1(tmp_path):
     assert (tmp_path / "benchmark_results.json").exists()
 
 
+def test_benchmark_suite_reports_calibrated_spike_threshold():
+    inputs = np.zeros((1, 4, 2), dtype=np.float32)
+    targets = np.zeros((1, 4, 2), dtype=np.float32)
+    predictions = np.zeros_like(targets)
+
+    targets[0, 1, 0] = 1.0
+    predictions[0, :, 0] = np.array([-0.7, -0.2, -0.4, -0.6], dtype=np.float32)
+
+    report = BenchmarkSuite().evaluate_model(
+        lambda x: predictions,
+        inputs,
+        targets,
+        soma_scale=1.0,
+        ignore_start=0,
+        run_perturbation=False,
+        calibrated_spike_threshold=-0.3,
+    )
+
+    m1 = report["m1_trace_fidelity"]
+    assert m1["spike_threshold_zero"]["predicted_count"] == 0
+    assert m1["spike_calibrated_threshold"]["predicted_count"] == 1
+    assert m1["spike_calibrated_threshold"]["count_mae_per_trace"] == 0.0
+    assert report["m1b_feature_fidelity"]["calibrated_threshold"]["features"]["spike_count"]["prediction_mean"] == 1.0
+    assert report["m2_regimes"]["spike_timing_calibrated_threshold"]["threshold"] == -0.3
+
+
 def test_benchmark_voltage_features_and_regime_bins_include_soma_bias():
     inputs = np.zeros((1, 4, 2), dtype=np.float32)
     targets = np.zeros((1, 4, 2), dtype=np.float32)
