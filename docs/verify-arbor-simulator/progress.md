@@ -3,6 +3,24 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- VERIFICATION (2026-06-06 13:22): Corrected the M3 held-out morphology
+  teacher protocol by adding `--simulate-baseline` to the structured
+  intervention runner. The previous held-out SWC intervention checks compared
+  held-out intervention targets against source-morphology baseline targets, so
+  they are now logged only as invalid diagnostics, not M3 correctness evidence.
+  Valid reruns with both baseline and intervention simulated under Allen
+  `specimen_487664663.swc`, normalized basal/apical arclength routing, and
+  the same Hay/NEURON mechanisms show coherent teacher responses on `8`
+  traces: event dropout `delta_soma_mean=-1.8843 mV`,
+  `delta_spike_rate=-1.2500/1000 steps`, spike-count interval
+  `[-9.1109, -4.6391]`; inhibitory dropout `delta_soma_mean=+1.5334 mV`,
+  `delta_spike_rate=+4.0000/1000 steps`, spike-count interval
+  `[18.5056, 25.4944]`. Interpretation: normalized routing is a plausible M3
+  teacher-generation scaffold after the baseline fix, but still not a full
+  publishable morphology-transfer benchmark because it covers one morphology,
+  `8` traces, and two interventions. Updated report:
+  `artifacts/m3_swc_event_dropout_smoke_20260606.md`.
+
 - EXPERIMENT (2026-06-06 13:10): Expanded normalized-routing M3 validation
   from the initial `8`-trace smoke to two `16`-trace held-out SWC checks.
   Event dropout remains directionally correct but weak on Allen

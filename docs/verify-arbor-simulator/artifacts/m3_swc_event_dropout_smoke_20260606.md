@@ -15,8 +15,8 @@ consistent enough to support an M3 morphology-transfer benchmark?
 - Backend: CPU NEURON with the local SWC-aware Hay template and NEURON 9
   compiled MOD files.
 - Intervention: `35%` event dropout on the same first `8` validation traces.
-- Follow-up: `16`-trace normalized-routing event dropout and inhibitory
-  dropout checks on the same held-out SWC.
+- Follow-up: valid simulated-baseline normalized-routing event dropout and
+  inhibitory dropout checks on the same held-out SWC.
 - Source input protocol: `639` excitatory and `639` inhibitory source sites.
 
 ## Routing Policies
@@ -34,35 +34,44 @@ source site in the same compartment by normalized arclength. It still uses
 fewer source sites because the target morphology has fewer segments, but it no
 longer drops a contiguous suffix of the source route.
 
-## Teacher Response
+## Source-Baseline Diagnostic
 
-| morphology/routing | delta soma mean mV | delta spike rate / 1000 steps | spike-count delta mean | direction |
-| --- | ---: | ---: | ---: | --- |
-| original `cell1.asc`, ordered | `-2.3968` | `-0.6136` | `-3.3750` | lower event drive / lower spiking / hyperpolarized |
-| held-out SWC, ordered truncation | `-1.7247` | `+0.9773` | `+5.3750` | lower event drive / higher spiking / hyperpolarized |
-| held-out SWC, normalized by type | `-1.7377` | `-0.0227` | `-0.1250` | lower event drive / lower spiking / hyperpolarized |
+These rows compare held-out SWC interventions against source-morphology
+baseline targets. They are invalid for M3 transfer correctness, but useful for
+showing why the runner needed a simulated-baseline mode.
 
-## Normalized-Routing Follow-Up
+| morphology/routing | traces | delta soma mean mV | delta spike rate / 1000 steps | spike-count delta mean | direction |
+| --- | ---: | ---: | ---: | ---: | --- |
+| original `cell1.asc`, ordered | `8` | `-2.3968` | `-0.6136` | `-3.3750` | lower event drive / lower spiking / hyperpolarized |
+| held-out SWC, ordered truncation | `8` | `-1.7247` | `+0.9773` | `+5.3750` | lower event drive / higher spiking / hyperpolarized |
+| held-out SWC, normalized by type | `8` | `-1.7377` | `-0.0227` | `-0.1250` | lower event drive / lower spiking / hyperpolarized |
+
+## Valid Simulated-Baseline Follow-Up
+
+Both baseline and intervention targets in this table are simulated under the
+held-out SWC morphology, the same normalized basal/apical arclength routing,
+and the same mechanism/template path.
 
 | intervention | traces | delta soma mean mV | delta spike rate / 1000 steps | spike-count delta mean | spike-count interval | direction |
 | --- | ---: | ---: | ---: | ---: | --- | --- |
-| event dropout | `16` | `-1.7625` | `-0.1705` | `-0.9375` | `[-2.2458, 0.3708]` | lower event drive / lower spiking / hyperpolarized |
-| inhibitory dropout | `16` | `+1.5745` | `+5.2841` | `+29.0625` | `[26.5738, 31.5512]` | lower event drive / higher spiking / depolarized |
+| event dropout | `8` | `-1.8843` | `-1.2500` | `-6.8750` | `[-9.1109, -4.6391]` | lower event drive / lower spiking / hyperpolarized |
+| inhibitory dropout | `8` | `+1.5334` | `+4.0000` | `+22.0000` | `[18.5056, 25.4944]` | lower event drive / higher spiking / depolarized |
 
 ## Interpretation
 
 Runtime compatibility is achieved: the held-out SWC instantiates, integrates,
 accepts deterministic synapses, and produces paired intervention targets.
 
-Correctness replication is partially improved but not finished. The source
-morphology control preserves the expected event-dropout response under the
-same runner. Ordered truncation fails qualitatively on spike direction for the
-held-out SWC. Normalized basal/apical arclength routing restores the expected
-lower-spiking direction. On `16` traces, event dropout remains correctly
-signed but weak, with spike-count interval crossing zero. Inhibitory dropout
-is strongly and correctly signed, increasing soma voltage and spike count.
-This supports normalized routing as a plausible M3 teacher-generation scaffold,
-but not yet as a completed publishable transfer benchmark.
+Correctness replication is substantially improved after fixing the baseline
+comparison. The valid simulated-baseline checks show the expected signs for
+both event dropout and inhibitory dropout: reducing event drive hyperpolarizes
+and lowers spiking, while reducing inhibitory drive depolarizes and increases
+spiking. This supports normalized routing as a plausible M3 teacher-generation
+scaffold.
+
+The result is still not a completed publishable transfer benchmark: it covers
+one held-out morphology, `8` traces, two interventions, and a dendrite-only
+Allen reconstruction with Hay source-fit active parameters.
 
 ## Next Defensible Path
 

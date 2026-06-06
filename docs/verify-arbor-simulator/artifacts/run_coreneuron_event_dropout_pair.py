@@ -56,6 +56,11 @@ def main() -> int:
     parser.add_argument("--exc-gmax-scale", type=float, default=1.0)
     parser.add_argument("--inh-gmax-scale", type=float, default=1.0)
     parser.add_argument(
+        "--simulate-baseline",
+        action="store_true",
+        help="Simulate baseline targets under the requested morphology/template instead of using source-data targets.",
+    )
+    parser.add_argument(
         "--input-routing",
         choices=["ordered_truncate", "normalized_by_type"],
         default="ordered_truncate",
@@ -72,6 +77,10 @@ def main() -> int:
 
     started = time.perf_counter()
     output_dir = Path(args.output_dir).resolve()
+    source_root = Path(args.source_root).resolve()
+    mechanism_root = Path(args.mechanism_root).resolve()
+    morphology_path = _resolve_source_path(source_root, args.morphology)
+    template_hoc = _resolve_source_path(source_root, args.template_hoc)
     baseline_inputs, baseline_targets, trace_ids = load_source(args.source_data, args.samples)
     intervention_inputs, change_mask, intervention_meta = make_structured_intervention_inputs(
         baseline_inputs,
@@ -82,12 +91,29 @@ def main() -> int:
         site_fraction=args.site_fraction,
         seed=args.seed,
     )
+    baseline_targets_for_report = baseline_targets
+    baseline_soma_mv = None
+    baseline_input_routing = None
+    if args.simulate_baseline:
+        baseline_targets_for_report, baseline_soma_mv, baseline_input_routing = simulate_intervention_targets(
+            baseline_inputs,
+            source_root=source_root,
+            mechanism_root=mechanism_root,
+            morphology_path=morphology_path,
+            template_hoc=template_hoc,
+            backend=args.backend,
+            coreneuron_gpu=args.coreneuron_gpu,
+            v_init_mv=args.v_init_mv,
+            exc_gmax_scale=args.exc_gmax_scale,
+            inh_gmax_scale=args.inh_gmax_scale,
+            input_routing=args.input_routing,
+        )
     simulated_targets, simulated_soma_mv, input_routing = simulate_intervention_targets(
         intervention_inputs,
-        source_root=Path(args.source_root).resolve(),
-        mechanism_root=Path(args.mechanism_root).resolve(),
-        morphology_path=_resolve_source_path(Path(args.source_root).resolve(), args.morphology),
-        template_hoc=_resolve_source_path(Path(args.source_root).resolve(), args.template_hoc),
+        source_root=source_root,
+        mechanism_root=mechanism_root,
+        morphology_path=morphology_path,
+        template_hoc=template_hoc,
         backend=args.backend,
         coreneuron_gpu=args.coreneuron_gpu,
         v_init_mv=args.v_init_mv,
@@ -98,7 +124,7 @@ def main() -> int:
     teacher_report = compute_paired_event_intervention_metrics(
         None,
         baseline_inputs,
-        baseline_targets,
+        baseline_targets_for_report,
         intervention_inputs,
         simulated_targets,
         intervention_name=f"coreneuron_hay_{args.intervention}",
@@ -112,9 +138,11 @@ def main() -> int:
     np.savez_compressed(
         output_dir / "intervention_pair.npz",
         baseline_inputs=baseline_inputs,
-        baseline_targets=baseline_targets,
+        baseline_targets=baseline_targets_for_report,
+        source_baseline_targets=baseline_targets,
         intervention_inputs=intervention_inputs,
         intervention_targets=simulated_targets,
+        baseline_soma_mv=np.asarray([] if baseline_soma_mv is None else baseline_soma_mv),
         intervention_soma_mv=simulated_soma_mv,
         changed_event_mask=change_mask,
         sample_ids=np.asarray(trace_ids),
@@ -123,9 +151,11 @@ def main() -> int:
     np.savez_compressed(
         output_dir / "event_dropout_pair.npz",
         baseline_inputs=baseline_inputs,
-        baseline_targets=baseline_targets,
+        baseline_targets=baseline_targets_for_report,
+        source_baseline_targets=baseline_targets,
         intervention_inputs=intervention_inputs,
         intervention_targets=simulated_targets,
+        baseline_soma_mv=np.asarray([] if baseline_soma_mv is None else baseline_soma_mv),
         intervention_soma_mv=simulated_soma_mv,
         changed_event_mask=change_mask,
         sample_ids=np.asarray(trace_ids),
@@ -135,8 +165,8 @@ def main() -> int:
             "source_data": args.source_data,
             "source_root": args.source_root,
             "mechanism_root": args.mechanism_root,
-            "morphology": str(_resolve_source_path(Path(args.source_root).resolve(), args.morphology)),
-            "template_hoc": str(_resolve_source_path(Path(args.source_root).resolve(), args.template_hoc)),
+            "morphology": str(morphology_path),
+            "template_hoc": str(template_hoc),
             "backend": args.backend,
             "coreneuron_gpu": bool(args.coreneuron_gpu),
             "elapsed_seconds": time.perf_counter() - started,
@@ -149,6 +179,13 @@ def main() -> int:
             "baseline_events": int(np.count_nonzero(baseline_inputs)),
             "intervention_events": int(np.count_nonzero(intervention_inputs)),
             "input_routing": input_routing,
+            "baseline_input_routing": baseline_input_routing,
+            "simulate_baseline": bool(args.simulate_baseline),
+            "baseline_target_policy": (
+                "baseline targets simulated under requested morphology/template"
+                if args.simulate_baseline
+                else "baseline targets loaded from source-data dataset"
+            ),
             "target_policy": "same clipped/normalized soma and local-peak spike labels as accepted CoreNEURON/Hay data",
         },
         "teacher_intervention": teacher_report,
@@ -455,6 +492,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- Source data: `{meta['source_data']}`",
             f"- Backend: `{meta['backend']}`",
             f"- Intervention: `{meta['intervention']}`",
+            f"- Baseline target policy: `{meta['baseline_target_policy']}`",
             f"- Changed events: `{meta['changed_events']}` / `{meta['baseline_events']}`",
             f"- Intervention events: `{meta['intervention_events']}`",
             f"- Input routing policy: `{meta['input_routing']['policy']}`",
