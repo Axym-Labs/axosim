@@ -3,6 +3,35 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 12:39): Added a more sophisticated trace metric
+  beyond pointwise RMSE, `trace_shape_fidelity`, in
+  `src/bnn_sim/benchmark/trace_shape.py` and wired it into `BenchmarkSuite`,
+  benchmark exports, model comparison, and the CoreNEURON/Hay benchmark
+  runner. The metric reports lag-tolerant voltage RMSE, multi-scale low-pass
+  RMSE, dV/dt error, voltage quantile distance, spike-triggered waveform RMSE,
+  and spike-window coverage; headline `trace_shape_distance` is a normalized
+  component average. Real `16`-trace CoreNEURON/Hay eval with `.venv-mamba`
+  and CUDA: `soma075_calibrated_80k` trace-shape distance `0.2408`,
+  `rnn_exc0925_80k` `0.2418`, `mamba_exc0925_80k` `0.2473`; lag-tolerant RMSEs
+  are lower than pointwise RMSEs (`0.6508`, `0.6159`, `0.6656` mV), but spike
+  waveform coverage remains poor (`7/76`, `4/76`, `6/76` evaluable windows).
+  Tracked report: `artifacts/trace_shape_metric_validation_20260606.md`.
+  Verification: `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_suite.py tests/test_cli.py -q`
+  passed (`28` tests); py_compile passed for metric, suite, exports, and runner.
+
+- IMPLEMENTATION (2026-06-06 12:39): Continued the M3 teacher-generation path
+  by adding `artifacts/prepare_hay_swc_template.py`, which generates a local
+  SWC-aware Hay template from the original `L5PCtemplate_2.hoc`. The generated
+  template selects `Import3d_SWC_read` for `.swc/.SWC` morphology paths and
+  preserves `Import3d_Neurolucida3` for original `.asc` paths. Also generalized
+  `artifacts/run_coreneuron_event_dropout_pair.py` with `--morphology` and
+  `--template-hoc` so held-out Allen SWCs can be passed to the intervention
+  teacher once the runtime NEURON/CoreNEURON environment is available.
+  Static validation passed (`--check-only`, py_compile, generated ignored
+  `artifacts/hay_swc_template/L5PCtemplate_swc.hoc`). Runtime SWC
+  instantiation is not yet verified because `neuron` is not importable in the
+  current `.venv`, `.venv-gpu`, `.venv-mamba`, or system Python.
+
 - EXPERIMENT (2026-06-06 12:16): Found a much stronger M3 path than the two
   old local L2/3 SWCs. Queried the official Allen Cell Types API for all
   reconstructed mouse layer-5 spiny cells and downloaded/ranked `71` local SWC

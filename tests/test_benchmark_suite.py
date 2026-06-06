@@ -4,6 +4,7 @@ from bnn_sim.benchmark.regime_stratified import compute_regime_stratified_metric
 from bnn_sim.benchmark.morphology_transfer import MorphologyTransferEvaluator
 from bnn_sim.benchmark.state_metrics import compute_state_conditioned_metrics
 from bnn_sim.benchmark.suite import BenchmarkSuite
+from bnn_sim.benchmark.trace_shape import compute_trace_shape_metrics
 from bnn_sim.benchmark.structured_intervention import (
     compute_paired_event_intervention_metrics,
     make_event_dropout_inputs,
@@ -40,7 +41,7 @@ def test_benchmark_suite_reports_mvp_schema_and_masked_m1(tmp_path):
         run_perturbation=False,
     )
 
-    assert set(["metadata", "m1_trace_fidelity", "m1b_feature_fidelity", "m2_regimes", "state_conditioned_fidelity", "m4_intervention", "limitations"]).issubset(report)
+    assert set(["metadata", "m1_trace_fidelity", "m1b_feature_fidelity", "m2_regimes", "state_conditioned_fidelity", "trace_shape_fidelity", "m4_intervention", "limitations"]).issubset(report)
     assert report["metadata"]["model_name"] == "unit-model"
     assert report["metadata"]["model_config"] == {"kind": "toy"}
     assert report["metadata"]["dataset_path"] == "unit-dataset"
@@ -50,7 +51,9 @@ def test_benchmark_suite_reports_mvp_schema_and_masked_m1(tmp_path):
     assert report["m1_trace_fidelity"]["soma_rmse_mv"] == 0.0
     assert "state_weighted_trace_distance_mv" in report["m1_trace_fidelity"]
     assert "dynamic_distance" in report["m1_trace_fidelity"]
+    assert "trace_shape_distance" in report["m1_trace_fidelity"]
     assert report["state_conditioned_fidelity"]["kind"] == "state_conditioned_dynamic_fidelity"
+    assert report["trace_shape_fidelity"]["kind"] == "multiscale_trace_shape_fidelity"
     assert report["m1_trace_fidelity"]["spike_target_count"] == 1
     assert report["m1_trace_fidelity"]["spike_brier"] < 0.001
     assert report["m1b_feature_fidelity"]["features"]["spike_count"]["teacher_mean"] == 0.5
@@ -202,6 +205,30 @@ def test_state_conditioned_metrics_weight_rare_states_separately():
     assert rows["spiking"]["voltage_rmse_mv"] == 18.0
     assert metrics["state_weighted_trace_distance_mv"] > np.sqrt(np.mean((predictions[..., 1] - targets[..., 1]) ** 2))
     assert metrics["dynamic_distance"] is not None
+
+
+def test_trace_shape_metric_is_lag_tolerant_for_shifted_events():
+    targets = np.zeros((1, 30, 2), dtype=np.float32)
+    predictions = np.zeros_like(targets)
+    waveform = np.array([0.0, 2.0, 8.0, 2.0, -1.0], dtype=np.float32)
+    targets[0, 10:15, 1] = waveform
+    predictions[0, 11:16, 1] = waveform
+    targets[0, 12, 0] = 1.0
+    predictions[0, 13, 0] = 8.0
+
+    metrics = compute_trace_shape_metrics(
+        predictions,
+        targets,
+        soma_scale=1.0,
+        soma_bias_mv=0.0,
+        ignore_start=0,
+        lag_tolerance_steps=1,
+    )
+
+    assert metrics["lag_tolerant_voltage"]["symmetric_rmse_mv"] < metrics["pointwise"]["rmse_mv"]
+    assert metrics["spike_triggered_waveform"]["matched_spikes"] == 1
+    assert metrics["spike_triggered_waveform"]["waveform_rmse_mv"] == 0.0
+    assert metrics["trace_shape_distance"] >= 0.0
 
 
 def test_event_dropout_only_removes_existing_events_deterministically():
@@ -458,7 +485,9 @@ def test_compare_models_uses_publishable_metric_schema():
 
     assert comparison["m1_fidelity"]["perfect"]["soma_rmse_mv"] == 0.0
     assert comparison["m1_fidelity"]["offset"]["soma_rmse_mv"] > 0.0
+    assert comparison["m1_fidelity"]["perfect"]["trace_shape_distance"] == 0.0
     assert "dynamic_distance" in comparison["state_conditioned_fidelity"]["perfect"]
+    assert "trace_shape_distance" in comparison["trace_shape_fidelity"]["perfect"]
     assert "spiking" in comparison["state_conditioned_fidelity"]["perfect"]["per_state_voltage_rmse_mv"]
     assert comparison["m1b_feature_fidelity"]["perfect"]["spike_count_mae"] == 0.0
     assert comparison["m4_intervention"]["perfect"]["status"] == "model_compared"

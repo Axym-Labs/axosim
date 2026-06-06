@@ -24,6 +24,7 @@ from bnn_sim.benchmark.regime_stratified import compute_regime_stratified_metric
 from bnn_sim.benchmark.state_metrics import compute_state_conditioned_metrics
 from bnn_sim.benchmark.perturbation_stability import compute_perturbation_stability
 from bnn_sim.benchmark.structured_intervention import compute_paired_event_intervention_metrics
+from bnn_sim.benchmark.trace_shape import compute_trace_shape_metrics
 from bnn_sim.official.constants import DEFAULT_Y_TRAIN_SOMA_BIAS
 
 
@@ -109,6 +110,16 @@ class BenchmarkSuite:
         m1["state_weighted_trace_distance_mv"] = state_metrics["state_weighted_trace_distance_mv"]
         m1["dynamic_distance"] = state_metrics["dynamic_distance"]
         m1["dynamic_distance_components"] = state_metrics["dynamic_distance_components"]
+        trace_shape = compute_trace_shape_metrics(
+            predictions,
+            targets,
+            soma_scale=soma_scale,
+            soma_bias_mv=soma_bias_mv,
+            ignore_start=ignore_start,
+            calibrated_spike_threshold=calibrated_spike_threshold,
+        )
+        m1["trace_shape_distance"] = trace_shape["trace_shape_distance"]
+        m1["lag_tolerant_voltage_rmse_mv"] = trace_shape["lag_tolerant_voltage"]["symmetric_rmse_mv"]
 
         # M4: Perturbation stability
         m4 = {}
@@ -183,6 +194,7 @@ class BenchmarkSuite:
             "m1b_feature_fidelity": m1b,
             "m2_regimes": m2,
             "state_conditioned_fidelity": state_metrics,
+            "trace_shape_fidelity": trace_shape,
             "m4_intervention": m4_intervention,
             "limitations": limitations,
             # Legacy aliases retained for existing scripts while the benchmark
@@ -220,6 +232,7 @@ class BenchmarkSuite:
             "m1_fidelity": {},
             "m1b_feature_fidelity": {},
             "state_conditioned_fidelity": {},
+            "trace_shape_fidelity": {},
             "m2_regime_summary": {},
             "m4_intervention": {},
             "m4_stability": {},
@@ -238,6 +251,8 @@ class BenchmarkSuite:
                 "soma_mae_mv": m1.get("soma_mae_mv"),
                 "state_weighted_trace_distance_mv": m1.get("state_weighted_trace_distance_mv"),
                 "dynamic_distance": m1.get("dynamic_distance"),
+                "trace_shape_distance": m1.get("trace_shape_distance"),
+                "lag_tolerant_voltage_rmse_mv": m1.get("lag_tolerant_voltage_rmse_mv"),
                 "spike_auc": m1.get("spike_auc"),
                 "spike_brier": m1.get("spike_brier"),
                 "spike_count_mae_per_trace": m1.get("spike_count_mae_per_trace"),
@@ -271,6 +286,37 @@ class BenchmarkSuite:
                 "spike_count_mae_per_trace": state_metrics.get("spike_count_mae_per_trace"),
                 "per_state_voltage_rmse_mv": _state_metric_map(state_metrics, "voltage_rmse_mv"),
                 "per_state_fraction": _state_metric_map(state_metrics, "fraction"),
+            }
+            trace_shape = results.get("trace_shape_fidelity", {})
+            comparison["trace_shape_fidelity"][name] = {
+                "trace_shape_distance": trace_shape.get("trace_shape_distance"),
+                "trace_shape_distance_components": trace_shape.get("trace_shape_distance_components"),
+                "lag_tolerant_voltage_rmse_mv": (
+                    trace_shape.get("lag_tolerant_voltage", {}).get("symmetric_rmse_mv")
+                    if isinstance(trace_shape.get("lag_tolerant_voltage"), dict)
+                    else None
+                ),
+                "lowpass_rmse_mv": {
+                    str(row.get("window_steps")): row.get("rmse_mv")
+                    for row in trace_shape.get("multiscale_lowpass", [])
+                    if isinstance(row, dict)
+                },
+                "dvdt_mae_mv_per_step": trace_shape.get("pointwise", {}).get("dvdt_mae_mv_per_step"),
+                "voltage_quantile_mae_mv": (
+                    trace_shape.get("voltage_quantile_distance", {}).get("mean_abs_quantile_error_mv")
+                    if isinstance(trace_shape.get("voltage_quantile_distance"), dict)
+                    else None
+                ),
+                "spike_waveform_rmse_mv": (
+                    trace_shape.get("spike_triggered_waveform", {}).get("waveform_rmse_mv")
+                    if isinstance(trace_shape.get("spike_triggered_waveform"), dict)
+                    else None
+                ),
+                "spike_waveform_match_fraction": (
+                    trace_shape.get("spike_triggered_waveform", {}).get("match_fraction")
+                    if isinstance(trace_shape.get("spike_triggered_waveform"), dict)
+                    else None
+                ),
             }
 
             m2 = results.get("m2_regimes") or results.get("m2_regime_stratified", {})

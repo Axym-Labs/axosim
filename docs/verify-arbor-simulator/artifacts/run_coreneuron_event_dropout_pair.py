@@ -35,6 +35,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", default=str(DEFAULT_SOURCE_ROOT))
     parser.add_argument("--mechanism-root", default=str(CORENEURON_PROBE))
+    parser.add_argument("--morphology", default="morphologies/cell1.asc")
+    parser.add_argument("--template-hoc", default="L5PCtemplate_2.hoc")
     parser.add_argument("--source-data", default="data/hay-coreneuron-source-val16-exc0925-20260605/val")
     parser.add_argument("--output-dir", default="docs/verify-arbor-simulator/artifacts/coreneuron_event_dropout_pair_20260605")
     parser.add_argument("--samples", type=int, default=4)
@@ -74,6 +76,8 @@ def main() -> int:
         intervention_inputs,
         source_root=Path(args.source_root).resolve(),
         mechanism_root=Path(args.mechanism_root).resolve(),
+        morphology_path=_resolve_source_path(Path(args.source_root).resolve(), args.morphology),
+        template_hoc=_resolve_source_path(Path(args.source_root).resolve(), args.template_hoc),
         backend=args.backend,
         coreneuron_gpu=args.coreneuron_gpu,
         v_init_mv=args.v_init_mv,
@@ -120,6 +124,8 @@ def main() -> int:
             "source_data": args.source_data,
             "source_root": args.source_root,
             "mechanism_root": args.mechanism_root,
+            "morphology": str(_resolve_source_path(Path(args.source_root).resolve(), args.morphology)),
+            "template_hoc": str(_resolve_source_path(Path(args.source_root).resolve(), args.template_hoc)),
             "backend": args.backend,
             "coreneuron_gpu": bool(args.coreneuron_gpu),
             "elapsed_seconds": time.perf_counter() - started,
@@ -144,6 +150,11 @@ def main() -> int:
     return 0
 
 
+def _resolve_source_path(source_root: Path, value: str) -> Path:
+    path = Path(value)
+    return path.resolve() if path.is_absolute() else (source_root / path).resolve()
+
+
 def load_source(path: str | Path, samples: int) -> tuple[np.ndarray, np.ndarray, list[str]]:
     dataset = ShardedNeuronIODataset(path, cache_shards=1)
     n = min(samples, len(dataset))
@@ -157,6 +168,8 @@ def simulate_intervention_targets(
     *,
     source_root: Path,
     mechanism_root: Path,
+    morphology_path: Path,
+    template_hoc: Path,
     backend: str,
     coreneuron_gpu: bool,
     v_init_mv: float,
@@ -183,7 +196,7 @@ def simulate_intervention_targets(
         h.load_file("stdrun.hoc")
         h.load_file("import3d.hoc")
     h.load_file(str(source_root / "L5PCbiophys5b.hoc"))
-    h.load_file(str(source_root / "L5PCtemplate_2.hoc"))
+    h.load_file(str(template_hoc))
     h.dt = 0.025
     h.steps_per_ms = 40
     h.secondorder = 0
@@ -196,6 +209,7 @@ def simulate_intervention_targets(
         trace = simulate_one_signed_trace(
             h=h,
             source_root=source_root,
+            morphology_path=morphology_path,
             backend=backend,
             signed_inputs=signed_inputs[index],
             v_init_mv=v_init_mv,
@@ -211,6 +225,7 @@ def simulate_one_signed_trace(
     *,
     h,
     source_root: Path,
+    morphology_path: Path,
     backend: str,
     signed_inputs: np.ndarray,
     v_init_mv: float,
@@ -218,7 +233,7 @@ def simulate_one_signed_trace(
     inh_gmax_scale: float,
 ) -> dict[str, np.ndarray]:
     duration_ms = int(signed_inputs.shape[0])
-    cell = h.L5PCtemplate(str(source_root / "morphologies" / "cell1.asc"))
+    cell = h.L5PCtemplate(str(morphology_path))
     h.CVode().active(0)
     h.v_init = v_init_mv
     segments, _, _ = collect_segments(cell)
