@@ -3,6 +3,24 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- MILESTONE (2026-06-06 14:13): Expanded M3 from one held-out SWC smoke to a
+  three-morphology normalized-routing suite over top-ranked Allen L5 spiny
+  candidates `487664663`, `515249852`, and `479770916`. Added reproducible
+  scripts `artifacts/run_m3_normalized_routing_suite.sh` and
+  `artifacts/evaluate_m3_model_suite.py`. Teacher sanity passed across all
+  `3 x 2` morphology/intervention pairs with simulated held-out baselines:
+  event dropout consistently hyperpolarizes and lowers spiking; inhibitory
+  dropout consistently depolarizes and raises spiking. Source-trained model
+  transfer remains poor in absolute voltage fidelity: aggregate M3 RMSE
+  `soma075=3.0228 mV`, `mamba_exc0925=3.0421 mV`, `rnn=3.0994 mV`, versus
+  source-validation `~0.8-0.9 mV`. All models preserve event-dropout direction
+  across all morphologies; `soma075` is best on voltage/trace-shape,
+  `mamba_exc0925` is best on spike-train distance and spike-delta MAE.
+  Interpretation: M3 is now a real benchmark component exposing morphology
+  transfer failure, though claims must be limited to dendrite-only Allen L5
+  routing transfer. Tracked report:
+  `artifacts/m3_multimorph_suite_20260606.md`.
+
 - IMPLEMENTATION (2026-06-06 13:46): Closed the main M1/M2 reportability gap
   by adding per-trace audit examples. M1 now records per-trace voltage
   RMSE/MAE/max error plus spike-count errors at zero, prevalence-matched, and
