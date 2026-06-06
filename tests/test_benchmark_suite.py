@@ -1,10 +1,15 @@
 import numpy as np
 
 from bnn_sim.benchmark.regime_stratified import compute_regime_stratified_metrics
+from bnn_sim.benchmark.state_metrics import compute_state_conditioned_metrics
 from bnn_sim.benchmark.suite import BenchmarkSuite
 from bnn_sim.benchmark.structured_intervention import (
     compute_paired_event_intervention_metrics,
     make_event_dropout_inputs,
+    make_selective_event_dropout_inputs,
+    make_site_silence_inputs,
+    make_structured_intervention_inputs,
+    make_temporal_jitter_inputs,
 )
 
 
@@ -34,7 +39,7 @@ def test_benchmark_suite_reports_mvp_schema_and_masked_m1(tmp_path):
         run_perturbation=False,
     )
 
-    assert set(["metadata", "m1_trace_fidelity", "m1b_feature_fidelity", "m2_regimes", "m4_intervention", "limitations"]).issubset(report)
+    assert set(["metadata", "m1_trace_fidelity", "m1b_feature_fidelity", "m2_regimes", "state_conditioned_fidelity", "m4_intervention", "limitations"]).issubset(report)
     assert report["metadata"]["model_name"] == "unit-model"
     assert report["metadata"]["model_config"] == {"kind": "toy"}
     assert report["metadata"]["dataset_path"] == "unit-dataset"
@@ -42,6 +47,9 @@ def test_benchmark_suite_reports_mvp_schema_and_masked_m1(tmp_path):
     assert report["metadata"]["mask"]["ignore_start"] == 2
     assert report["metadata"]["mask"]["evaluated_timesteps_per_trace"] == 3
     assert report["m1_trace_fidelity"]["soma_rmse_mv"] == 0.0
+    assert "state_weighted_trace_distance_mv" in report["m1_trace_fidelity"]
+    assert "dynamic_distance" in report["m1_trace_fidelity"]
+    assert report["state_conditioned_fidelity"]["kind"] == "state_conditioned_dynamic_fidelity"
     assert report["m1_trace_fidelity"]["spike_target_count"] == 1
     assert report["m1_trace_fidelity"]["spike_brier"] < 0.001
     assert report["m1b_feature_fidelity"]["features"]["spike_count"]["teacher_mean"] == 0.5
@@ -164,6 +172,37 @@ def test_regime_post_event_uses_high_drive_for_many_input_channels():
     assert "post_input_event" in metrics["what_failure_means"]
 
 
+def test_state_conditioned_metrics_weight_rare_states_separately():
+    predictions = np.zeros((1, 20, 2), dtype=np.float32)
+    targets = np.zeros((1, 20, 2), dtype=np.float32)
+    inputs = np.zeros((1, 20, 4), dtype=np.float32)
+
+    # Most of the trace is perfectly predicted resting voltage. A single
+    # spiking/near-threshold region has a large voltage error that global RMSE
+    # would dilute.
+    targets[..., 1] = -10.0
+    predictions[..., 1] = targets[..., 1]
+    targets[0, 10, 0] = 1.0
+    targets[0, 9:11, 1] = 8.0
+    predictions[0, 9:11, 1] = -10.0
+    inputs[0, 8:11, :2] = 1.0
+
+    metrics = compute_state_conditioned_metrics(
+        predictions,
+        targets,
+        inputs,
+        soma_scale=1.0,
+        soma_bias_mv=0.0,
+        ignore_start=0,
+    )
+
+    rows = {row["state"]: row for row in metrics["states"]}
+    assert rows["spiking"]["count"] == 1
+    assert rows["spiking"]["voltage_rmse_mv"] == 18.0
+    assert metrics["state_weighted_trace_distance_mv"] > np.sqrt(np.mean((predictions[..., 1] - targets[..., 1]) ** 2))
+    assert metrics["dynamic_distance"] is not None
+
+
 def test_event_dropout_only_removes_existing_events_deterministically():
     inputs = np.zeros((1, 6, 4), dtype=np.int8)
     inputs[0, 1, 0] = 1
@@ -178,6 +217,43 @@ def test_event_dropout_only_removes_existing_events_deterministically():
     assert np.count_nonzero(dropped_a) <= np.count_nonzero(inputs)
     assert np.all(dropped_a[inputs == 0] == 0)
     assert set(np.unique(dropped_a)).issubset({-1, 0, 1})
+
+
+def test_structured_intervention_input_transforms_are_targeted():
+    inputs = np.zeros((1, 6, 8), dtype=np.int8)
+    inputs[0, 1, 0] = 1
+    inputs[0, 2, 1] = 1
+    inputs[0, 3, 4] = -1
+    inputs[0, 4, 5] = -1
+
+    exc_dropped, exc_mask = make_selective_event_dropout_inputs(
+        inputs,
+        dropout_probability=1.0,
+        event_sign=1,
+        seed=0,
+    )
+    assert np.count_nonzero(exc_dropped == 1) == 0
+    assert np.count_nonzero(exc_dropped == -1) == 2
+    assert np.count_nonzero(exc_mask) == 2
+
+    jittered, changed = make_temporal_jitter_inputs(inputs, max_jitter_steps=1, seed=2)
+    assert np.count_nonzero(jittered) <= np.count_nonzero(inputs)
+    assert changed.shape == inputs.shape
+
+    silenced, silence_mask = make_site_silence_inputs(inputs, start_fraction=0.0, site_fraction=0.5)
+    assert np.count_nonzero(silenced[..., [0, 1, 4, 5]]) == 0
+    assert np.count_nonzero(silence_mask) == 4
+
+    transformed, transformed_mask, meta = make_structured_intervention_inputs(
+        inputs,
+        intervention="inh_dropout",
+        dropout_probability=1.0,
+        seed=0,
+    )
+    assert np.count_nonzero(transformed == -1) == 0
+    assert np.count_nonzero(transformed == 1) == 2
+    assert transformed_mask.sum() == 2
+    assert meta["intervention"] == "inh_dropout"
 
 
 def test_paired_event_intervention_scores_teacher_and_model_delta_alignment():

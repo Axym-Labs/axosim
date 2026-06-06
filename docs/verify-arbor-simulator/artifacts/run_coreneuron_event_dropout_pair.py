@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a paired CoreNEURON/Hay teacher event-dropout intervention."""
+"""Create a paired CoreNEURON/Hay teacher structured intervention."""
 
 from __future__ import annotations
 
@@ -15,10 +15,11 @@ import numpy as np
 
 ARTIFACTS = Path(__file__).resolve().parent
 CORENEURON_PROBE = ARTIFACTS / "coreneuron_hay_port_probe_20260605"
+DEFAULT_SOURCE_ROOT = ARTIFACTS / "source_models" / "neuron_as_deep_net" / "L5PC_NEURON_simulation"
 sys.path.insert(0, str(ARTIFACTS))
 sys.path.insert(0, str(CORENEURON_PROBE))
 
-from bnn_sim.benchmark import compute_paired_event_intervention_metrics, make_event_dropout_inputs  # noqa: E402
+from bnn_sim.benchmark import compute_paired_event_intervention_metrics, make_structured_intervention_inputs  # noqa: E402
 from bnn_sim.data import ShardedNeuronIODataset  # noqa: E402
 from generate_hay_neuron_dataset import (  # noqa: E402
     SOMA_BIAS_MV,
@@ -32,12 +33,20 @@ from run_hay_neuron_driven_probe import collect_segments  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-root", default="/tmp/neuron-as-deep-net/L5PC_NEURON_simulation")
+    parser.add_argument("--source-root", default=str(DEFAULT_SOURCE_ROOT))
     parser.add_argument("--mechanism-root", default=str(CORENEURON_PROBE))
     parser.add_argument("--source-data", default="data/hay-coreneuron-source-val16-exc0925-20260605/val")
     parser.add_argument("--output-dir", default="docs/verify-arbor-simulator/artifacts/coreneuron_event_dropout_pair_20260605")
     parser.add_argument("--samples", type=int, default=4)
+    parser.add_argument(
+        "--intervention",
+        choices=["event_dropout", "exc_dropout", "inh_dropout", "temporal_jitter", "site_silence"],
+        default="event_dropout",
+    )
     parser.add_argument("--dropout-probability", type=float, default=0.35)
+    parser.add_argument("--jitter-steps", type=int, default=2)
+    parser.add_argument("--site-start-fraction", type=float, default=0.0)
+    parser.add_argument("--site-fraction", type=float, default=0.25)
     parser.add_argument("--seed", type=int, default=20260605)
     parser.add_argument("--backend", choices=["neuron", "coreneuron"], default="coreneuron")
     parser.add_argument("--coreneuron-gpu", action="store_true")
@@ -52,9 +61,13 @@ def main() -> int:
     started = time.perf_counter()
     output_dir = Path(args.output_dir).resolve()
     baseline_inputs, baseline_targets, trace_ids = load_source(args.source_data, args.samples)
-    intervention_inputs, drop_mask = make_event_dropout_inputs(
+    intervention_inputs, change_mask, intervention_meta = make_structured_intervention_inputs(
         baseline_inputs,
+        intervention=args.intervention,
         dropout_probability=args.dropout_probability,
+        jitter_steps=args.jitter_steps,
+        site_start_fraction=args.site_start_fraction,
+        site_fraction=args.site_fraction,
         seed=args.seed,
     )
     simulated_targets, simulated_soma_mv = simulate_intervention_targets(
@@ -73,7 +86,7 @@ def main() -> int:
         baseline_targets,
         intervention_inputs,
         simulated_targets,
-        intervention_name=f"coreneuron_hay_event_dropout_p{args.dropout_probability:g}",
+        intervention_name=f"coreneuron_hay_{args.intervention}",
         soma_scale=SOMA_SCALE,
         soma_bias_mv=SOMA_BIAS_MV,
         ignore_start=min(500, max(0, baseline_inputs.shape[1] - 1)),
@@ -82,13 +95,24 @@ def main() -> int:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
+        output_dir / "intervention_pair.npz",
+        baseline_inputs=baseline_inputs,
+        baseline_targets=baseline_targets,
+        intervention_inputs=intervention_inputs,
+        intervention_targets=simulated_targets,
+        intervention_soma_mv=simulated_soma_mv,
+        changed_event_mask=change_mask,
+        sample_ids=np.asarray(trace_ids),
+    )
+    # Keep the historical filename for existing scripts.
+    np.savez_compressed(
         output_dir / "event_dropout_pair.npz",
         baseline_inputs=baseline_inputs,
         baseline_targets=baseline_targets,
         intervention_inputs=intervention_inputs,
         intervention_targets=simulated_targets,
         intervention_soma_mv=simulated_soma_mv,
-        dropped_event_mask=drop_mask,
+        changed_event_mask=change_mask,
         sample_ids=np.asarray(trace_ids),
     )
     report = {
@@ -99,19 +123,24 @@ def main() -> int:
             "backend": args.backend,
             "coreneuron_gpu": bool(args.coreneuron_gpu),
             "elapsed_seconds": time.perf_counter() - started,
-            "dropout_probability": args.dropout_probability,
+            "intervention": args.intervention,
+            "intervention_parameters": intervention_meta,
             "seed": args.seed,
             "samples": int(baseline_inputs.shape[0]),
             "time_steps": int(baseline_inputs.shape[1]),
-            "dropped_events": int(drop_mask.sum()),
+            "changed_events": int(change_mask.sum()),
             "baseline_events": int(np.count_nonzero(baseline_inputs)),
+            "intervention_events": int(np.count_nonzero(intervention_inputs)),
             "target_policy": "same clipped/normalized soma and local-peak spike labels as accepted CoreNEURON/Hay data",
         },
+        "teacher_intervention": teacher_report,
         "teacher_event_dropout": teacher_report,
     }
+    (output_dir / "intervention_report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (output_dir / "intervention_report.md").write_text(render_markdown(report), encoding="utf-8")
     (output_dir / "event_dropout_report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (output_dir / "event_dropout_report.md").write_text(render_markdown(report), encoding="utf-8")
-    print(json.dumps(report["teacher_event_dropout"]["teacher_response"], indent=2, sort_keys=True))
+    print(json.dumps(report["teacher_intervention"]["teacher_response"], indent=2, sort_keys=True))
     return 0
 
 
@@ -236,16 +265,17 @@ def simulate_one_signed_trace(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    response = report["teacher_event_dropout"]["teacher_response"]
+    response = report["teacher_intervention"]["teacher_response"]
     meta = report["metadata"]
     return "\n".join(
         [
-            "# CoreNEURON/Hay Event Dropout Teacher Pair",
+            "# CoreNEURON/Hay Structured Teacher Pair",
             "",
             f"- Source data: `{meta['source_data']}`",
             f"- Backend: `{meta['backend']}`",
-            f"- Dropout probability: `{meta['dropout_probability']}`",
-            f"- Dropped events: `{meta['dropped_events']}` / `{meta['baseline_events']}`",
+            f"- Intervention: `{meta['intervention']}`",
+            f"- Changed events: `{meta['changed_events']}` / `{meta['baseline_events']}`",
+            f"- Intervention events: `{meta['intervention_events']}`",
             f"- Baseline event fraction: `{response['baseline_event_fraction']:.6f}`",
             f"- Intervention event fraction: `{response['intervention_event_fraction']:.6f}`",
             f"- Delta spike rate / 1000 steps: `{response['delta_spike_rate_per_1000_steps']:.4f}`",

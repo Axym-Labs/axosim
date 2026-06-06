@@ -21,6 +21,7 @@ from typing import Any, Callable
 import numpy as np
 
 from bnn_sim.benchmark.regime_stratified import compute_regime_stratified_metrics
+from bnn_sim.benchmark.state_metrics import compute_state_conditioned_metrics
 from bnn_sim.benchmark.perturbation_stability import compute_perturbation_stability
 from bnn_sim.benchmark.structured_intervention import compute_paired_event_intervention_metrics
 from bnn_sim.official.constants import DEFAULT_Y_TRAIN_SOMA_BIAS
@@ -96,6 +97,18 @@ class BenchmarkSuite:
             ignore_start=ignore_start,
             calibrated_spike_threshold=calibrated_spike_threshold,
         )
+        state_metrics = compute_state_conditioned_metrics(
+            predictions,
+            targets,
+            inputs,
+            soma_scale=soma_scale,
+            soma_bias_mv=soma_bias_mv,
+            ignore_start=ignore_start,
+            calibrated_spike_threshold=calibrated_spike_threshold,
+        )
+        m1["state_weighted_trace_distance_mv"] = state_metrics["state_weighted_trace_distance_mv"]
+        m1["dynamic_distance"] = state_metrics["dynamic_distance"]
+        m1["dynamic_distance_components"] = state_metrics["dynamic_distance_components"]
 
         # M4: Perturbation stability
         m4 = {}
@@ -169,6 +182,7 @@ class BenchmarkSuite:
             "m1_trace_fidelity": m1,
             "m1b_feature_fidelity": m1b,
             "m2_regimes": m2,
+            "state_conditioned_fidelity": state_metrics,
             "m4_intervention": m4_intervention,
             "limitations": limitations,
             # Legacy aliases retained for existing scripts while the benchmark

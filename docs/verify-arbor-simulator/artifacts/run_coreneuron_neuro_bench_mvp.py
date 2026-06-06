@@ -204,6 +204,8 @@ def compact_summary(payload: dict[str, Any]) -> dict[str, Any]:
         m4 = report["m4_intervention"]["model_response"]
         rows[name] = {
             "rmse_mv": m1["soma_rmse_mv"],
+            "state_weighted_trace_distance_mv": m1["state_weighted_trace_distance_mv"],
+            "dynamic_distance": m1["dynamic_distance"],
             "auc": m1["spike_auc"],
             "threshold": row["calibrated_spike_threshold"]["threshold"],
             "count_mae_calibrated": m1["spike_calibrated_threshold"]["count_mae_per_trace"],
@@ -247,8 +249,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         "",
         "## Model Smoke Comparison",
         "",
-        "| model | RMSE mV | AUC | threshold | count MAE calibrated | timing F1 calibrated | near-spike RMSE | M4 soma-delta RMSE | M4 spike-delta MAE | M4 soma/spike direction |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| model | RMSE mV | state-weighted mV | dynamic distance | AUC | threshold | count MAE calibrated | timing F1 calibrated | near-spike RMSE | M4 soma-delta RMSE | M4 spike-delta MAE | M4 soma/spike direction |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for name, row in payload["models"].items():
         report = row["benchmark"]
@@ -262,7 +264,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         soma_cell = _format_ci_cell(m4["soma_delta_rmse_mv"], soma_interval)
         spike_cell = _format_ci_cell(m4["spike_count_delta_mae_per_trace"], spike_interval)
         lines.append(
-            f"| `{name}` | `{m1['soma_rmse_mv']:.4f}` | `{m1['spike_auc']:.4f}` | "
+            f"| `{name}` | `{m1['soma_rmse_mv']:.4f}` | `{m1['state_weighted_trace_distance_mv']:.4f}` | "
+            f"`{m1['dynamic_distance']:.4f}` | `{m1['spike_auc']:.4f}` | "
             f"`{row['calibrated_spike_threshold']['threshold']:.4f}` | "
             f"`{m1['spike_calibrated_threshold']['count_mae_per_trace']:.4f}` | "
             f"`{m2['spike_timing_calibrated_threshold']['f1_at_2steps']:.4f}` | "

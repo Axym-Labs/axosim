@@ -13,10 +13,15 @@ Usage:
 """
 
 from bnn_sim.benchmark.regime_stratified import compute_regime_stratified_metrics
+from bnn_sim.benchmark.state_metrics import compute_state_conditioned_metrics, build_neuron_state_masks
 from bnn_sim.benchmark.perturbation_stability import compute_perturbation_stability
 from bnn_sim.benchmark.structured_intervention import (
     compute_paired_event_intervention_metrics,
     make_event_dropout_inputs,
+    make_selective_event_dropout_inputs,
+    make_site_silence_inputs,
+    make_structured_intervention_inputs,
+    make_temporal_jitter_inputs,
 )
 from bnn_sim.benchmark.morphology_transfer import MorphologyTransferEvaluator, load_available_morphologies
 from bnn_sim.benchmark.branch_adapter import adapt_branch_count, evaluate_with_branch_adaptation
@@ -24,9 +29,15 @@ from bnn_sim.benchmark.suite import BenchmarkSuite
 
 __all__ = [
     "compute_regime_stratified_metrics",
+    "compute_state_conditioned_metrics",
+    "build_neuron_state_masks",
     "compute_perturbation_stability",
     "compute_paired_event_intervention_metrics",
     "make_event_dropout_inputs",
+    "make_selective_event_dropout_inputs",
+    "make_site_silence_inputs",
+    "make_structured_intervention_inputs",
+    "make_temporal_jitter_inputs",
     "MorphologyTransferEvaluator",
     "load_available_morphologies",
     "adapt_branch_count",

@@ -3,6 +3,37 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- MILESTONE (2026-06-06 11:56): Moved the benchmark target from MVP scaffolding
+  toward publishable evaluation per user update. Updated `spec.md` to require
+  a primary metric upgrade beyond global RMSE, behavior/state-conditioned
+  metrics, roughly five structured M4 interventions, and morphology transfer
+  unless explicitly scoped out. Added reusable state-conditioned metric code in
+  `src/bnn_sim/benchmark/state_metrics.py` and wired it into
+  `BenchmarkSuite` as `state_conditioned_fidelity`; M1 now also reports
+  `state_weighted_trace_distance_mv` and `dynamic_distance`. Current
+  CoreNEURON/Hay 16-trace eval: RNN remains best on global RMSE and
+  state-weighted trace distance (`0.7987 mV`, `1.8707 mV`), while prior
+  `mamba_exc0925_80k` is best on composite dynamic distance (`0.5249`) because
+  its calibrated spike-count behavior is better. Tracked report:
+  `artifacts/coreneuron_state_metrics_pair16_20260606.md`.
+
+- MILESTONE (2026-06-06 11:56): Expanded M4 from one event-dropout probe to a
+  five-intervention CoreNEURON/Hay suite using the same `16` validation traces:
+  `event_dropout`, `exc_dropout`, `inh_dropout`, `temporal_jitter`, and
+  `site_silence`. Added reusable input transforms in
+  `structured_intervention.py` and a resumable suite runner
+  `artifacts/run_coreneuron_m4_intervention_suite.sh`. Also fixed a
+  reproducibility hole: the old Hay source default depended on vanished
+  `/tmp/neuron-as-deep-net`; the runner now defaults to an ignored durable
+  checkout of `SelfishGene/neuron_as_deep_net` and the suite script fetches it
+  if missing. Teacher sanity: `event_dropout` soma/spike deltas
+  `-2.4102 mV / -4.6250 spikes`, `exc_dropout` `-4.6864 / -4.8125`,
+  `inh_dropout` `+3.0588 / +12.8750`, `site_silence` `-2.5980 / -4.5000`.
+  `temporal_jitter` is weaker (`-0.0448 / -0.1250`, spike-count interval
+  crosses zero) and should be framed as timing sensitivity, not strong OOD.
+  Tracked report:
+  `artifacts/coreneuron_m4_intervention_suite_20260606.md`.
+
 - IMPLEMENTATION (2026-06-06 00:06): Added per-trace uncertainty summaries
   to paired M4 event-intervention metrics. Teacher reports now include
   `n_traces`, trace-mean soma-delta intervals, and trace-mean spike-count

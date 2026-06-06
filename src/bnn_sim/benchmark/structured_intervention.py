@@ -33,6 +33,115 @@ def make_event_dropout_inputs(
     return intervened, drop_mask
 
 
+def make_selective_event_dropout_inputs(
+    inputs: np.ndarray,
+    *,
+    dropout_probability: float,
+    event_sign: int,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Drop only excitatory (`event_sign=1`) or inhibitory (`event_sign=-1`) events."""
+    if event_sign not in {-1, 1}:
+        raise ValueError("event_sign must be 1 for excitatory or -1 for inhibitory events")
+    if not 0.0 <= dropout_probability <= 1.0:
+        raise ValueError("dropout_probability must be in [0, 1]")
+    rng = np.random.default_rng(seed)
+    inputs = np.asarray(inputs)
+    event_mask = inputs == event_sign
+    drop_mask = event_mask & (rng.random(inputs.shape) < dropout_probability)
+    intervened = inputs.copy()
+    intervened[drop_mask] = 0
+    return intervened, drop_mask
+
+
+def make_temporal_jitter_inputs(
+    inputs: np.ndarray,
+    *,
+    max_jitter_steps: int,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Move each existing event by a bounded integer time jitter."""
+    if max_jitter_steps < 0:
+        raise ValueError("max_jitter_steps must be non-negative")
+    inputs = _as_trace_array(np.asarray(inputs))
+    if max_jitter_steps == 0:
+        return inputs.copy(), np.zeros_like(inputs, dtype=bool)
+    rng = np.random.default_rng(seed)
+    jittered = np.zeros_like(inputs)
+    event_locations = np.argwhere(inputs != 0)
+    shifts = rng.integers(-max_jitter_steps, max_jitter_steps + 1, size=event_locations.shape[0])
+    changed = np.zeros_like(inputs, dtype=bool)
+    for (trace, time, channel), shift in zip(event_locations, shifts):
+        new_time = int(np.clip(time + shift, 0, inputs.shape[1] - 1))
+        jittered[trace, new_time, channel] = inputs[trace, time, channel]
+        changed[trace, time, channel] = changed[trace, time, channel] or new_time != time
+    return jittered, changed
+
+
+def make_site_silence_inputs(
+    inputs: np.ndarray,
+    *,
+    start_fraction: float = 0.0,
+    site_fraction: float = 0.25,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Silence a contiguous synaptic-site band in both E and I channel halves.
+
+    The current Hay/CoreNEURON data uses paired excitatory and inhibitory site
+    channels.  This is a spatial/site intervention, not a claim of exact branch
+    identity unless a morphology-to-channel map is supplied elsewhere.
+    """
+    if not 0.0 <= start_fraction <= 1.0:
+        raise ValueError("start_fraction must be in [0, 1]")
+    if not 0.0 <= site_fraction <= 1.0:
+        raise ValueError("site_fraction must be in [0, 1]")
+    inputs = _as_trace_array(np.asarray(inputs))
+    n_sites = inputs.shape[-1] // 2
+    start = min(n_sites, int(round(start_fraction * n_sites)))
+    stop = min(n_sites, max(start + 1, start + int(round(site_fraction * n_sites))))
+    channels = np.r_[np.arange(start, stop), np.arange(start + n_sites, stop + n_sites)]
+    intervened = inputs.copy()
+    silence_mask = np.zeros_like(inputs, dtype=bool)
+    silence_mask[..., channels] = inputs[..., channels] != 0
+    intervened[..., channels] = 0
+    return intervened, silence_mask
+
+
+def make_structured_intervention_inputs(
+    inputs: np.ndarray,
+    *,
+    intervention: str,
+    seed: int = 0,
+    dropout_probability: float = 0.35,
+    jitter_steps: int = 2,
+    site_start_fraction: float = 0.0,
+    site_fraction: float = 0.25,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Create one of the publishable structured input interventions."""
+    if intervention == "event_dropout":
+        out, changed = make_event_dropout_inputs(inputs, dropout_probability=dropout_probability, seed=seed)
+    elif intervention == "exc_dropout":
+        out, changed = make_selective_event_dropout_inputs(inputs, dropout_probability=dropout_probability, event_sign=1, seed=seed)
+    elif intervention == "inh_dropout":
+        out, changed = make_selective_event_dropout_inputs(inputs, dropout_probability=dropout_probability, event_sign=-1, seed=seed)
+    elif intervention == "temporal_jitter":
+        out, changed = make_temporal_jitter_inputs(inputs, max_jitter_steps=jitter_steps, seed=seed)
+    elif intervention == "site_silence":
+        out, changed = make_site_silence_inputs(inputs, start_fraction=site_start_fraction, site_fraction=site_fraction)
+    else:
+        raise ValueError(f"unknown structured intervention {intervention!r}")
+    return out, changed, {
+        "intervention": intervention,
+        "seed": seed,
+        "dropout_probability": dropout_probability,
+        "jitter_steps": jitter_steps,
+        "site_start_fraction": site_start_fraction,
+        "site_fraction": site_fraction,
+        "changed_events": int(changed.sum()),
+        "baseline_events": int(np.count_nonzero(inputs)),
+        "intervention_events": int(np.count_nonzero(out)),
+    }
+
+
 def compute_paired_event_intervention_metrics(
     model_fn: Callable[[np.ndarray], np.ndarray] | None,
     baseline_inputs: np.ndarray,

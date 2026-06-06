@@ -28,6 +28,7 @@ docs/**/artifacts/**/generation_summary.json
 docs/**/artifacts/**/manifest.json
 docs/**/artifacts/**/calibration_results.json
 docs/verify-arbor-simulator/artifacts/*.json
+docs/verify-arbor-simulator/artifacts/source_models/
 docs/verify-arbor-simulator/artifacts/*_2026*/
 docs/verify-arbor-simulator/artifacts/arbor_*/
 docs/verify-arbor-simulator/artifacts/branch_*/

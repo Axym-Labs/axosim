@@ -16,6 +16,23 @@ Current surrogate evaluation (RMSE + AUC on 500-step windows) is insufficient. W
 - **Deferred:** M3 morphology transfer, M5 closed-loop stability, and M6 population statistics unless they become necessary for the immediate model decision.
 - **Known weakness:** If the current teacher simulator/data generator still has pathological firing rates or failed input-response checks, the benchmark can only claim fidelity to that teacher/data distribution, not biological validity.
 
+### Publishable Benchmark Target Update
+- **Primary metric upgrade:** Do not rely on global RMSE as the main trace
+  metric. Report a state-conditioned trace/dynamics metric that separates
+  voltage level, voltage derivative, spike timing, and spike-count behavior.
+- **Behavioral state resolution:** Compute headline metrics separately over
+  meaningful neuron states such as spiking, refractory, near-threshold,
+  excited-drive, inhibited-drive, hyperpolarized-quiet, and resting.
+- **Structured robustness/OOD:** M4 should become a small battery, targeting
+  roughly five well-motivated interventions/probes rather than one MVP probe.
+  Each intervention must first pass a teacher-response sanity check and should
+  be framed by direction/gain/timing preservation, not generic smoothness.
+- **Morphology transfer:** M3 is no longer merely optional for the final
+  publishable benchmark. Same-cell-type morphology transfer should be
+  implemented or explicitly justified as out of scope with a defensible reason.
+- **Leanness constraint:** Reuse shared state definitions and metric utilities
+  across M1/M1b/M2/M4 instead of duplicating state-dependent calculations.
+
 ### Metric Suites
 
 #### M1: Open-Loop Trace Fidelity (baseline)
