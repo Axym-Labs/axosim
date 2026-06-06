@@ -2,11 +2,17 @@
 
 > **Scope:** Single-neuron surrogate models. Population-level simulation is Paper 2.
 > **Date:** 2026-05-30
-> **Order of contributions:** 1) Benchmark/Metric Suite → 2) Biophysically Structured SSMs → 3) Noise Calibration
+> **Order of contributions:** 1) Deep NeuronIO-like Dataset + Diagnostic Benchmark → 2) Biophysically Structured SSMs, only after a positive bounded feasibility sprint → 3) Noise Calibration
 
 ---
 
 ## Contribution 1: NEURO-BENCH — Neuron Surrogate Benchmark Suite
+
+**Status:** Completed as a first implementation and superseded by the v1
+dataset + diagnostic benchmark task arc below. The original metric-partition
+language in this section is historical context; future work should use
+diagnostic suites and dataset conditions rather than the old numbered metric
+partition.
 
 ### Core Claim
 Current surrogate evaluation (RMSE + AUC on 500-step windows) is insufficient. We propose a lean, reusable benchmark that exposes where models fail. The first implementation should be an MVP for model iteration, not a full publication-grade benchmark.
@@ -127,25 +133,244 @@ Current surrogate evaluation (RMSE + AUC on 500-step windows) is insufficient. W
 - [ ] **P1.5:** M1b feature extraction is robust on the teacher traces and does not fail silently on non-spiking traces
 
 ### Benchmark MVP Milestones
-- [ ] **Milestone A: Report schema and M1 cleanup**
+- [x] **Milestone A: Report schema and M1 cleanup**
   - Define one JSON/Markdown report format with `metadata`, `m1_trace_fidelity`, `m1b_feature_fidelity`, `m2_regimes`, `m4_intervention`, and `limitations`.
   - Ensure M1 records mask/burn-in semantics, model/config identity, dataset path, and trace IDs.
-- [ ] **Milestone B: Lightweight M1b**
+- [x] **Milestone B: Lightweight M1b**
   - Implement the MVP feature subset without requiring full eFEL integration.
   - Report feature distribution errors plus a few worst trace IDs.
-- [ ] **Milestone C: M2 repair**
+- [x] **Milestone C: M2 repair**
   - Fix trace-boundary handling.
   - Report only the four MVP regimes with support counts and skip/flag under-supported regimes.
-- [ ] **Milestone D: One M4 intervention**
+- [x] **Milestone D: One M4 intervention**
   - Choose one fast intervention, preferably event dropout or event-rate scaling.
   - Verify teacher/data response direction on a small subset before comparing models.
-- [ ] **Milestone E: Smoke comparison**
+- [x] **Milestone E: Smoke comparison**
   - Run the MVP benchmark on two representative models/checkpoints.
   - Produce a concise report with metrics, limitations, and the next model decision.
 
 ---
 
+## Contribution 1 v1: Deep NeuronIO-like Dataset + Diagnostic Benchmark
+
+### Core Claim
+NeuronIO-style surrogate modeling needs a trainable dataset and benchmark that
+preserves the old dataset's usability while adding morphology diversity,
+teacher provenance, state-aware diagnostics, intervention response tests, and
+raw-vs-clipped target transparency. Version 1 should be deep, trainable,
+diagnostic-rich, and lean; it should not try to be the broad morphology release.
+
+### Dataset Framing
+- **Artifact:** dataset + diagnostic benchmark + generation recipe, packaged
+  as one contribution.
+- **Scope:** single-neuron surrogate modeling; population simulation and broad
+  morphology scaling are future work.
+- **Teacher:** CoreNEURON/Hay in the NeuronIO-like dynamic regime, with frozen
+  simulator version, mechanisms, routing policy, spike-label policy, clipping
+  policy, seed policy, and provenance hashes before public generation.
+- **Compatibility:** preserve NeuronIO-style shard access for training
+  (`inputs`, `targets`, `sample_ids`, `manifest.json`) while adding richer
+  metadata and optional target views. The dataset should be NeuronIO-compatible,
+  not NeuronIO-limited.
+- **Morphologies:** use `N=5` hand-selected deep morphologies. They should be
+  selected for insight and teacher sanity, not for broad generalization claims:
+  include a close/control morphology, intermediate shifts, and at least one
+  stronger but still sane morphology shift.
+- **Broad morphology:** explicitly defer the many-morphology dataset to a
+  future v2. A short future pass should try to increase the candidate pool
+  beyond the current Allen L5 spiny set; if not, the local `71` dendrite-only
+  Allen candidates are acceptable for a tightly framed dendritic-transfer v2.
+- **Dendrite-only caveat:** dendrite-only Allen reconstructions are acceptable
+  for dendritic input-routing and soma-output surrogate diagnostics, but not
+  for full-cell morphology, axonal effects, or full biological reconstruction
+  claims.
+
+### Dataset Layout
+Use ordinary splits at the top level and keep interventions as an equally
+top-level condition category:
+
+```text
+dataset/
+  train/
+  val/
+  test/
+  private-test/
+  interventions/
+    event_dropout/
+    exc_dropout/
+    inh_dropout/
+    temporal_jitter/
+    site_silence/
+  metadata/
+```
+
+Default diagnostics run on `val/` across all `5` morphologies. Interventions
+are the necessary extra rule: intervention diagnostics read paired traces under
+`interventions/<name>/`. Private evaluation should require only an alternate
+data path, not a separate benchmark architecture.
+
+### Dataset Size Target
+A trace means one full independent `6000 ms` teacher simulation sampled at
+`1 ms`, stored as NeuronIO-style `(time, input_channels)` input events and
+two-output targets. Local NeuronIO conversion is `38,400` train traces
+(`5.4 GB`) and `1,280` validation traces (`220 MB`) for one source morphology.
+
+Version 1 should work backward from the `<200 GB` machine constraint while
+reserving headroom for a future broad morphology and heterogeneity/noise
+extension. Assume each non-train ordinary split is `1/8` of train, and the
+entire intervention category is also `1/8` of train measured in paired examples.
+
+Provisional v1 target:
+
+| category | morphologies | semantic units per morphology | total semantic units |
+| --- | ---: | ---: | ---: |
+| `train` | `5` | `20,000` traces | `100,000` traces |
+| `val` | `5` | `2,500` traces | `12,500` traces |
+| `test` | `5` | `2,500` traces | `12,500` traces |
+| `private-test` | `5` | `2,500` traces | `12,500` traces |
+| `interventions` | `5` | `2,500` paired examples | `12,500` pairs |
+
+At roughly `0.20-0.25 MB` per compressed full trace, ordinary splits are
+approximately `25-35 GB`. If paired interventions store both baseline and
+intervened traces, `12,500` pairs add roughly `5-7 GB`. Raw soma targets,
+metadata, manifests, and provenance should still leave v1 well below `100 GB`,
+with `<200 GB` as the hard local cap and `<150 GB` preferred after future
+extensions.
+
+### Teacher Validation
+Parts of the benchmark should validate the teacher before model claims. These
+diagnostics can falsify or sanity-check the teacher; they do not prove
+biological correctness by themselves.
+
+Teacher-facing diagnostics should include:
+- source-regime match against historical NeuronIO-like statistics;
+- voltage/spike distribution sanity per morphology;
+- excitatory/inhibitory polarity response;
+- intervention response direction and effect size;
+- routing and morphology feature sanity;
+- raw-vs-clipped target distortion;
+- numerical backend agreement where applicable.
+
+Every deep morphology must pass baseline teacher sanity and intervention
+teacher sanity before the dataset is frozen.
+
+### Clipping Diagnostic
+The dataset must treat voltage clipping as an explicit diagnostic, not a hidden
+preprocessing detail. Historical NeuronIO/ELM/Branch-ELM evaluation clips soma
+voltage above `-55 mV`, subtracts `-67.7 mV`, and scales by `1/10`. Local
+diagnostics found that hard `-55 mV` clipping affects only about `0.21%` of
+masked timesteps globally but about `13%` of near-spike timesteps, with
+near-spike raw-vs-clipped RMSE about `8.95 mV` and up to about `50 mV` removed
+from raw action-potential peaks.
+
+Writing and dataset implications:
+- include raw soma voltage and the historical clipped NeuronIO target view;
+- report clipped-target RMSE for historical comparability;
+- report raw-soma and spike-shape/state diagnostics separately;
+- never imply that sub-`1 mV` clipped RMSE proves raw AP peak-shape fidelity.
+
+### Diagnostics Architecture
+Diagnostics are atomic computations that emit tidy tabular evidence. Suites
+are overlapping bundles of diagnostics, not partitions. A diagnostic can appear
+in teacher validation, model evaluation, and paper-summary suites.
+
+Each diagnostic should:
+- compute from a declared data selector, usually `split=val` or
+  `condition=interventions/<name>`;
+- emit a dataframe-compatible table with stable columns such as
+  `diagnostic`, `suite`, `model_id`, `teacher_id`, `morphology_id`, `split`,
+  `condition`, `intervention`, `trace_id`, `state`, `metric`, `value`, `unit`,
+  and `n`;
+- include enough metadata to reproduce mask, threshold, clipping, calibration,
+  and target-view semantics;
+- expose plotters as atomic evidence views attached to the diagnostic, not as
+  separate plot suites.
+
+Suite-level plotters are allowed only when they synthesize multiple diagnostic
+tables into a specific scientific figure. Example and worst-case figures are a
+special case: they should combine multiple per-diagnostic views for the same
+trace(s) because their purpose is qualitative inspection. Generic
+`main`/`breakdown` plotter categories should be avoided.
+
+Plot quality requires a separate pass after implementation. First implement
+correct dataframes and diagnostic semantics; then design data-rich,
+publishable figures with a clear reason to exist.
+
+Recommended diagnostic suites:
+
+| suite | default selector | purpose |
+| --- | --- | --- |
+| `teacher-qc` | `val` + `interventions/*` | verify teacher sanity before model claims |
+| `trace-core` | `val` | trace fidelity, spike discrimination, count/timing basics |
+| `state-dynamics` | `val` | dense state/regime-conditioned behavior |
+| `spike-behavior` | `val` | calibration, timing, count, threshold behavior |
+| `feature-fidelity` | `val` | electrophysiology-style feature summaries |
+| `morphology-contrast` | `val`, all `N=5` | per-morphology differences and rough uncertainty |
+| `intervention-response` | `interventions/*` | paired teacher/model response deltas |
+| `paper-summary` | `val` + `interventions/*` | compact paper-facing subset |
+| `full` | `val` + `interventions/*` | all practical diagnostics |
+
+Diagnostics should remain dense across metrics, states, and the `N=5`
+morphologies by default. Since broad morphology is deferred, pruning is not a
+primary concern for v1. Interventions are interpreted as alternative
+conditions to the default validation situation, which should keep the code path
+cleaner than special-casing old robustness tests.
+
+### Implementation Plan
+1. **Dataset schema and manifest v2**
+   - Define trace, morphology, split, condition, intervention-pair, target-view,
+     and provenance metadata.
+   - Preserve existing NeuronIO-style loading for `inputs` and `targets`.
+2. **Morphology selection**
+   - Select `N=5` deep morphologies by diversity and teacher sanity.
+   - Record dendrite-only/full-cell limitations and routing metadata.
+3. **Teacher generator freeze**
+   - Freeze CoreNEURON/Hay config, mechanisms, routing, spike labels, clipping,
+     seed policy, and provenance hashes.
+4. **Teacher QC pilot**
+   - Generate small baseline and intervention pilots for all `5` morphologies.
+   - Run teacher-facing diagnostics; reject or replace morphologies that fail.
+5. **Full v1 dataset generation**
+   - Generate ordinary splits and intervention pairs under the size target.
+   - Store raw and clipped target views plus metadata.
+6. **Diagnostic framework**
+   - Implement dataframe-first diagnostic outputs, suite composition, selectors,
+     and report rendering.
+   - Default command: run dense diagnostics on `val` plus intervention
+     diagnostics on `interventions/`.
+7. **Model evaluation**
+   - Evaluate current Mamba, RNN, and Branch-ELM baselines using the same
+     diagnostic suite outputs.
+8. **Plot-quality pass**
+   - After correct outputs exist, design diagnostic-attached and suite-level
+     publishable plots. Do not block core implementation on plot polish.
+9. **Packaging path**
+   - Optimize the future package for ease of use: one promoted default command,
+     composable diagnostic suites for researchers, and dataframes as primary
+     numeric outputs.
+
+### Remaining Publishability Gaps
+- Morphology-transfer evidence is currently a scaffold: normalized routing and
+  three held-out morphologies showed useful failure modes, but v1 must validate
+  all `5` deep morphologies and phrase claims as deep multi-morphology
+  trainability/diagnostics, not broad morphology generalization.
+- Intervention evidence is better than the initial smoke test but still needs
+  v1-scale paired data and stronger framing. Weak timing perturbations and
+  site-level silence should either be redesigned, explicitly labeled as weak
+  probes, or excluded from paper-summary claims.
+- Teacher correctness claims must remain bounded: diagnostics establish a
+  NeuronIO-like CoreNEURON/Hay teacher distribution and sanity under
+  perturbations, not biological truth.
+
+---
+
 ## Contribution 2: BSSM — Biophysically Structured State-Space Model
+
+**Gate:** Do not start full BSSM implementation until a bounded feasibility
+sprint gives positive evidence that the proposed state structure targets a
+real failure mode exposed by the v1 diagnostics. The sprint should be small,
+predeclared, and allowed to kill or defer BSSM if it does not beat a simpler
+alternative.
 
 ### Core Claim
 State-space models match RNN accuracy when the state transition is structured by biophysical priors (fast/slow E/I currents, membrane integration, adaptation) rather than learned from scratch.
@@ -253,21 +478,31 @@ Training on mean traces only creates systematic overconfidence. Calibrating outp
 
 ## Execution Order
 
-### Phase 1: Benchmark MVP
-1. Complete Milestone A: report schema and M1 cleanup
-2. Complete Milestone B: lightweight M1b feature fidelity
-3. Complete Milestone C: M2 trace-boundary repair and four-regime diagnostic
-4. Complete Milestone D: one controlled M4 intervention with teacher/data sanity check
-5. Complete Milestone E: smoke comparison on two representative models/checkpoints
-6. Record limitations clearly, especially whether results are biological claims or only teacher-fidelity diagnostics
-7. Defer M3/M5/M6 unless the smoke comparison shows they are needed for the immediate model decision
+### Phase 1: Deep Dataset + Diagnostic Benchmark
+1. Finalize dataset schema, manifest v2, and diagnostic dataframe schema.
+2. Hand-select `N=5` deep morphologies and generate small teacher-QC pilots
+   for baseline and intervention conditions.
+3. Freeze the CoreNEURON/Hay teacher config after all five morphologies pass
+   baseline and intervention sanity checks.
+4. Generate v1 ordinary splits and intervention pairs within the size target.
+5. Implement dataframe-first diagnostics, overlapping diagnostic suites, and
+   the promoted default path: dense diagnostics on `val` plus intervention
+   diagnostics under `interventions/`.
+6. Evaluate Mamba, RNN, and Branch-ELM baselines with the same diagnostic
+   outputs.
+7. Run a separate plot-quality pass after the numeric outputs are correct.
+8. Write dataset card, benchmark report, limitations, and paper framing.
 
-### Phase 2: BSSM Design & Validation (3-4 weeks)
-1. Run a critical evaluation pass before implementation: does the proposed 6-state structure measure a real bottleneck in current models, and what result would falsify it?
-2. Implement pure-PyTorch 6-state BSSM core
-3. Benchmark forward speed (validate P2.1)
-4. Train on standard dataset, check convergence and interpretability (P2.2-P2.4)
-5. Port state structure to RNN only if the BSSM result survives the critical evaluation gate (P2.5)
+### Phase 2: BSSM Feasibility Sprint
+1. Use v1 diagnostics to identify a concrete failure mode that the proposed
+   state structure should fix.
+2. Predeclare a bounded sprint: minimal pure-PyTorch prototype, one or two
+   baselines, fixed data subset, fixed success/failure criteria, and a fixed
+   runtime budget.
+3. Continue to full BSSM implementation only if the sprint gives positive
+   evidence on accuracy, interpretability, or efficiency that a simpler model
+   does not already provide.
+4. Port state structure to RNN only if the BSSM result survives this gate.
 
 ### Phase 3: Noise Calibration (2-3 weeks)
 1. Run a critical evaluation pass before implementation: is there measurable trial-to-trial variability from a plausible stochastic teacher, and is it relevant to the paper's use case?
@@ -291,10 +526,13 @@ Training on mean traces only creates systematic overconfidence. Calibrating outp
 |------|--------|------------|
 | Mamba package incompatible with BSSM | High | Fallback to pure PyTorch; small state dimension keeps cost acceptable |
 | Simulator noise is negligible across seeds | Medium | Pivot to Option C (heterogeneity variance as proxy) or reduce NCS scope |
-| Allen morphologies incompatible with branch router | Medium | Simplify morphology to compatible subset; document limitation |
-| BSSM accuracy still below Branch-ELM | High | Benchmark paper stands alone; structured SSM becomes a methodological exploration |
-| Scope creep to population sim | High | Strictly defer M5-M6 to Paper 2; include in benchmark release only |
-| Benchmark MVP grows into full validation suite | High | Stop at M1/lightweight M1b/M2/one M4 intervention unless a milestone fails for a specific reason |
+| Deep morphologies fail teacher sanity | High | Replace morphology before full generation; do not freeze a dataset with unsound teacher behavior |
+| Dataset exceeds storage/runtime target | High | Reduce train traces per morphology first; preserve all five morphologies and validation/intervention coverage if possible |
+| Dendrite-only morphologies are overclaimed | Medium | Phrase v1 as deep multi-morphology surrogate diagnostics, not full-cell biological morphology generalization |
+| Intervention probes are weak or ambiguous | Medium | Exclude weak probes from paper-summary claims or redesign them before full generation |
+| BSSM accuracy still below Branch-ELM | High | Dataset/benchmark paper stands alone; structured SSM becomes a methodological exploration |
+| Scope creep to population sim | High | Strictly defer closed-loop and population statistics to Paper 2 |
+| Benchmark code becomes bloated | Medium | Keep diagnostics dataframe-first, suites compositional, and plotting as a separate layer after implementation |
 
 ## Critical Evaluation Requirements For Later Batches
 
@@ -303,4 +541,4 @@ The benchmark slop test should be repeated in lighter form before each remaining
 1. **BSSM:** Required. The current BSSM section risks being architecture-first. Before implementation, verify that the 6-state structure targets an observed failure mode in M1b/M2/M4, has an interpretable state-to-behavior test, and has clear falsification criteria.
 2. **Noise calibration:** Required. This is especially vulnerable to sounding biologically sophisticated while measuring simulator artifacts. Before implementation, verify that repeated-seed variability exists, is plausible, and affects a metric practitioners care about.
 3. **Baselines:** Required. Each baseline must have a role: accuracy reference, speed reference, morphology/heterogeneity reference, or ablation control. Do not include a baseline only because it is familiar.
-4. **Execution/timeline:** Required but lighter. Re-evaluate ordering after the benchmark blocker is resolved, because BSSM/NCS work is premature if the teacher simulator or metric suite is not credible.
+4. **Execution/timeline:** Required but lighter. Re-evaluate ordering after the dataset/diagnostic benchmark is resolved, because BSSM/NCS work is premature if the teacher dataset or diagnostic suite is not credible.

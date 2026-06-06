@@ -3,6 +3,21 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 20:13): Updated `spec.md` to supersede the old
+  numbered benchmark MVP with the new v1 dataset + diagnostic benchmark task
+  arc. Marked the historical benchmark MVP milestones done, inserted the
+  `Deep NeuronIO-like Dataset + Diagnostic Benchmark` section before BSSM,
+  and encoded the current decisions: v1 is deep/trainable/diagnostic-rich/lean,
+  not broad morphology; use `N=5` hand-selected morphologies; ordinary
+  diagnostics default to `val`; interventions are a top-level category with
+  paired examples; diagnostic suites are overlapping bundles over atomic
+  dataframe-first diagnostics; plotters are attached to diagnostics or
+  suite-level syntheses, with plot quality deferred to a separate pass after
+  correct numeric outputs. Also promoted clipping from a note to a required
+  dataset diagnostic and added remaining publishability gaps for morphology
+  transfer, intervention probes, and bounded teacher-correctness claims.
+  BSSM is now explicitly gated by a bounded positive-signal feasibility sprint.
+
 - IMPLEMENTATION (2026-06-06 18:31): Reframed the axes profiles as
   provisional, capacity-audited experimental-design hypotheses rather than
   accepted truths. Added `BenchmarkCostModel`,
