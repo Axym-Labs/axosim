@@ -15,6 +15,8 @@ consistent enough to support an M3 morphology-transfer benchmark?
 - Backend: CPU NEURON with the local SWC-aware Hay template and NEURON 9
   compiled MOD files.
 - Intervention: `35%` event dropout on the same first `8` validation traces.
+- Follow-up: `16`-trace normalized-routing event dropout and inhibitory
+  dropout checks on the same held-out SWC.
 - Source input protocol: `639` excitatory and `639` inhibitory source sites.
 
 ## Routing Policies
@@ -40,6 +42,13 @@ longer drops a contiguous suffix of the source route.
 | held-out SWC, ordered truncation | `-1.7247` | `+0.9773` | `+5.3750` | lower event drive / higher spiking / hyperpolarized |
 | held-out SWC, normalized by type | `-1.7377` | `-0.0227` | `-0.1250` | lower event drive / lower spiking / hyperpolarized |
 
+## Normalized-Routing Follow-Up
+
+| intervention | traces | delta soma mean mV | delta spike rate / 1000 steps | spike-count delta mean | spike-count interval | direction |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| event dropout | `16` | `-1.7625` | `-0.1705` | `-0.9375` | `[-2.2458, 0.3708]` | lower event drive / lower spiking / hyperpolarized |
+| inhibitory dropout | `16` | `+1.5745` | `+5.2841` | `+29.0625` | `[26.5738, 31.5512]` | lower event drive / higher spiking / depolarized |
+
 ## Interpretation
 
 Runtime compatibility is achieved: the held-out SWC instantiates, integrates,
@@ -49,9 +58,11 @@ Correctness replication is partially improved but not finished. The source
 morphology control preserves the expected event-dropout response under the
 same runner. Ordered truncation fails qualitatively on spike direction for the
 held-out SWC. Normalized basal/apical arclength routing restores the expected
-lower-spiking direction, but the spike-count effect is tiny on this `8`-trace
-smoke and its interval crosses zero (`-1.7995`, `+1.5495` spikes). This is a
-promising M3 protocol candidate, not yet a publishable transfer benchmark.
+lower-spiking direction. On `16` traces, event dropout remains correctly
+signed but weak, with spike-count interval crossing zero. Inhibitory dropout
+is strongly and correctly signed, increasing soma voltage and spike count.
+This supports normalized routing as a plausible M3 teacher-generation scaffold,
+but not yet as a completed publishable transfer benchmark.
 
 ## Next Defensible Path
 

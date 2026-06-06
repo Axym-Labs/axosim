@@ -3,7 +3,20 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
-- EXPERIMENT (2026-06-06 13:12): Added and tested an explicit
+- EXPERIMENT (2026-06-06 13:10): Expanded normalized-routing M3 validation
+  from the initial `8`-trace smoke to two `16`-trace held-out SWC checks.
+  Event dropout remains directionally correct but weak on Allen
+  `specimen_487664663.swc` (`delta_soma_mean=-1.7625 mV`,
+  `delta_spike_rate=-0.1705/1000 steps`, spike-count interval
+  `[-2.2458, 0.3708]`). Inhibitory dropout is strongly and correctly signed
+  (`delta_soma_mean=+1.5745 mV`, `delta_spike_rate=+5.2841/1000 steps`,
+  spike-count interval `[26.5738, 31.5512]`). Interpretation: normalized
+  basal/apical arclength routing is a viable M3 teacher-generation scaffold
+  with coherent E/I polarity, but event-dropout spike suppression is too weak
+  to treat M3 as publication-ready without more morphologies/interventions.
+  Updated report: `artifacts/m3_swc_event_dropout_smoke_20260606.md`.
+
+- EXPERIMENT (2026-06-06 13:05): Added and tested an explicit
   `--input-routing normalized_by_type` policy for M3 teacher generation. The
   policy maps each held-out basal/apical target segment to the nearest source
   site in the same compartment by normalized arclength, instead of using the
