@@ -254,6 +254,8 @@ def test_cli_runs_v1_benchmark_bundle(tmp_path, capsys):
             str(data_dir),
             "--output-dir",
             str(output_dir),
+            "--suite",
+            "teacher-qc",
             "--intervention-pair-glob",
             str(tmp_path / "pilot" / "*" / "intervention_pair.npz"),
             "--max-val-samples",
@@ -267,6 +269,7 @@ def test_cli_runs_v1_benchmark_bundle(tmp_path, capsys):
 
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
+    assert payload["suite"] == "teacher-qc"
     assert len(payload["artifacts"]) == 3
     assert (output_dir / "teacher_qc_val.md").exists()
     assert (output_dir / "morphology_routing_qc.md").exists()

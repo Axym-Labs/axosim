@@ -3,6 +3,18 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-07 01:03): Added package-facing suite profiles to
+  `bnn-sim benchmark-v1`: `--suite teacher-qc|paper-summary|full`. The bundle
+  now records the selected suite and suite config in `manifest.json`, uses
+  suite-specific row contexts, suppresses model rows for the teacher-QC suite,
+  keeps `paper-summary` as the promoted compact default, and allows `full` to
+  label rows with full-suite membership. Validation:
+  `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_bundle.py
+  tests/test_cli.py -q` passed (`26` tests), touched modules compile, and the
+  full suite passed (`118` passed, `1` skipped). This closes one benchmark
+  usability gap: users can run coherent diagnostic groups independently
+  instead of an unstructured all-diagnostics command.
+
 - VERIFICATION (2026-06-07 00:53): Ran the validated v1 SWC CPU
   CoreNEURON batched route over all `N=5` provisional morphologies with
   `4` validation traces per morphology and `2` paired event-dropout examples

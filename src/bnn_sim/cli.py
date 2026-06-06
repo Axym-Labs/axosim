@@ -185,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     benchmark_v1.add_argument("--dataset-root", required=True)
     benchmark_v1.add_argument("--output-dir", required=True)
+    benchmark_v1.add_argument("--suite", choices=["teacher-qc", "paper-summary", "full"], default="paper-summary")
     benchmark_v1.add_argument("--intervention-pair-glob", action="append", default=[])
     benchmark_v1.add_argument("--morphology-id", default="unknown")
     benchmark_v1.add_argument("--teacher-id", default="teacher")
@@ -485,6 +486,7 @@ def main(argv: list[str] | None = None) -> int:
                 model_fn=model_fn,
                 model_id=args.model_id if model_fn is not None else None,
                 intervention_pair_paths=pair_paths,
+                suite=args.suite,
                 max_val_samples=args.max_val_samples,
                 max_intervention_samples=args.max_intervention_samples,
                 cache_shards=args.cache_shards,

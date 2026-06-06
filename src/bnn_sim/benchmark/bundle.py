@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -36,6 +36,7 @@ DEFAULT_MODEL_SUITES = (
     "paper-summary",
 )
 DEFAULT_INTERVENTION_SUITES = ("teacher-qc", "intervention-response", "paper-summary")
+SuiteProfile = Literal["teacher-qc", "paper-summary", "full"]
 
 
 def run_v1_benchmark_bundle(
@@ -46,6 +47,7 @@ def run_v1_benchmark_bundle(
     model_fn: Callable[[np.ndarray], np.ndarray] | None = None,
     model_id: str | None = None,
     intervention_pair_paths: Iterable[str | Path] = (),
+    suite: SuiteProfile = "paper-summary",
     max_val_samples: int | None = None,
     max_intervention_samples: int | None = None,
     cache_shards: int = 1,
@@ -55,12 +57,13 @@ def run_v1_benchmark_bundle(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     base = base_context or DiagnosticContext()
+    suite_config = _suite_config(suite)
     artifacts: list[dict[str, Any]] = []
     intervention_row_sets: list[dict[str, Any]] = []
 
     teacher_context = _replace_context(
         base,
-        suites=("teacher-qc",),
+        suites=suite_config["teacher"],
         model_id="teacher",
         split="val",
         condition="val",
@@ -76,16 +79,16 @@ def run_v1_benchmark_bundle(
     _write_summary_artifact(teacher_rows, output / "teacher_qc_val.md", artifacts)
 
     routing_rows = morphology_routing_qc_rows(
-        context=_replace_context(base, suites=("teacher-qc", "paper-summary"), model_id="teacher")
+        context=_replace_context(base, suites=suite_config["routing"], model_id="teacher")
     )
     write_diagnostic_rows(routing_rows, output / "morphology_routing_qc.jsonl")
     _write_summary_artifact(routing_rows, output / "morphology_routing_qc.md", artifacts)
 
-    if model_fn is not None:
+    if model_fn is not None and suite_config["model"] is not None:
         resolved_model_id = model_id or base.model_id
         model_context = _replace_context(
             base,
-            suites=DEFAULT_MODEL_SUITES,
+            suites=suite_config["model"],
             model_id=resolved_model_id,
             split="val",
             condition="val",
@@ -108,7 +111,7 @@ def run_v1_benchmark_bundle(
             intervention_model_id = model_id if model_fn is not None else "teacher"
             context = _replace_context(
                 base,
-                suites=DEFAULT_INTERVENTION_SUITES,
+                suites=suite_config["intervention"],
                 model_id=intervention_model_id,
                 morphology_id=morphology_id,
                 split="",
@@ -133,7 +136,7 @@ def run_v1_benchmark_bundle(
                 intervention_model_id = model_id if model_fn is not None else "teacher"
                 context = _replace_context(
                     base,
-                    suites=DEFAULT_INTERVENTION_SUITES,
+                    suites=suite_config["intervention"],
                     model_id=intervention_model_id,
                     split="",
                     condition=f"interventions/{intervention}",
@@ -155,7 +158,7 @@ def run_v1_benchmark_bundle(
                 intervention_model_id = model_id if model_fn is not None else "teacher"
                 context = _replace_context(
                     base,
-                    suites=DEFAULT_INTERVENTION_SUITES,
+                    suites=suite_config["intervention"],
                     model_id=intervention_model_id,
                     morphology_id=morphology_id,
                     split="",
@@ -175,7 +178,7 @@ def run_v1_benchmark_bundle(
 
     contrast_rows = morphology_contrast_diagnostic_rows(
         intervention_row_sets,
-        context=_replace_context(base, suites=("morphology-contrast", "paper-summary"), morphology_id="all_v1"),
+        context=_replace_context(base, suites=suite_config["morphology_contrast"], morphology_id="all_v1"),
     )
     if contrast_rows:
         contrast_path = output / "morphology_contrast_interventions.jsonl"
@@ -186,12 +189,42 @@ def run_v1_benchmark_bundle(
         "dataset_root": str(dataset_root),
         "output_dir": str(output),
         "model_id": model_id,
+        "suite": suite,
+        "suite_config": {key: list(value) if value is not None else None for key, value in suite_config.items()},
         "max_val_samples": max_val_samples,
         "max_intervention_samples": max_intervention_samples,
         "artifacts": artifacts,
     }
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
+
+
+def _suite_config(suite: SuiteProfile) -> dict[str, tuple[str, ...] | None]:
+    if suite == "teacher-qc":
+        return {
+            "teacher": ("teacher-qc",),
+            "routing": ("teacher-qc",),
+            "model": None,
+            "intervention": ("teacher-qc",),
+            "morphology_contrast": ("morphology-contrast",),
+        }
+    if suite == "paper-summary":
+        return {
+            "teacher": ("teacher-qc", "paper-summary"),
+            "routing": ("teacher-qc", "paper-summary"),
+            "model": DEFAULT_MODEL_SUITES,
+            "intervention": DEFAULT_INTERVENTION_SUITES,
+            "morphology_contrast": ("morphology-contrast", "paper-summary"),
+        }
+    if suite == "full":
+        return {
+            "teacher": ("teacher-qc", "paper-summary", "full"),
+            "routing": ("teacher-qc", "paper-summary", "full"),
+            "model": (*DEFAULT_MODEL_SUITES, "full"),
+            "intervention": ("teacher-qc", "intervention-response", "paper-summary", "full"),
+            "morphology_contrast": ("morphology-contrast", "paper-summary", "full"),
+        }
+    raise ValueError(f"unknown v1 benchmark suite profile: {suite}")
 
 
 def infer_pair_metadata(path: str | Path, *, default_morphology: str = "unknown") -> tuple[str, str]:

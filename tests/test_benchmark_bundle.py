@@ -84,3 +84,26 @@ def test_run_v1_benchmark_bundle_expands_sharded_intervention_selector_by_morpho
     assert (output_dir / "intervention_specimen_222_event_dropout.jsonl").exists()
     assert (output_dir / "morphology_contrast_interventions.jsonl").exists()
     assert len(manifest["artifacts"]) == 5
+
+
+def test_run_v1_benchmark_bundle_teacher_qc_suite_skips_model_rows(tmp_path):
+    dataset_root = tmp_path / "dataset"
+    output_dir = tmp_path / "bundle"
+    write_demo_shards(dataset_root / "val", shard_count=1, samples_per_shard=1, time_steps=8, input_dim=4)
+
+    def model_fn(inputs):
+        return np.zeros((inputs.shape[0], inputs.shape[1], 2), dtype=np.float32)
+
+    manifest = run_v1_benchmark_bundle(
+        dataset_root=dataset_root,
+        output_dir=output_dir,
+        base_context=DiagnosticContext(ignore_start=0),
+        model_fn=model_fn,
+        model_id="unit-model",
+        suite="teacher-qc",
+        max_val_samples=1,
+    )
+
+    assert manifest["suite"] == "teacher-qc"
+    assert manifest["suite_config"]["model"] is None
+    assert not list(output_dir.glob("model_val_*.jsonl"))
