@@ -44,6 +44,7 @@ from bnn_sim.benchmark.dataset_schema import (
     build_v1_dataset_manifest_template,
     default_diagnostic_specs,
     default_target_views,
+    provisional_v1_morphologies,
     validate_v1_manifest_template,
 )
 from bnn_sim.benchmark.suite import BenchmarkSuite
@@ -79,6 +80,7 @@ __all__ = [
     "build_v1_dataset_manifest_template",
     "default_diagnostic_specs",
     "default_target_views",
+    "provisional_v1_morphologies",
     "validate_v1_manifest_template",
     "BenchmarkSuite",
 ]

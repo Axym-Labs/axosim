@@ -3,6 +3,22 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- DECISION (2026-06-06 20:25): Selected the provisional v1 `N=5`
+  morphology set for teacher-QC pilots and made it code-visible in the
+  manifest template. The set is reference/control `488683425`, closest
+  held-out same-line control `487664663`, intermediate Rorb line shift
+  `479770916`, Sim1 line-diversity shift `589427435`, and stronger but still
+  routable length/branch-count shift `488679042`. Rationale: not merely top
+  five by compatibility score; it covers controlled sameness, moderate
+  diversity, and one stronger sane shift while preserving route-shape
+  compatibility. Caveat: Allen metadata marks the pool dendrite-only, so v1
+  claims remain dendritic-routing/soma-output surrogate diagnostics, not
+  full-cell biological morphology generalization. Added tracked report
+  `artifacts/v1_morphology_selection_20260606.md`. Verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest -q` passed (`91` tests, `1`
+  skipped); `py_compile` passed for touched schema/export modules; `git diff
+  --check` passed.
+
 - IMPLEMENTATION (2026-06-06 20:22): Started the v1 deep dataset +
   diagnostic benchmark task arc with the schema/contract milestone. Added
   `src/bnn_sim/benchmark/dataset_schema.py` with the manifest-v2 template,

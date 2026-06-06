@@ -87,6 +87,29 @@ class DatasetCategorySpec:
 
 
 @dataclass(frozen=True)
+class MorphologySpec:
+    """One provisional v1 morphology entry."""
+
+    specimen_id: int
+    role: str
+    swc_path: str
+    line_name: str
+    reconstruction_type: str
+    compatibility_score_lower_better: float
+    extracted_branches: int
+    routed_branches: int
+    total_length_ratio_vs_reference: float
+    routed_length_ratio_vs_reference: float
+    apical_fraction_delta_vs_reference: float
+    radial_extent_ratio_vs_reference: float
+    routing_shape_match: bool
+    caveat: str = "Allen metadata marks this reconstruction dendrite-only."
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class PlotterSpec:
     """A variable-length diagnostic-attached plotting method."""
 
@@ -184,6 +207,7 @@ def build_v1_dataset_manifest_template(
             "morphology_policy": "all_v1_morphologies",
             "intervention_selector": "interventions/<name>",
         },
+        "morphologies": [morphology.to_dict() for morphology in provisional_v1_morphologies()],
         "target_views": [view.to_dict() for view in default_target_views()],
         "trace": {
             "duration_ms": 6000,
@@ -192,6 +216,93 @@ def build_v1_dataset_manifest_template(
             "targets_shape": "(time, 2)",
         },
     }
+
+
+def provisional_v1_morphologies() -> tuple[MorphologySpec, ...]:
+    """Return the provisional N=5 morphology set for teacher-QC pilots.
+
+    The final dataset freeze may replace entries that fail teacher sanity, but
+    any replacement should preserve the same role: close control, moderate
+    shift, line-diversity shift, or stronger sane shift.
+    """
+    return (
+        MorphologySpec(
+            specimen_id=488_683_425,
+            role="reference_control",
+            swc_path="src/bnn_sim/assets/allen_l5_template.swc",
+            line_name="Rbp4-Cre_KL100",
+            reconstruction_type="dendrite-only",
+            compatibility_score_lower_better=0.0,
+            extracted_branches=99,
+            routed_branches=45,
+            total_length_ratio_vs_reference=1.0,
+            routed_length_ratio_vs_reference=1.0,
+            apical_fraction_delta_vs_reference=0.0,
+            radial_extent_ratio_vs_reference=1.0,
+            routing_shape_match=True,
+            caveat="Bundled template; exact Allen specimen 488683425.",
+        ),
+        MorphologySpec(
+            specimen_id=487_664_663,
+            role="closest_heldout_control",
+            swc_path="data/morphologies/allen_mouse_l5_spiny/specimen_487664663.swc",
+            line_name="Rbp4-Cre_KL100",
+            reconstruction_type="dendrite-only",
+            compatibility_score_lower_better=0.203,
+            extracted_branches=98,
+            routed_branches=45,
+            total_length_ratio_vs_reference=0.930,
+            routed_length_ratio_vs_reference=0.946,
+            apical_fraction_delta_vs_reference=0.053,
+            radial_extent_ratio_vs_reference=1.022,
+            routing_shape_match=True,
+        ),
+        MorphologySpec(
+            specimen_id=479_770_916,
+            role="intermediate_line_shift",
+            swc_path="data/morphologies/allen_mouse_l5_spiny/specimen_479770916.swc",
+            line_name="Rorb-IRES2-Cre",
+            reconstruction_type="dendrite-only",
+            compatibility_score_lower_better=0.247,
+            extracted_branches=110,
+            routed_branches=45,
+            total_length_ratio_vs_reference=1.116,
+            routed_length_ratio_vs_reference=1.037,
+            apical_fraction_delta_vs_reference=-0.029,
+            radial_extent_ratio_vs_reference=0.930,
+            routing_shape_match=True,
+        ),
+        MorphologySpec(
+            specimen_id=589_427_435,
+            role="line_diversity_shift",
+            swc_path="data/morphologies/allen_mouse_l5_spiny/specimen_589427435.swc",
+            line_name="Sim1-Cre_KJ18",
+            reconstruction_type="dendrite-only",
+            compatibility_score_lower_better=0.284,
+            extracted_branches=120,
+            routed_branches=45,
+            total_length_ratio_vs_reference=1.187,
+            routed_length_ratio_vs_reference=1.033,
+            apical_fraction_delta_vs_reference=0.054,
+            radial_extent_ratio_vs_reference=0.975,
+            routing_shape_match=True,
+        ),
+        MorphologySpec(
+            specimen_id=488_679_042,
+            role="stronger_sane_length_shift",
+            swc_path="data/morphologies/allen_mouse_l5_spiny/specimen_488679042.swc",
+            line_name="Rorb-IRES2-Cre",
+            reconstruction_type="dendrite-only",
+            compatibility_score_lower_better=0.405,
+            extracted_branches=132,
+            routed_branches=45,
+            total_length_ratio_vs_reference=1.325,
+            routed_length_ratio_vs_reference=1.095,
+            apical_fraction_delta_vs_reference=0.019,
+            radial_extent_ratio_vs_reference=0.986,
+            routing_shape_match=True,
+        ),
+    )
 
 
 def default_target_views() -> tuple[TargetViewSpec, ...]:
@@ -359,6 +470,11 @@ def validate_v1_manifest_template(manifest: dict[str, Any]) -> None:
         raise ValueError(f"missing required dataset categories: {sorted(missing)}")
     if int(manifest.get("morphology_count", 0)) != V1_MORPHOLOGY_COUNT:
         raise ValueError("v1 manifest must use exactly 5 morphologies")
+    morphologies = manifest.get("morphologies", [])
+    if len(morphologies) != V1_MORPHOLOGY_COUNT:
+        raise ValueError("v1 manifest must declare exactly 5 morphology entries")
+    if not all(entry.get("routing_shape_match") for entry in morphologies):
+        raise ValueError("all provisional v1 morphologies must match the routing shape")
     for name in required_categories:
         if int(categories[name]["morphologies"]) != V1_MORPHOLOGY_COUNT:
             raise ValueError(f"{name} must include all 5 v1 morphologies")
