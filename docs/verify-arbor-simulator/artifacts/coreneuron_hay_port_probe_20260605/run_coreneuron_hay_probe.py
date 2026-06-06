@@ -180,12 +180,14 @@ def attach_deterministic_synapses(
     *,
     exc_gmax_scale: float = 1.0,
     inh_gmax_scale: float = 1.0,
+    gid_start: int = 1,
+    event_sink: list[tuple[float, int]] | None = None,
 ) -> tuple[list, list, list]:
     netcons = []
     synapses = []
     event_times = []
     event_gids = []
-    next_gid = 1
+    next_gid = int(gid_start)
     for index, segment in enumerate(segments):
         ex_syn = h.DetAMPANMDA(segment)
         ex_syn.tau_r_AMPA = 0.3
@@ -222,6 +224,9 @@ def attach_deterministic_synapses(
     order = np.argsort(np.asarray(event_times, dtype=np.float64), kind="stable") if event_times else np.asarray([], dtype=np.int64)
     sorted_times = np.asarray(event_times, dtype=np.float64)[order] if event_times else np.asarray([], dtype=np.float64)
     sorted_gids = np.asarray(event_gids, dtype=np.int32)[order] if event_gids else np.asarray([], dtype=np.int32)
+    if event_sink is not None:
+        event_sink.extend((float(t), int(gid)) for t, gid in zip(sorted_times, sorted_gids))
+        return netcons, synapses, []
     stim = h.PatternStim()
     t_vec = h.Vector(sorted_times)
     gid_vec = h.Vector(sorted_gids)

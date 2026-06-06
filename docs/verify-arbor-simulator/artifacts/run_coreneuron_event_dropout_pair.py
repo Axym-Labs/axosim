@@ -254,25 +254,21 @@ def simulate_intervention_targets(
     h.CVode().cache_efficient(1)
     source_route = _build_source_site_route(h, source_root)
 
-    targets = np.zeros((signed_inputs.shape[0], signed_inputs.shape[1], 2), dtype=np.float32)
-    soma_mv = np.zeros((signed_inputs.shape[0], signed_inputs.shape[1]), dtype=np.float32)
-    routing_rows = []
-    for index in range(signed_inputs.shape[0]):
-        trace = simulate_one_signed_trace(
-            h=h,
-            source_root=source_root,
-            morphology_path=morphology_path,
-            backend=backend,
-            signed_inputs=signed_inputs[index],
-            v_init_mv=v_init_mv,
-            exc_gmax_scale=exc_gmax_scale,
-            inh_gmax_scale=inh_gmax_scale,
-            input_routing=input_routing,
-            source_route=source_route,
-        )
-        targets[index] = trace["targets"]
-        soma_mv[index] = trace["soma_mv"]
-        routing_rows.append(trace["input_routing"])
+    traces = simulate_signed_trace_batch(
+        h=h,
+        source_root=source_root,
+        morphology_path=morphology_path,
+        backend=backend,
+        signed_inputs_batch=signed_inputs,
+        v_init_mv=v_init_mv,
+        exc_gmax_scale=exc_gmax_scale,
+        inh_gmax_scale=inh_gmax_scale,
+        input_routing=input_routing,
+        source_route=source_route,
+    )
+    targets = np.stack([trace["targets"] for trace in traces]).astype(np.float32, copy=False)
+    soma_mv = np.stack([trace["soma_mv"] for trace in traces]).astype(np.float32, copy=False)
+    routing_rows = [trace["input_routing"] for trace in traces]
     return targets, soma_mv, _summarize_input_routing(routing_rows)
 
 
@@ -339,6 +335,103 @@ def simulate_one_signed_trace(
 
     del netcons, synapses, stim_refs, cell
     return {"targets": targets, "soma_mv": low_soma, "input_routing": input_routing_summary}
+
+
+def simulate_signed_trace_batch(
+    *,
+    h,
+    source_root: Path,
+    morphology_path: Path,
+    backend: str,
+    signed_inputs_batch: np.ndarray,
+    v_init_mv: float,
+    exc_gmax_scale: float,
+    inh_gmax_scale: float,
+    input_routing: str,
+    source_route: dict[str, Any],
+) -> list[dict[str, np.ndarray]]:
+    if signed_inputs_batch.ndim != 3:
+        raise ValueError(f"signed_inputs_batch must have shape (samples, time, channels), got {signed_inputs_batch.shape}")
+    duration_ms = int(signed_inputs_batch.shape[1])
+    pc = h.ParallelContext()
+    try:
+        pc.gid_clear()
+    except Exception:
+        pass
+    h.CVode().active(0)
+    h.v_init = v_init_mv
+
+    records = []
+    refs = []
+    event_sink: list[tuple[float, int]] = []
+    next_gid = 1
+    for signed_inputs in signed_inputs_batch:
+        cell = h.L5PCtemplate(str(morphology_path))
+        segments, segment_types, segment_lengths = collect_segments(cell)
+        for section in list(cell.dend) + list(cell.apic):
+            section.vshift_Ih = 0
+        cell.soma[0].vshift_Ih = 0
+        inputs_exc, inputs_inh, input_routing_summary = _route_inputs_to_segments(
+            signed_inputs,
+            segment_types,
+            segment_lengths,
+            routing=input_routing,
+            source_route=source_route,
+        )
+        netcons, synapses, stim_refs = attach_deterministic_synapses(
+            h,
+            pc,
+            segments,
+            inputs_exc,
+            inputs_inh,
+            exc_gmax_scale=exc_gmax_scale,
+            inh_gmax_scale=inh_gmax_scale,
+            gid_start=next_gid,
+            event_sink=event_sink,
+        )
+        next_gid += 2 * len(segments)
+        t_vec = h.Vector()
+        soma_vec = h.Vector()
+        t_vec.record(h._ref_t)
+        soma_vec.record(cell.soma[0](0.5)._ref_v)
+        records.append({"t_vec": t_vec, "soma_vec": soma_vec, "input_routing": input_routing_summary})
+        refs.append((cell, netcons, synapses, stim_refs, t_vec, soma_vec))
+
+    if event_sink:
+        order = np.argsort(np.asarray([item[0] for item in event_sink], dtype=np.float64), kind="stable")
+        sorted_times = np.asarray([item[0] for item in event_sink], dtype=np.float64)[order]
+        sorted_gids = np.asarray([item[1] for item in event_sink], dtype=np.int32)[order]
+    else:
+        sorted_times = np.asarray([], dtype=np.float64)
+        sorted_gids = np.asarray([], dtype=np.int32)
+    stim = h.PatternStim()
+    t_events = h.Vector(sorted_times)
+    gid_events = h.Vector(sorted_gids)
+    stim.play(t_events, gid_events)
+    refs.append((stim, t_events, gid_events))
+
+    h.finitialize(v_init_mv)
+    if backend == "coreneuron":
+        pc.psolve(duration_ms)
+    else:
+        h.continuerun(duration_ms)
+
+    traces = []
+    for record in records:
+        t = np.asarray(record["t_vec"], dtype=np.float64)
+        soma = np.asarray(record["soma_vec"], dtype=np.float64)
+        low_time = np.arange(0, duration_ms, dtype=np.float64)
+        high_time = np.arange(0, duration_ms, 0.125, dtype=np.float64)
+        low_soma = np.interp(low_time, t, soma).astype(np.float32)
+        high_soma = np.interp(high_time, t, soma)
+        spike_labels = local_peak_spike_labels(high_time, high_soma, duration_ms)
+        clipped_soma = np.minimum(low_soma, SOMA_CLIP_THRESHOLD_MV)
+        normalized_soma = ((clipped_soma - SOMA_BIAS_MV) * SOMA_SCALE).astype(np.float32)
+        targets = np.stack([spike_labels, normalized_soma], axis=1).astype(np.float32)
+        traces.append({"targets": targets, "soma_mv": low_soma, "input_routing": record["input_routing"]})
+
+    del refs
+    return traces
 
 
 def _build_source_site_route(h, source_root: Path) -> dict[str, Any]:

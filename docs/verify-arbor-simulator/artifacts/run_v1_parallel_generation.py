@@ -19,9 +19,9 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[3]
 ARTIFACTS = ROOT / "docs" / "verify-arbor-simulator" / "artifacts"
 CORENEURON_PROBE = ARTIFACTS / "coreneuron_hay_port_probe_20260605"
-SWC_MECH_ROOT = ARTIFACTS / "hay_swc_template"
+SWC_MECH_ROOT = Path(os.environ.get("BNN_SIM_SWC_MECH_ROOT", ARTIFACTS / "hay_swc_template")).resolve()
 SOURCE_ROOT = ARTIFACTS / "source_models" / "neuron_as_deep_net" / "L5PC_NEURON_simulation"
-TEMPLATE_HOC = SWC_MECH_ROOT / "L5PCtemplate_swc.hoc"
+TEMPLATE_HOC = Path(os.environ.get("BNN_SIM_SWC_TEMPLATE_HOC", SWC_MECH_ROOT / "L5PCtemplate_swc.hoc")).resolve()
 DEFAULT_PYTHON = Path(".venv/bin/python")
 
 sys.path.insert(0, str(ROOT / "src"))
@@ -31,7 +31,7 @@ sys.path.insert(0, str(CORENEURON_PROBE))
 from bnn_sim.benchmark import make_structured_intervention_inputs  # noqa: E402
 from bnn_sim.benchmark.dataset_schema import INTERVENTION_CONDITIONS, build_v1_dataset_manifest_template, provisional_v1_morphologies  # noqa: E402
 from generate_hay_neuron_dataset import SOMA_BIAS_MV, SOMA_CLIP_THRESHOLD_MV, SOMA_SCALE, local_peak_spike_labels  # noqa: E402
-from run_coreneuron_event_dropout_pair import _build_source_site_route, _summarize_input_routing, simulate_one_signed_trace  # noqa: E402
+from run_coreneuron_event_dropout_pair import _build_source_site_route, _summarize_input_routing, simulate_signed_trace_batch  # noqa: E402
 from run_coreneuron_hay_probe import load_probe_mechanisms  # noqa: E402
 from run_hay_neuron_driven_probe import collect_segments, sample_neuronio_inputs  # noqa: E402
 from generate_coreneuron_hay_dataset import apply_event_keep  # noqa: E402
@@ -41,7 +41,10 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     if args.worker:
-        return worker_main(args)
+        code = worker_main(args)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(code)
     return orchestrator_main(args)
 
 
@@ -50,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, default=ARTIFACTS / "v1_dataset_smoke_20260606")
     parser.add_argument("--python", type=Path, default=DEFAULT_PYTHON)
     parser.add_argument("--parallelism", type=int, default=8)
+    parser.add_argument("--samples-per-shard", type=int, default=128)
     parser.add_argument("--duration-ms", type=int, default=6000)
     parser.add_argument("--backend", choices=["neuron", "coreneuron"], default="neuron")
     parser.add_argument("--coreneuron-gpu", action="store_true")
@@ -140,6 +144,8 @@ def build_tasks(
     morphologies: list[dict[str, str]],
     interventions: tuple[str, ...],
 ) -> list[dict[str, Any]]:
+    if args.samples_per_shard <= 0:
+        raise ValueError(f"--samples-per-shard must be positive, got {args.samples_per_shard}")
     split_counts = {
         "train": args.train_samples_per_morphology,
         "val": args.val_samples_per_morphology,
@@ -152,24 +158,39 @@ def build_tasks(
         for split, samples in split_counts.items():
             if samples <= 0:
                 continue
-            tasks.append(task_payload(args, "split", output_root / split / f"{morphology['id']}_{shard_index:05d}.npz", morphology, split, None, samples, shard_index))
-            shard_index += 1
+            for offset in range(0, samples, args.samples_per_shard):
+                shard_samples = min(args.samples_per_shard, samples - offset)
+                tasks.append(
+                    task_payload(
+                        args,
+                        "split",
+                        output_root / split / f"{morphology['id']}_{shard_index:05d}.npz",
+                        morphology,
+                        split,
+                        None,
+                        shard_samples,
+                        shard_index,
+                    )
+                )
+                shard_index += 1
         for intervention in interventions:
             if args.intervention_samples_per_morphology <= 0:
                 continue
-            tasks.append(
-                task_payload(
-                    args,
-                    "intervention",
-                    output_root / "interventions" / intervention / f"{morphology['id']}_intervention_pair_{shard_index:05d}.npz",
-                    morphology,
-                    "",
-                    intervention,
-                    args.intervention_samples_per_morphology,
-                    shard_index,
+            for offset in range(0, args.intervention_samples_per_morphology, args.samples_per_shard):
+                shard_samples = min(args.samples_per_shard, args.intervention_samples_per_morphology - offset)
+                tasks.append(
+                    task_payload(
+                        args,
+                        "intervention",
+                        output_root / "interventions" / intervention / f"{morphology['id']}_intervention_pair_{shard_index:05d}.npz",
+                        morphology,
+                        "",
+                        intervention,
+                        shard_samples,
+                        shard_index,
+                    )
                 )
-            )
-            shard_index += 1
+                shard_index += 1
     return tasks
 
 
@@ -281,24 +302,9 @@ def worker_main(args: argparse.Namespace) -> int:
             exc_event_keep_prob=args.exc_event_keep_prob,
             inh_event_keep_prob=args.inh_event_keep_prob,
         )
-        baseline = simulate_one_signed_trace(
-            h=setup["h"],
-            source_root=SOURCE_ROOT,
-            morphology_path=args.worker_morphology_path.resolve(),
-            backend=args.backend,
-            signed_inputs=signed_inputs,
-            v_init_mv=-76.0,
-            exc_gmax_scale=1.0,
-            inh_gmax_scale=1.0,
-            input_routing="normalized_by_type",
-            source_route=setup["source_route"],
-        )
         baseline_inputs.append(signed_inputs)
-        baseline_targets.append(baseline["targets"])
-        baseline_soma.append(baseline["soma_mv"])
         sample_id = f"{args.worker_morphology_id}:{args.worker_kind}:{args.worker_split or args.worker_intervention}:{args.worker_shard_index:05d}:{sample_index:04d}:seed{sample_seed}"
         sample_ids.append(sample_id)
-        sample_rows.append(baseline["input_routing"])
         if args.worker_kind == "intervention":
             intervention_batch, changed_mask, _ = make_structured_intervention_inputs(
                 signed_inputs[None, ...],
@@ -309,22 +315,42 @@ def worker_main(args: argparse.Namespace) -> int:
                 site_fraction=0.25,
                 seed=args.seed + sample_index,
             )
-            intervention = simulate_one_signed_trace(
-                h=setup["h"],
-                source_root=SOURCE_ROOT,
-                morphology_path=args.worker_morphology_path.resolve(),
-                backend=args.backend,
-                signed_inputs=intervention_batch[0],
-                v_init_mv=-76.0,
-                exc_gmax_scale=1.0,
-                inh_gmax_scale=1.0,
-                input_routing="normalized_by_type",
-                source_route=setup["source_route"],
-            )
             intervention_inputs.append(intervention_batch[0])
+            changed_masks.append(changed_mask[0])
+
+    baseline_traces = simulate_signed_trace_batch(
+        h=setup["h"],
+        source_root=SOURCE_ROOT,
+        morphology_path=args.worker_morphology_path.resolve(),
+        backend=args.backend,
+        signed_inputs_batch=np.stack(baseline_inputs).astype(np.int8, copy=False),
+        v_init_mv=-76.0,
+        exc_gmax_scale=1.0,
+        inh_gmax_scale=1.0,
+        input_routing="normalized_by_type",
+        source_route=setup["source_route"],
+    )
+    for baseline in baseline_traces:
+        baseline_targets.append(baseline["targets"])
+        baseline_soma.append(baseline["soma_mv"])
+        sample_rows.append(baseline["input_routing"])
+
+    if args.worker_kind == "intervention":
+        intervention_traces = simulate_signed_trace_batch(
+            h=setup["h"],
+            source_root=SOURCE_ROOT,
+            morphology_path=args.worker_morphology_path.resolve(),
+            backend=args.backend,
+            signed_inputs_batch=np.stack(intervention_inputs).astype(np.int8, copy=False),
+            v_init_mv=-76.0,
+            exc_gmax_scale=1.0,
+            inh_gmax_scale=1.0,
+            input_routing="normalized_by_type",
+            source_route=setup["source_route"],
+        )
+        for intervention in intervention_traces:
             intervention_targets.append(intervention["targets"])
             intervention_soma.append(intervention["soma_mv"])
-            changed_masks.append(changed_mask[0])
 
     args.worker_output.parent.mkdir(parents=True, exist_ok=True)
     if args.worker_kind == "split":
@@ -369,14 +395,21 @@ def prepare_neuron(backend: str, coreneuron_gpu: bool) -> dict[str, Any]:
     if backend == "coreneuron":
         coreneuron.enable = True
         coreneuron.gpu = bool(coreneuron_gpu)
+        if os.environ.get("BNN_SIM_CORENEURON_NUM_GPUS"):
+            coreneuron.num_gpus = int(os.environ["BNN_SIM_CORENEURON_NUM_GPUS"])
         coreneuron.verbose = 0
     else:
         coreneuron.enable = False
         coreneuron.gpu = False
     os.chdir(SWC_MECH_ROOT)
     load_probe_mechanisms(h, SWC_MECH_ROOT)
-    h.load_file("stdrun.hoc")
-    h.load_file("import3d.hoc")
+    hoc_lib = Path(os.environ.get("NEURONHOME", "")) / "share" / "nrn" / "lib" / "hoc"
+    if hoc_lib.exists():
+        h.load_file(str(hoc_lib / "stdrun.hoc"))
+        h.load_file(str(hoc_lib / "import3d.hoc"))
+    else:
+        h.load_file("stdrun.hoc")
+        h.load_file("import3d.hoc")
     h.load_file(str(SOURCE_ROOT / "L5PCbiophys5b.hoc"))
     h.load_file(str(TEMPLATE_HOC))
     h.dt = 0.025

@@ -3,6 +3,36 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-07 00:42): Rebuilt the simulator generation path
+  around a durable NEURON `9.0.1` + CoreNEURON GPU runtime instead of the
+  stale `/tmp` GPU build. Durable prefix:
+  `/home/davwis/.local/neuron-9.0.1-gpu-runtime`. Rebuilt source-Hay and
+  SWC-template mechanism roots against this runtime. Source-Hay GPU is now
+  correctness-valid and useful only when batched: CPU/GPU source-Hay
+  validation on `8 x 500 ms` matched to numerical precision, but one trace per
+  solve was slow (`23.80 s` CPU vs `131.16 s` GPU). After fixing the batching
+  root cause (one global `PatternStim` per batch rather than one `PatternStim`
+  per trace), source-Hay GPU reached `1.197` simulated trace seconds / wall
+  second at `128 x 500 ms` and `1.675` at `128 x 2000 ms`. Added
+  `--batch-size` to the source-Hay generator and updated the throughput gate
+  to use the durable runtime. Tracked report:
+  `artifacts/gpu_generation_path_validation_20260606.md`.
+
+- VERIFICATION (2026-06-07 00:42): Tested the actual v1 SWC morphology path
+  separately from source-Hay. SWC mechanisms compile with CoreNEURON GPU, and
+  source-Hay can run on GPU using that SWC-compiled mechanism root, so the
+  mechanism library is not the culprit. v1 SWC plain NEURON and CPU
+  CoreNEURON both generate valid shards; a `4 x 250 ms` smoke matched exactly
+  (`inputs_equal=True`, `targets_max_abs=0.0`, `soma_max_abs=0.0`). v1 SWC
+  CoreNEURON GPU still aborts before writing output even for `1 x 100 ms`;
+  GDB places the abort in CoreNEURON GPU initialization during `pc.psolve`.
+  Current defensible v1 generation route is therefore batched CPU
+  CoreNEURON/SWC with bounded worker shards, not SWC GPU. This is a simulator
+  compatibility failure to fix, not a missing user-side dependency. Added
+  `--samples-per-shard` to `run_v1_parallel_generation.py` and made successful
+  workers hard-exit after writing outputs to avoid NEURON finalization crashes
+  that occurred after valid SWC shard writes.
+
 - IMPLEMENTATION (2026-06-06 23:35): Added the v1 shard-parallel morphology
   generation path and fixed the benchmark bundle to understand sharded
   intervention directories. New artifact script:

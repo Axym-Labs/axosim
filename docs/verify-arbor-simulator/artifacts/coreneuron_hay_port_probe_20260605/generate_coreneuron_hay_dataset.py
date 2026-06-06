@@ -46,6 +46,7 @@ def main() -> int:
     parser.add_argument("--inh-event-keep-prob", type=float, default=1.0)
     parser.add_argument("--exc-gmax-scale", type=float, default=1.0)
     parser.add_argument("--inh-gmax-scale", type=float, default=1.0)
+    parser.add_argument("--batch-size", type=int, default=1, help="Number of independent traces to solve in one simulator launch")
     args = parser.parse_args()
 
     validate_keep_prob(args.exc_event_keep_prob, "exc-event-keep-prob")
@@ -67,6 +68,7 @@ def main() -> int:
         inh_event_keep_prob=args.inh_event_keep_prob,
         exc_gmax_scale=args.exc_gmax_scale,
         inh_gmax_scale=args.inh_gmax_scale,
+        batch_size=args.batch_size,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
@@ -87,6 +89,7 @@ def write_splits(
     inh_event_keep_prob: float,
     exc_gmax_scale: float,
     inh_gmax_scale: float,
+    batch_size: int,
 ) -> dict[str, Any]:
     from neuron import coreneuron, h
     import neuron
@@ -138,6 +141,7 @@ def write_splits(
             inh_event_keep_prob=inh_event_keep_prob,
             exc_gmax_scale=exc_gmax_scale,
             inh_gmax_scale=inh_gmax_scale,
+            batch_size=batch_size,
         )
 
     summary = {
@@ -165,6 +169,7 @@ def write_splits(
                 "excitatory": float(exc_gmax_scale),
                 "inhibitory": float(inh_gmax_scale),
             },
+            "batch_size": int(batch_size),
         },
     }
     (output_root / "generation_summary.json").write_text(
@@ -191,7 +196,10 @@ def write_split(
     inh_event_keep_prob: float,
     exc_gmax_scale: float,
     inh_gmax_scale: float,
+    batch_size: int,
 ) -> dict[str, Any]:
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
     rng = np.random.default_rng(seed)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -201,14 +209,14 @@ def write_split(
     sample_ids = np.empty(samples, dtype="<U112")
     rows: list[dict[str, Any]] = []
 
-    for sample_index in range(samples):
-        sample_seed = int(rng.integers(0, np.iinfo(np.int32).max))
-        sample_rng = np.random.default_rng(sample_seed)
-        trace = simulate_one_trace(
+    for batch_start in range(0, samples, batch_size):
+        batch_indices = list(range(batch_start, min(samples, batch_start + batch_size)))
+        sample_seeds = [int(rng.integers(0, np.iinfo(np.int32).max)) for _ in batch_indices]
+        traces = simulate_trace_batch(
             h=h,
             source_root=source_root,
             backend=backend,
-            sample_rng=sample_rng,
+            sample_seeds=sample_seeds,
             duration_ms=duration_ms,
             v_init_mv=v_init_mv,
             exc_event_keep_prob=exc_event_keep_prob,
@@ -216,13 +224,14 @@ def write_split(
             exc_gmax_scale=exc_gmax_scale,
             inh_gmax_scale=inh_gmax_scale,
         )
-        inputs[sample_index] = trace["inputs"]
-        targets[sample_index] = trace["targets"]
-        soma_mv[sample_index] = trace["soma_mv"]
-        sample_ids[sample_index] = f"hay_l5pc_{backend}:det_syn:{sample_index:06d}:seed{sample_seed}"
-        row = summarize_written_trace(sample_index, trace["inputs"], trace["targets"], trace["soma_mv"])
-        row["sample_seed"] = sample_seed
-        rows.append(row)
+        for sample_index, sample_seed, trace in zip(batch_indices, sample_seeds, traces):
+            inputs[sample_index] = trace["inputs"]
+            targets[sample_index] = trace["targets"]
+            soma_mv[sample_index] = trace["soma_mv"]
+            sample_ids[sample_index] = f"hay_l5pc_{backend}:det_syn:{sample_index:06d}:seed{sample_seed}"
+            row = summarize_written_trace(sample_index, trace["inputs"], trace["targets"], trace["soma_mv"])
+            row["sample_seed"] = sample_seed
+            rows.append(row)
 
     shard_path = output_dir / "hay_coreneuron_source_00000.npz"
     np.savez_compressed(
@@ -255,6 +264,7 @@ def write_split(
                 "excitatory": float(exc_gmax_scale),
                 "inhibitory": float(inh_gmax_scale),
             },
+            "batch_size": int(batch_size),
         },
         "shards": [
             {
@@ -346,6 +356,101 @@ def simulate_one_trace(
         "targets": targets,
         "soma_mv": low_soma,
     }
+
+
+def simulate_trace_batch(
+    *,
+    h,
+    source_root: Path,
+    backend: str,
+    sample_seeds: list[int],
+    duration_ms: int,
+    v_init_mv: float,
+    exc_event_keep_prob: float,
+    inh_event_keep_prob: float,
+    exc_gmax_scale: float,
+    inh_gmax_scale: float,
+) -> list[dict[str, np.ndarray]]:
+    pc = h.ParallelContext()
+    try:
+        pc.gid_clear()
+    except Exception:
+        pass
+    h.CVode().active(0)
+    h.v_init = v_init_mv
+
+    records = []
+    refs = []
+    event_sink: list[tuple[float, int]] = []
+    next_gid = 1
+    for sample_seed in sample_seeds:
+        sample_rng = np.random.default_rng(sample_seed)
+        cell = h.L5PCtemplate(str(source_root / "morphologies" / "cell1.asc"))
+        segments, segment_types, segment_lengths = collect_segments(cell)
+        for section in list(cell.dend) + list(cell.apic):
+            section.vshift_Ih = 0
+        cell.soma[0].vshift_Ih = 0
+
+        inputs_exc, inputs_inh = sample_neuronio_inputs(sample_rng, duration_ms, segment_types, segment_lengths)
+        inputs_exc = apply_event_keep(sample_rng, inputs_exc, exc_event_keep_prob)
+        inputs_inh = apply_event_keep(sample_rng, inputs_inh, inh_event_keep_prob)
+        netcons, synapses, stim_refs = attach_deterministic_synapses(
+            h,
+            pc,
+            segments,
+            inputs_exc,
+            inputs_inh,
+            exc_gmax_scale=exc_gmax_scale,
+            inh_gmax_scale=inh_gmax_scale,
+            gid_start=next_gid,
+            event_sink=event_sink,
+        )
+        next_gid += 2 * len(segments)
+        t_vec = h.Vector()
+        soma_vec = h.Vector()
+        t_vec.record(h._ref_t)
+        soma_vec.record(cell.soma[0](0.5)._ref_v)
+        records.append({"inputs_exc": inputs_exc, "inputs_inh": inputs_inh, "t_vec": t_vec, "soma_vec": soma_vec})
+        refs.append((cell, netcons, synapses, stim_refs, t_vec, soma_vec))
+
+    if event_sink:
+        order = np.argsort(np.asarray([item[0] for item in event_sink], dtype=np.float64), kind="stable")
+        sorted_times = np.asarray([item[0] for item in event_sink], dtype=np.float64)[order]
+        sorted_gids = np.asarray([item[1] for item in event_sink], dtype=np.int32)[order]
+    else:
+        sorted_times = np.asarray([], dtype=np.float64)
+        sorted_gids = np.asarray([], dtype=np.int32)
+    stim = h.PatternStim()
+    t_events = h.Vector(sorted_times)
+    gid_events = h.Vector(sorted_gids)
+    stim.play(t_events, gid_events)
+    refs.append((stim, t_events, gid_events))
+
+    h.finitialize(v_init_mv)
+    if backend == "coreneuron":
+        pc.psolve(duration_ms)
+    else:
+        h.continuerun(duration_ms)
+
+    traces = []
+    for record in records:
+        t = np.asarray(record["t_vec"], dtype=np.float64)
+        soma = np.asarray(record["soma_vec"], dtype=np.float64)
+        low_time = np.arange(0, duration_ms, dtype=np.float64)
+        high_time = np.arange(0, duration_ms, 0.125, dtype=np.float64)
+        low_soma = np.interp(low_time, t, soma).astype(np.float32)
+        high_soma = np.interp(high_time, t, soma)
+        signed_inputs = np.zeros((duration_ms, 1278), dtype=np.int8)
+        signed_inputs[:, :639] = record["inputs_exc"].T.astype(np.int8, copy=False)
+        signed_inputs[:, 639:] = -record["inputs_inh"].T.astype(np.int8, copy=False)
+        spike_labels = local_peak_spike_labels(high_time, high_soma, duration_ms)
+        clipped_soma = np.minimum(low_soma, SOMA_CLIP_THRESHOLD_MV)
+        normalized_soma = ((clipped_soma - SOMA_BIAS_MV) * SOMA_SCALE).astype(np.float32)
+        targets = np.stack([spike_labels, normalized_soma], axis=1).astype(np.float32)
+        traces.append({"inputs": signed_inputs, "targets": targets, "soma_mv": low_soma})
+
+    del refs
+    return traces
 
 
 def validate_keep_prob(value: float, name: str) -> None:
