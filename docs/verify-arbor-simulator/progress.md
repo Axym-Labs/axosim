@@ -3,6 +3,21 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- EXPERIMENT (2026-06-06 13:12): Added and tested an explicit
+  `--input-routing normalized_by_type` policy for M3 teacher generation. The
+  policy maps each held-out basal/apical target segment to the nearest source
+  site in the same compartment by normalized arclength, instead of using the
+  ordered truncation smoke policy. On Allen `specimen_487664663.swc` with the
+  same first `8` validation traces, normalized routing restored the qualitative
+  event-dropout spike direction (`delta_spike_rate=-0.0227/1000 steps`,
+  spike-count delta mean `-0.1250`) while preserving hyperpolarization
+  (`delta_soma_mean=-1.7377 mV`). This is a meaningful improvement over
+  ordered truncation (`delta_spike_rate=+0.9773/1000 steps`), but the spike
+  effect is tiny and the interval crosses zero (`-1.7995`, `+1.5495` spikes),
+  so it is a promising M3 protocol candidate rather than a publishable
+  transfer benchmark yet. Updated report:
+  `artifacts/m3_swc_event_dropout_smoke_20260606.md`.
+
 - VERIFICATION (2026-06-06 12:56): Validated the M3 held-out SWC teacher
   smoke with an explicit input-routing policy and a source-morphology control.
   The SWC-aware Hay/NEURON path can instantiate and run held-out Allen

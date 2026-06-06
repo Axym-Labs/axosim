@@ -55,6 +55,16 @@ def main() -> int:
     parser.add_argument("--v-init-mv", type=float, default=-76.0)
     parser.add_argument("--exc-gmax-scale", type=float, default=1.0)
     parser.add_argument("--inh-gmax-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--input-routing",
+        choices=["ordered_truncate", "normalized_by_type"],
+        default="ordered_truncate",
+        help=(
+            "How to map source E/I site channels onto the instantiated morphology. "
+            "ordered_truncate preserves legacy behavior; normalized_by_type maps "
+            "within basal/apical compartments by normalized arclength."
+        ),
+    )
     args = parser.parse_args()
 
     if not 0.0 <= args.dropout_probability <= 1.0:
@@ -83,6 +93,7 @@ def main() -> int:
         v_init_mv=args.v_init_mv,
         exc_gmax_scale=args.exc_gmax_scale,
         inh_gmax_scale=args.inh_gmax_scale,
+        input_routing=args.input_routing,
     )
     teacher_report = compute_paired_event_intervention_metrics(
         None,
@@ -176,6 +187,7 @@ def simulate_intervention_targets(
     v_init_mv: float,
     exc_gmax_scale: float,
     inh_gmax_scale: float,
+    input_routing: str,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     from neuron import coreneuron, h
 
@@ -203,6 +215,7 @@ def simulate_intervention_targets(
     h.secondorder = 0
     h.CVode().active(0)
     h.CVode().cache_efficient(1)
+    source_route = _build_source_site_route(h, source_root)
 
     targets = np.zeros((signed_inputs.shape[0], signed_inputs.shape[1], 2), dtype=np.float32)
     soma_mv = np.zeros((signed_inputs.shape[0], signed_inputs.shape[1]), dtype=np.float32)
@@ -217,6 +230,8 @@ def simulate_intervention_targets(
             v_init_mv=v_init_mv,
             exc_gmax_scale=exc_gmax_scale,
             inh_gmax_scale=inh_gmax_scale,
+            input_routing=input_routing,
+            source_route=source_route,
         )
         targets[index] = trace["targets"]
         soma_mv[index] = trace["soma_mv"]
@@ -234,17 +249,25 @@ def simulate_one_signed_trace(
     v_init_mv: float,
     exc_gmax_scale: float,
     inh_gmax_scale: float,
+    input_routing: str,
+    source_route: dict[str, Any],
 ) -> dict[str, np.ndarray]:
     duration_ms = int(signed_inputs.shape[0])
     cell = h.L5PCtemplate(str(morphology_path))
     h.CVode().active(0)
     h.v_init = v_init_mv
-    segments, _, _ = collect_segments(cell)
+    segments, segment_types, segment_lengths = collect_segments(cell)
     for section in list(cell.dend) + list(cell.apic):
         section.vshift_Ih = 0
     cell.soma[0].vshift_Ih = 0
 
-    inputs_exc, inputs_inh, input_routing = _route_inputs_to_segments(signed_inputs, len(segments))
+    inputs_exc, inputs_inh, input_routing_summary = _route_inputs_to_segments(
+        signed_inputs,
+        segment_types,
+        segment_lengths,
+        routing=input_routing,
+        source_route=source_route,
+    )
     pc = h.ParallelContext()
     netcons, synapses, stim_refs = attach_deterministic_synapses(
         h,
@@ -278,10 +301,43 @@ def simulate_one_signed_trace(
     targets = np.stack([spike_labels, normalized_soma], axis=1).astype(np.float32)
 
     del netcons, synapses, stim_refs, cell
-    return {"targets": targets, "soma_mv": low_soma, "input_routing": input_routing}
+    return {"targets": targets, "soma_mv": low_soma, "input_routing": input_routing_summary}
 
 
-def _route_inputs_to_segments(signed_inputs: np.ndarray, segment_count: int) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+def _build_source_site_route(h, source_root: Path) -> dict[str, Any]:
+    source_cell = h.L5PCtemplate(str(source_root / "morphologies" / "cell1.asc"))
+    try:
+        _, source_types, source_lengths = collect_segments(source_cell)
+        return _segment_route(source_types, source_lengths)
+    finally:
+        del source_cell
+
+
+def _segment_route(segment_types: np.ndarray, segment_lengths: np.ndarray) -> dict[str, Any]:
+    segment_types = np.asarray(segment_types, dtype=str)
+    segment_lengths = np.asarray(segment_lengths, dtype=np.float64)
+    positions = np.zeros(segment_types.shape[0], dtype=np.float64)
+    for label in np.unique(segment_types):
+        mask = segment_types == label
+        lengths = np.maximum(segment_lengths[mask], 1e-12)
+        cumulative = np.cumsum(lengths) - 0.5 * lengths
+        positions[mask] = cumulative / max(float(lengths.sum()), 1e-12)
+    return {
+        "types": segment_types,
+        "lengths": segment_lengths,
+        "positions": positions,
+        "count_by_type": {str(label): int(np.count_nonzero(segment_types == label)) for label in np.unique(segment_types)},
+    }
+
+
+def _route_inputs_to_segments(
+    signed_inputs: np.ndarray,
+    segment_types: np.ndarray,
+    segment_lengths: np.ndarray,
+    *,
+    routing: str,
+    source_route: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     """Route source E/I site channels onto the current morphology segments.
 
     The original Hay/NeuronIO protocol has one excitatory and one inhibitory
@@ -296,33 +352,82 @@ def _route_inputs_to_segments(signed_inputs: np.ndarray, segment_count: int) -> 
     if signed_inputs.shape[1] % 2 != 0:
         raise ValueError(f"signed_inputs channel count must split evenly into E/I sites, got {signed_inputs.shape[1]}")
     source_sites = signed_inputs.shape[1] // 2
-    if segment_count > source_sites:
+    segment_count = int(np.asarray(segment_types).shape[0])
+    if source_sites != int(source_route["types"].shape[0]):
+        raise ValueError(
+            "source route metadata does not match signed input sites; "
+            f"source_route_sites={source_route['types'].shape[0]}, input_sites={source_sites}"
+        )
+    if routing == "ordered_truncate" and segment_count > source_sites:
         raise ValueError(
             "morphology has more segments than available source input sites; "
             f"segments={segment_count}, source_sites={source_sites}. "
             "Define an explicit interpolation/routing policy before using this morphology."
         )
-    inputs_exc = (signed_inputs[:, :source_sites] > 0).T[:segment_count]
-    inputs_inh = (signed_inputs[:, source_sites:] < 0).T[:segment_count]
-    policy = "ordered_source_site_routing" if segment_count == source_sites else "ordered_source_site_truncation"
+    source_indices = (
+        np.arange(segment_count, dtype=np.int64)
+        if routing == "ordered_truncate"
+        else _normalized_source_indices(segment_types, segment_lengths, source_route)
+    )
+    inputs_exc = (signed_inputs[:, :source_sites] > 0).T[source_indices]
+    inputs_inh = (signed_inputs[:, source_sites:] < 0).T[source_indices]
+    unique_source = int(np.unique(source_indices).size)
+    if routing == "ordered_truncate":
+        policy = "ordered_source_site_routing" if segment_count == source_sites else "ordered_source_site_truncation"
+    else:
+        policy = "normalized_by_type_arclength"
     return inputs_exc, inputs_inh, {
         "policy": policy,
         "source_sites_per_sign": int(source_sites),
         "morphology_segments": int(segment_count),
         "used_sites_per_sign": int(segment_count),
-        "unused_source_sites_per_sign": int(source_sites - segment_count),
+        "unique_source_sites_per_sign": unique_source,
+        "duplicated_source_sites_per_sign": int(segment_count - unique_source),
+        "unused_source_sites_per_sign": int(source_sites - unique_source),
+        "target_count_by_type": _count_by_type(segment_types),
+        "source_count_by_type": source_route["count_by_type"],
         "defensibility_note": (
             "Exact source-channel routing is preserved only when morphology segment count matches source sites. "
-            "For smaller held-out morphologies this smoke truncates distal source sites in collect_segments order; "
-            "a publishable M3 protocol should report this or replace it with morphology-normalized routing."
+            "normalized_by_type_arclength is a morphology-normalized smoke policy: each target basal/apical "
+            "segment receives the nearest source site from the same compartment by normalized arclength."
         ),
     }
+
+
+def _normalized_source_indices(
+    target_types: np.ndarray,
+    target_lengths: np.ndarray,
+    source_route: dict[str, Any],
+) -> np.ndarray:
+    target_route = _segment_route(target_types, target_lengths)
+    source_types = source_route["types"]
+    source_positions = source_route["positions"]
+    indices = np.zeros(target_route["types"].shape[0], dtype=np.int64)
+    for index, (label, position) in enumerate(zip(target_route["types"], target_route["positions"])):
+        candidates = np.flatnonzero(source_types == label)
+        if candidates.size == 0:
+            candidates = np.arange(source_types.shape[0], dtype=np.int64)
+        nearest = candidates[np.argmin(np.abs(source_positions[candidates] - position))]
+        indices[index] = int(nearest)
+    return indices
+
+
+def _count_by_type(segment_types: np.ndarray) -> dict[str, int]:
+    arr = np.asarray(segment_types, dtype=str)
+    return {str(label): int(np.count_nonzero(arr == label)) for label in np.unique(arr)}
 
 
 def _summarize_input_routing(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return {"status": "not_run"}
-    keys = ("source_sites_per_sign", "morphology_segments", "used_sites_per_sign", "unused_source_sites_per_sign")
+    keys = (
+        "source_sites_per_sign",
+        "morphology_segments",
+        "used_sites_per_sign",
+        "unique_source_sites_per_sign",
+        "duplicated_source_sites_per_sign",
+        "unused_source_sites_per_sign",
+    )
     summary = {
         "status": "recorded",
         "policy": rows[0]["policy"],
