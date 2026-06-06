@@ -317,6 +317,36 @@ primary concern for v1. Interventions are interpreted as alternative
 conditions to the default validation situation, which should keep the code path
 cleaner than special-casing old robustness tests.
 
+### Benchmark Completion Criteria
+The benchmark is not done when the schema exists. It is done only when the
+following package-facing pieces work on real or pilot v1 data:
+
+1. **Data selectors:** one promoted default selector for `val/` across all
+   `5` morphologies, plus intervention selectors for
+   `interventions/<name>/` paired traces.
+2. **Dataframe diagnostics:** every atomic diagnostic in the default suite
+   emits tidy dataframe-compatible rows with the declared columns, stable
+   mask/threshold/target-view metadata, and no hidden plot-only outputs.
+3. **Suite composition:** `teacher-qc`, `paper-summary`, and `full` can be
+   run independently and can share diagnostics without treating suites as a
+   partition.
+4. **Teacher-QC diagnostics:** teacher distribution, polarity response,
+   intervention direction/effect size, routing sanity, and raw-vs-clipped
+   distortion are computed before model claims.
+5. **Model diagnostics:** Mamba, RNN, and Branch-ELM baselines can be evaluated
+   through the same dataframe outputs, including learned/calibrated spike
+   threshold metadata where used.
+6. **Reports:** command-line output writes numeric tables and compact
+   Markdown/JSON summaries with trace IDs for follow-up inspection.
+7. **Plot hooks:** diagnostics expose variable-length plotter lists, but
+   publishable plot quality is explicitly a later pass after numeric semantics
+   are correct.
+
+Scheduling: after the current teacher-QC pilot and generation-throughput gate,
+finish this benchmark implementation block before full dataset generation,
+BSSM, or noise-calibration work. Pilot data are sufficient for implementing and
+validating the benchmark code; the full dataset is not required for that step.
+
 ### Implementation Plan
 1. **Dataset schema and manifest v2**
    - Define trace, morphology, split, condition, intervention-pair, target-view,
@@ -331,21 +361,27 @@ cleaner than special-casing old robustness tests.
 4. **Teacher QC pilot**
    - Generate small baseline and intervention pilots for all `5` morphologies.
    - Run teacher-facing diagnostics; reject or replace morphologies that fail.
-5. **Full v1 dataset generation**
+5. **Generation throughput gate**
+   - Before generating the full dataset, make the generation path fast enough
+     for the planned scale. Prefer GPU/batched simulation where it preserves
+     teacher correctness; otherwise produce a measured throughput report and a
+     defensible reason for the chosen backend.
+   - Do not start full generation on a slow correctness-only path.
+6. **Full v1 dataset generation**
    - Generate ordinary splits and intervention pairs under the size target.
    - Store raw and clipped target views plus metadata.
-6. **Diagnostic framework**
+7. **Diagnostic framework**
    - Implement dataframe-first diagnostic outputs, suite composition, selectors,
      and report rendering.
    - Default command: run dense diagnostics on `val` plus intervention
      diagnostics on `interventions/`.
-7. **Model evaluation**
+8. **Model evaluation**
    - Evaluate current Mamba, RNN, and Branch-ELM baselines using the same
      diagnostic suite outputs.
-8. **Plot-quality pass**
+9. **Plot-quality pass**
    - After correct outputs exist, design diagnostic-attached and suite-level
      publishable plots. Do not block core implementation on plot polish.
-9. **Packaging path**
+10. **Packaging path**
    - Optimize the future package for ease of use: one promoted default command,
      composable diagnostic suites for researchers, and dataframes as primary
      numeric outputs.
@@ -488,14 +524,16 @@ Training on mean traces only creates systematic overconfidence. Calibrating outp
    for baseline and intervention conditions.
 3. Freeze the CoreNEURON/Hay teacher config after all five morphologies pass
    baseline and intervention sanity checks.
-4. Generate v1 ordinary splits and intervention pairs within the size target.
-5. Implement dataframe-first diagnostics, overlapping diagnostic suites, and
+4. Establish a fast generation path before full generation: GPU/batched if
+   correct, or a measured throughput report plus defensible backend choice.
+5. Generate v1 ordinary splits and intervention pairs within the size target.
+6. Implement dataframe-first diagnostics, overlapping diagnostic suites, and
    the promoted default path: dense diagnostics on `val` plus intervention
    diagnostics under `interventions/`.
-6. Evaluate Mamba, RNN, and Branch-ELM baselines with the same diagnostic
+7. Evaluate Mamba, RNN, and Branch-ELM baselines with the same diagnostic
    outputs.
-7. Run a separate plot-quality pass after the numeric outputs are correct.
-8. Write dataset card, benchmark report, limitations, and paper framing.
+8. Run a separate plot-quality pass after the numeric outputs are correct.
+9. Write dataset card, benchmark report, limitations, and paper framing.
 
 ### Phase 2: BSSM Feasibility Sprint
 1. Use v1 diagnostics to identify a concrete failure mode that the proposed

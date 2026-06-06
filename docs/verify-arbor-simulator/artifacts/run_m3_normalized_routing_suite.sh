@@ -55,12 +55,13 @@ for specimen in "${CANDIDATES[@]}"; do
   done
 done
 
-PYTHONPATH=src "$PYTHON_BIN" - <<'PY'
+SUMMARY_ROOT="$OUTPUT_ROOT" PYTHONPATH=src "$PYTHON_BIN" - <<'PY'
 from __future__ import annotations
 import json
+import os
 from pathlib import Path
 
-root = Path("docs/verify-arbor-simulator/artifacts/m3_normroute_suite_20260606")
+root = Path(os.environ["SUMMARY_ROOT"])
 rows = []
 for report_path in sorted(root.glob("specimen_*_*_simbase*/intervention_report.json")):
     report = json.loads(report_path.read_text())
@@ -91,12 +92,17 @@ lines = [
     "| specimen | intervention | traces | segments | delta soma mV | delta spike rate / 1000 | spike-count delta | spike-count interval | direction |",
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
 ]
+def fmt(value, digits=4):
+    if value is None:
+        return "NA"
+    return f"{float(value):.{digits}f}"
+
 for row in rows:
     lines.append(
         f"| `{row['specimen']}` | `{row['intervention']}` | `{row['n_traces']}` | "
-        f"`{row['morphology_segments']:.0f}` | `{row['delta_soma_mean_mv']:.4f}` | "
-        f"`{row['delta_spike_rate_per_1000_steps']:.4f}` | `{row['spike_count_delta_mean']:.4f}` | "
-        f"`[{row['spike_count_delta_ci95_low']:.4f}, {row['spike_count_delta_ci95_high']:.4f}]` | "
+        f"`{fmt(row['morphology_segments'], 0)}` | `{fmt(row['delta_soma_mean_mv'])}` | "
+        f"`{fmt(row['delta_spike_rate_per_1000_steps'])}` | `{fmt(row['spike_count_delta_mean'])}` | "
+        f"`[{fmt(row['spike_count_delta_ci95_low'])}, {fmt(row['spike_count_delta_ci95_high'])}]` | "
         f"`{row['teacher_direction']}` |"
     )
 (root / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

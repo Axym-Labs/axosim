@@ -3,6 +3,30 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- EXPERIMENT (2026-06-06 20:57): Ran the v1 teacher-QC morphology/intervention
+  pilot over all `5` provisional morphologies with `8` paired traces each for
+  `event_dropout` and `inh_dropout` using the working plain NEURON/Hay SWC
+  path. All `10/10` pairs passed expected direction and response-detected
+  checks: event dropout hyperpolarized and reduced spiking; inhibitory dropout
+  depolarized and increased spiking. Tracked report:
+  `artifacts/v1_teacher_qc_pilot_20260606.md`. Important backend finding:
+  conda NEURON `8.2.7` mismatched the SWC-template compiled mechanisms and
+  failed with an undefined `libnrnmech.so` symbol / missing `Im`; `.venv`
+  NEURON `9.0.1` fixed plain NEURON/Hay. CoreNEURON/SWC still aborted under
+  `.venv`, so full dataset generation is gated on a later fast generation
+  path rather than this slow correctness-only pilot route. Also fixed
+  `run_m3_normalized_routing_suite.sh` so summaries respect `OUTPUT_ROOT` and
+  small-`n` confidence intervals render as `NA`.
+
+- DECISION (2026-06-06 20:42): User clarified that full dataset generation
+  must not start until the generation path is made fast, preferably with GPU
+  or another batched route that preserves teacher correctness. Updated
+  `spec.md` with an explicit generation-throughput gate before full v1 dataset
+  generation. User also clarified that the benchmark is not done; updated the
+  spec with benchmark completion criteria and scheduled benchmark
+  implementation/completion immediately after the current teacher/generation
+  path task set, before full dataset generation, BSSM, or noise calibration.
+
 - DECISION (2026-06-06 20:25): Selected the provisional v1 `N=5`
   morphology set for teacher-QC pilots and made it code-visible in the
   manifest template. The set is reference/control `488683425`, closest
