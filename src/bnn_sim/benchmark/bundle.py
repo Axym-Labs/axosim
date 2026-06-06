@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 
 from bnn_sim.benchmark.dataset_schema import INTERVENTION_CONDITIONS
-from bnn_sim.benchmark.diagnostic_rows import DiagnosticContext
+from bnn_sim.benchmark.diagnostic_rows import DiagnosticContext, morphology_contrast_diagnostic_rows, write_diagnostic_rows
 from bnn_sim.benchmark.reports import write_diagnostic_summary
 from bnn_sim.benchmark.runner import (
     run_model_diagnostics_on_selector,
@@ -50,6 +50,7 @@ def run_v1_benchmark_bundle(
     output.mkdir(parents=True, exist_ok=True)
     base = base_context or DiagnosticContext()
     artifacts: list[dict[str, Any]] = []
+    intervention_row_sets: list[dict[str, Any]] = []
 
     teacher_context = _replace_context(
         base,
@@ -92,10 +93,11 @@ def run_v1_benchmark_bundle(
     if pair_paths:
         for pair_path in pair_paths:
             intervention, morphology_id = infer_pair_metadata(pair_path, default_morphology=base.morphology_id)
+            intervention_model_id = model_id if model_fn is not None else "teacher"
             context = _replace_context(
                 base,
                 suites=DEFAULT_INTERVENTION_SUITES,
-                model_id=model_id or base.model_id,
+                model_id=intervention_model_id,
                 morphology_id=morphology_id,
                 split="",
                 condition=f"interventions/{intervention}",
@@ -109,14 +111,16 @@ def run_v1_benchmark_bundle(
                 max_samples=max_intervention_samples,
                 output=output / f"{filename}.jsonl",
             )
+            intervention_row_sets.extend(rows)
             _write_summary_artifact(rows, output / f"{filename}.md", artifacts)
     else:
         for intervention in layout.available_interventions():
             selector = layout.intervention(intervention)
+            intervention_model_id = model_id if model_fn is not None else "teacher"
             context = _replace_context(
                 base,
                 suites=DEFAULT_INTERVENTION_SUITES,
-                model_id=model_id or base.model_id,
+                model_id=intervention_model_id,
                 split="",
                 condition=f"interventions/{intervention}",
                 intervention=intervention,
@@ -129,7 +133,17 @@ def run_v1_benchmark_bundle(
                 max_samples=max_intervention_samples,
                 output=output / f"{filename}.jsonl",
             )
+            intervention_row_sets.extend(rows)
             _write_summary_artifact(rows, output / f"{filename}.md", artifacts)
+
+    contrast_rows = morphology_contrast_diagnostic_rows(
+        intervention_row_sets,
+        context=_replace_context(base, suites=("morphology-contrast", "paper-summary"), morphology_id="all_v1"),
+    )
+    if contrast_rows:
+        contrast_path = output / "morphology_contrast_interventions.jsonl"
+        write_diagnostic_rows(contrast_rows, contrast_path)
+        _write_summary_artifact(contrast_rows, output / "morphology_contrast_interventions.md", artifacts)
 
     manifest = {
         "dataset_root": str(dataset_root),

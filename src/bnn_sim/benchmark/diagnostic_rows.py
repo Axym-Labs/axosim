@@ -152,6 +152,83 @@ def paired_intervention_diagnostic_rows(
     return _filter_rows_for_suites(rows, context.suites)
 
 
+def morphology_contrast_diagnostic_rows(
+    source_rows: Iterable[dict[str, Any]],
+    *,
+    context: DiagnosticContext | None = None,
+    min_morphologies: int = 2,
+) -> list[dict[str, Any]]:
+    """Derive rough cross-morphology contrast rows from existing diagnostics."""
+    source_rows = list(source_rows)
+    validate_diagnostic_rows(source_rows)
+    if min_morphologies < 2:
+        raise ValueError("min_morphologies must be at least 2")
+    context = context or DiagnosticContext(suites=("morphology-contrast", "paper-summary"), morphology_id="all")
+    grouped: dict[tuple[str, str, str, str | None, str, str, str | None], dict[str, list[float]]] = {}
+    for row in source_rows:
+        value = row["value"]
+        morphology_id = row["morphology_id"]
+        if (
+            row["diagnostic"] == "morphology_contrast"
+            or morphology_id in {None, "", "unknown"}
+            or isinstance(value, bool)
+            or value is None
+            or not isinstance(value, (int, float))
+            or not np.isfinite(value)
+        ):
+            continue
+        key = (
+            str(row["diagnostic"]),
+            str(row["metric"]),
+            str(row["unit"]),
+            row["state"],
+            str(row["model_id"]),
+            str(row["condition"]),
+            row["intervention"],
+        )
+        grouped.setdefault(key, {}).setdefault(str(morphology_id), []).append(float(value))
+
+    rows: list[dict[str, Any]] = []
+    for (diagnostic, metric, unit, state, model_id, condition, intervention), by_morphology in sorted(grouped.items()):
+        morphology_values = {
+            morphology: float(np.mean(values))
+            for morphology, values in by_morphology.items()
+            if values
+        }
+        if len(morphology_values) < min_morphologies:
+            continue
+        values = np.asarray(list(morphology_values.values()), dtype=float)
+        row_context = _replace_context(
+            context,
+            model_id=model_id,
+            morphology_id="all_v1",
+            condition=condition,
+            intervention=intervention,
+        )
+        prefix = f"{diagnostic}.{metric}"
+        for suffix, value in (
+            ("mean_across_morphologies", float(np.mean(values))),
+            ("std_across_morphologies", float(np.std(values))),
+            ("range_across_morphologies", float(np.max(values) - np.min(values))),
+            ("min_across_morphologies", float(np.min(values))),
+            ("max_across_morphologies", float(np.max(values))),
+        ):
+            row = _row(
+                "morphology_contrast",
+                row_context,
+                f"{prefix}.{suffix}",
+                value,
+                state=state,
+                unit=unit,
+                n=len(morphology_values),
+            )
+            row["source_diagnostic"] = diagnostic
+            row["source_metric"] = metric
+            row["morphology_values"] = morphology_values
+            rows.append(row)
+    return _filter_rows_for_suites(rows, context.suites)
+
+
 def validate_diagnostic_rows(rows: Iterable[dict[str, Any]]) -> None:
     """Validate required row columns for dataframe compatibility."""
     required = set(DIAGNOSTIC_ROW_COLUMNS)
@@ -418,6 +495,10 @@ def _replace_context_trace(context: DiagnosticContext, trace_id: str) -> Diagnos
 
 def _replace_context_condition(context: DiagnosticContext, condition: str) -> DiagnosticContext:
     return replace(context, condition=condition)
+
+
+def _replace_context(context: DiagnosticContext, **updates: Any) -> DiagnosticContext:
+    return replace(context, **updates)
 
 
 def _as_trace_array(array: np.ndarray) -> np.ndarray:

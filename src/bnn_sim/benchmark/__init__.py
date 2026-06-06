@@ -50,6 +50,7 @@ from bnn_sim.benchmark.dataset_schema import (
 from bnn_sim.benchmark.diagnostic_rows import (
     DiagnosticContext,
     evaluate_model_diagnostic_rows,
+    morphology_contrast_diagnostic_rows,
     paired_intervention_diagnostic_rows,
     teacher_qc_diagnostic_rows,
     validate_diagnostic_rows,
@@ -103,6 +104,7 @@ __all__ = [
     "validate_v1_manifest_template",
     "DiagnosticContext",
     "evaluate_model_diagnostic_rows",
+    "morphology_contrast_diagnostic_rows",
     "paired_intervention_diagnostic_rows",
     "teacher_qc_diagnostic_rows",
     "validate_diagnostic_rows",

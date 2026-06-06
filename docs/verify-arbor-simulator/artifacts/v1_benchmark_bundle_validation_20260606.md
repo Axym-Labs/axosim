@@ -13,8 +13,8 @@ Date: 2026-06-06
 
 | run | output dir | artifacts | tracked here |
 | --- | --- | ---: | --- |
-| teacher-only | `artifacts/v1_benchmark_bundle_teacher_pilot_20260606/` | 11 | no, ignored bundle dir |
-| Mamba | `artifacts/v1_benchmark_bundle_mamba_pilot_20260606/` | 12 | no, ignored bundle dir |
+| teacher-only | `artifacts/v1_benchmark_bundle_teacher_pilot_20260606/` | 12 | no, ignored bundle dir |
+| Mamba | `artifacts/v1_benchmark_bundle_mamba_pilot_20260606/` | 13 | no, ignored bundle dir |
 
 The directories contain per-condition `.jsonl` rows, `.md` summaries, and a
 `manifest.json`. This report is the tracked compact validation record.
@@ -31,6 +31,7 @@ Teacher-only bundle:
 | interventions covered | `event_dropout`, `inh_dropout` |
 | event-dropout teacher direction | 5/5 `lower_event_drive/lower_spiking/hyperpolarized` |
 | inhibitory-dropout teacher direction | 5/5 `lower_event_drive/higher_spiking/depolarized` |
+| morphology-contrast rows | 70 |
 
 Mamba bundle:
 
@@ -41,6 +42,7 @@ Mamba bundle:
 | validation trace-core soma RMSE on 2-trace pilot | 0.5805 mV summary mean |
 | validation trace-core spike AUC on 2-trace pilot | 0.9966 |
 | intervention model rows per pair | 13 |
+| morphology-contrast rows | 90 |
 | soma direction agreement | 10/10 |
 | spike direction agreement | 5/10 |
 
@@ -50,6 +52,19 @@ Intervention detail for Mamba at `max_intervention_samples=2`:
 | --- | ---: | ---: | ---: | ---: |
 | `event_dropout` | 5 | 5/5 | 0/5 | 1.1353-3.2267 mV |
 | `inh_dropout` | 5 | 5/5 | 5/5 | 1.7428-4.5496 mV |
+
+Selected morphology-contrast ranges:
+
+| run | condition | metric | range |
+| --- | --- | --- | ---: |
+| teacher-only | `event_dropout` | teacher `delta_soma_mean_mv` | 1.2215 mV |
+| teacher-only | `inh_dropout` | teacher `delta_soma_mean_mv` | 1.2794 mV |
+| teacher-only | `event_dropout` | teacher `delta_spike_rate_per_1000_steps` | 2.8636 |
+| teacher-only | `inh_dropout` | teacher `delta_spike_rate_per_1000_steps` | 3.9091 |
+| Mamba | `event_dropout` | model `soma_delta_rmse_mv` | 2.0914 mV |
+| Mamba | `inh_dropout` | model `soma_delta_rmse_mv` | 2.8067 mV |
+| Mamba | `event_dropout` | model `spike_count_delta_mae_per_trace` | 14.0 |
+| Mamba | `inh_dropout` | model `spike_count_delta_mae_per_trace` | 25.5 |
 
 ## Interpretation
 

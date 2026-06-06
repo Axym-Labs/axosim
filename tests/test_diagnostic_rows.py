@@ -4,6 +4,7 @@ import json
 from bnn_sim.benchmark.diagnostic_rows import (
     DiagnosticContext,
     evaluate_model_diagnostic_rows,
+    morphology_contrast_diagnostic_rows,
     paired_intervention_diagnostic_rows,
     teacher_qc_diagnostic_rows,
     validate_diagnostic_rows,
@@ -108,6 +109,41 @@ def test_paired_intervention_rows_include_teacher_and_model_delta_metrics():
     assert metrics["response_detected"] == 1.0
     assert metrics["soma_delta_rmse_mv"] == 0.0
     assert "teacher-qc|intervention-response|paper-summary" in {row["suite"] for row in rows}
+
+
+def test_morphology_contrast_rows_summarize_numeric_rows_across_morphologies():
+    rows = [
+        {
+            "diagnostic": "intervention_response",
+            "suite": "intervention-response",
+            "model_id": "model-a",
+            "teacher_id": "teacher",
+            "morphology_id": morphology,
+            "split": "",
+            "condition": "interventions/event_dropout",
+            "intervention": "event_dropout",
+            "trace_id": None,
+            "state": None,
+            "metric": "soma_delta_rmse_mv",
+            "value": value,
+            "unit": "mV",
+            "n": 1,
+        }
+        for morphology, value in (("morph-a", 1.0), ("morph-b", 3.0), ("morph-c", 5.0))
+    ]
+
+    contrast = morphology_contrast_diagnostic_rows(
+        rows,
+        context=DiagnosticContext(suites=("morphology-contrast", "paper-summary")),
+    )
+
+    validate_diagnostic_rows(contrast)
+    metrics = {row["metric"]: row for row in contrast}
+    key = "intervention_response.soma_delta_rmse_mv.range_across_morphologies"
+    assert metrics[key]["value"] == 4.0
+    assert metrics[key]["n"] == 3
+    assert metrics[key]["morphology_id"] == "all_v1"
+    assert metrics[key]["morphology_values"] == {"morph-a": 1.0, "morph-b": 3.0, "morph-c": 5.0}
 
 
 def test_write_diagnostic_rows_supports_dataframe_friendly_formats(tmp_path):

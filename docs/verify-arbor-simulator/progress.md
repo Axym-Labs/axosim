@@ -7,13 +7,15 @@ use `00:00` when no exact time was recorded.
   `bnn-sim benchmark-v1` bundle command and reusable
   `run_v1_benchmark_bundle` helper. The bundle writes validation teacher-QC
   rows, optional validation model rows, paired intervention rows, per-artifact
-  Markdown summaries, and a `manifest.json`; it supports existing pilot pair
-  files through `--intervention-pair-glob` and future v1 intervention
+  Markdown summaries, derived `morphology_contrast` rows when multiple
+  morphologies are present, and a `manifest.json`; it supports existing pilot
+  pair files through `--intervention-pair-glob` and future v1 intervention
   selectors when the dataset layout exists. Validation on real pilot data:
   teacher-only bundle covered all `10` v1 pilot morphology/intervention pairs
-  (`5` morphologies x `event_dropout`/`inh_dropout`) and wrote `11`
-  artifacts; Mamba bundle via `.venv-mamba` wrote validation model rows plus
-  all `10` intervention pairs. Tracked compact report:
+  (`5` morphologies x `event_dropout`/`inh_dropout`) and wrote `12`
+  artifacts including `70` morphology-contrast rows; Mamba bundle via
+  `.venv-mamba` wrote validation model rows plus all `10` intervention pairs
+  and `90` morphology-contrast rows. Tracked compact report:
   `artifacts/v1_benchmark_bundle_validation_20260606.md`. Sanity signal:
   teacher directions were correct for all `10/10` pairs; Mamba preserved soma
   direction for all `10/10`, preserved spike direction for inhibitory dropout
