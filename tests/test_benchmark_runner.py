@@ -62,6 +62,27 @@ def test_runner_writes_teacher_qc_rows_for_selector(tmp_path):
     assert any(row["diagnostic"] == "teacher_distribution_qc" for row in rows)
 
 
+def test_runner_auto_loads_raw_soma_for_clipping_qc(tmp_path):
+    val = tmp_path / "val"
+    val.mkdir()
+    inputs = np.zeros((1, 8, 4), dtype=np.int8)
+    targets = np.zeros((1, 8, 2), dtype=np.float32)
+    targets[..., 1] = (-67.0 + 67.7) * 0.1
+    targets[0, 4, 0] = 1.0
+    targets[0, 4, 1] = (-55.0 + 67.7) * 0.1
+    soma_mv = np.full((1, 8), -67.0, dtype=np.float32)
+    soma_mv[0, 4] = -20.0
+    np.savez_compressed(val / "raw_000.npz", inputs=inputs, targets=targets, soma_mv=soma_mv)
+    selector = V1DatasetLayout(tmp_path).default_validation()
+
+    rows = run_teacher_qc_on_selector(
+        selector,
+        context=DiagnosticContext(suites=("teacher-qc", "paper-summary"), model_id="teacher", ignore_start=0),
+    )
+
+    assert any(row["diagnostic"] == "clipping_distortion" for row in rows)
+
+
 def test_runner_writes_paired_intervention_rows_from_npz(tmp_path):
     pair_path = tmp_path / "intervention_pair.npz"
     baseline_inputs = np.zeros((2, 8, 4), dtype=np.int8)

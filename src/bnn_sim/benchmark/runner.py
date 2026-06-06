@@ -29,7 +29,7 @@ def load_selector_batch(
     n = len(dataset) if max_samples is None else min(int(max_samples), len(dataset))
     if n <= 0:
         raise ValueError("selector contains no samples")
-    indices = list(range(n))
+    indices = _leading_indices(n)
     inputs, targets = dataset.get_batch(indices)
     trace_ids = dataset.get_sample_ids(indices)
     return inputs, targets, trace_ids
@@ -138,7 +138,15 @@ def run_teacher_qc_on_selector(
     cache_shards: int = 1,
 ) -> list[dict[str, Any]]:
     """Run teacher-QC diagnostics on a selected v1 dataset category."""
-    inputs, targets, trace_ids = load_selector_batch(selector, max_samples=max_samples, cache_shards=cache_shards)
+    dataset = selector.load(cache_shards=cache_shards)
+    n = len(dataset) if max_samples is None else min(int(max_samples), len(dataset))
+    if n <= 0:
+        raise ValueError("selector contains no samples")
+    indices = _leading_indices(n)
+    inputs, targets = dataset.get_batch(indices)
+    trace_ids = dataset.get_sample_ids(indices)
+    if raw_soma_mv is None:
+        raw_soma_mv = dataset.get_optional_array_batch("soma_mv", indices)
     context = _context_for_selector(selector, context)
     rows = teacher_qc_diagnostic_rows(inputs, targets, context=context, raw_soma_mv=raw_soma_mv, trace_ids=trace_ids)
     if output is not None:
@@ -155,6 +163,10 @@ def _context_for_selector(selector: DatasetSelector, context: DiagnosticContext 
         "intervention": selector.intervention,
     }
     return DiagnosticContext(**data)
+
+
+def _leading_indices(n: int) -> list[int]:
+    return list(range(n))
 
 
 def _resolve_pair_path(selector: DatasetSelector) -> Path:

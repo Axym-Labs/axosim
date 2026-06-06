@@ -9,15 +9,17 @@ use `00:00` when no exact time was recorded.
   rows, optional validation model rows, paired intervention rows, per-artifact
   Markdown summaries, `morphology_routing_qc` rows from the v1 morphology
   metadata, derived `morphology_contrast` rows when multiple morphologies are
-  present, and a `manifest.json`; it supports existing pilot pair files
-  through `--intervention-pair-glob` and future v1 intervention selectors
-  when the dataset layout exists. Validation on real pilot data:
+  present, and raw-vs-clipped `clipping_distortion` rows whenever shards store
+  raw `soma_mv`; it also writes a `manifest.json`. It supports existing pilot
+  pair files through `--intervention-pair-glob` and future v1 intervention
+  selectors when the dataset layout exists. Validation on real pilot data:
   teacher-only bundle covered all `10` v1 pilot morphology/intervention pairs
   (`5` morphologies x `event_dropout`/`inh_dropout`) and wrote `13`
-  artifacts including `35` routing-QC rows and `70` morphology-contrast rows;
-  Mamba bundle via
+  artifacts including `18` validation teacher-QC rows, `35` routing-QC rows,
+  and `70` morphology-contrast rows; Mamba bundle via
   `.venv-mamba` wrote validation model rows plus all `10` intervention pairs
-  plus `35` routing-QC rows and `90` morphology-contrast rows. Tracked compact report:
+  plus `14` validation teacher-QC rows, `35` routing-QC rows, and `90`
+  morphology-contrast rows. Tracked compact report:
   `artifacts/v1_benchmark_bundle_validation_20260606.md`. Sanity signal:
   teacher directions were correct for all `10/10` pairs; Mamba preserved soma
   direction for all `10/10`, preserved spike direction for inhibitory dropout

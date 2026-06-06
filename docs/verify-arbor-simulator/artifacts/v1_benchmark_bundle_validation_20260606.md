@@ -25,7 +25,11 @@ Teacher-only bundle:
 
 | check | result |
 | --- | --- |
-| validation teacher-QC rows | 9 |
+| validation teacher-QC rows | 18 |
+| validation clipping rows | 9 |
+| clipped fraction on 4-trace pilot | 0.00218 |
+| near-spike clipped fraction on 4-trace pilot | 0.395 |
+| near-spike distortion RMSE on 4-trace pilot | 20.97 mV |
 | morphology-routing QC rows | 35 |
 | intervention pairs covered | 10 |
 | v1 morphologies covered | 5 |
@@ -38,7 +42,11 @@ Mamba bundle:
 
 | check | result |
 | --- | --- |
-| validation teacher-QC rows | 7 |
+| validation teacher-QC rows | 14 |
+| validation clipping rows | 7 |
+| clipped fraction on 2-trace pilot | 0.000182 |
+| near-spike clipped fraction on 2-trace pilot | 0.286 |
+| near-spike distortion RMSE on 2-trace pilot | 29.49 mV |
 | morphology-routing QC rows | 35 |
 | validation model rows | 105 |
 | validation trace-core soma RMSE on 2-trace pilot | 0.5805 mV summary mean |

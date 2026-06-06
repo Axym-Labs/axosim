@@ -60,6 +60,24 @@ def test_sharded_dataset_returns_float32_inputs_and_two_label_outputs(tmp_path):
     assert sample.targets.dtype == np.float32
 
 
+def test_sharded_dataset_can_read_optional_npz_array_batches(tmp_path):
+    inputs = np.zeros((2, 4, 3), dtype=np.int8)
+    targets = np.zeros((2, 4, 2), dtype=np.float32)
+    soma_mv = np.arange(8, dtype=np.float32).reshape(2, 4)
+    np.savez_compressed(
+        tmp_path / "demo_000.npz",
+        inputs=inputs,
+        targets=targets,
+        soma_mv=soma_mv,
+        sample_ids=np.asarray(["a", "b"]),
+    )
+
+    dataset = ShardedNeuronIODataset(tmp_path)
+
+    assert np.array_equal(dataset.get_optional_array_batch("soma_mv", [1]), soma_mv[1:2])
+    assert dataset.get_optional_array_batch("missing", [0]) is None
+
+
 def test_window_dataset_enumerates_fixed_windows_deterministically(tmp_path):
     write_demo_shards(tmp_path, shard_count=1, samples_per_shard=2, time_steps=10, input_dim=3, seed=5)
 

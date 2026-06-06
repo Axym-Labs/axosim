@@ -101,6 +101,20 @@ class ShardedNeuronIODataset:
     def get_sample_ids(self, indices: range | list[int]) -> list[str]:
         return [self._index[int(index)][2] for index in indices]
 
+    def get_optional_array_batch(self, name: str, indices: range | list[int]) -> np.ndarray | None:
+        """Return an optional per-sample array from NPZ shards when present."""
+        entries = [self._index[int(index)] for index in indices]
+        arrays: list[np.ndarray] = []
+        for shard_idx, sample_indices in _group_sample_indices_by_shard(entries):
+            shard = self.shards[shard_idx]
+            if shard.path is None:
+                return None
+            with _open_shard(shard) as data:
+                if name not in data:
+                    return None
+                arrays.append(np.asarray(data[name][sample_indices]))
+        return np.concatenate(arrays, axis=0) if arrays else None
+
     def _load_sample(self, shard_idx: int, sample_idx: int) -> tuple[np.ndarray, np.ndarray]:
         if self.cache_shards <= 0:
             with _open_shard(self.shards[shard_idx]) as data:
