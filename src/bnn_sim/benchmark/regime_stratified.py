@@ -173,6 +173,7 @@ def compute_regime_stratified_metrics(
     ignore_start: int = 0,
     post_event_quantile: float = 0.95,
     calibrated_spike_threshold: float | None = None,
+    trace_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Compute M2: Regime-stratified error metrics.
 
@@ -212,6 +213,10 @@ def compute_regime_stratified_metrics(
 
     if pred.shape[1] == 0:
         raise ValueError("ignore_start leaves no timesteps to evaluate")
+    if trace_ids is None:
+        trace_ids = [str(i) for i in range(pred.shape[0])]
+    if len(trace_ids) != pred.shape[0]:
+        raise ValueError(f"trace_ids length must match number of traces, got {len(trace_ids)} and {pred.shape[0]}")
 
     pred_soma = pred[..., 1]
     tgt_soma = tgt[..., 1]
@@ -317,6 +322,17 @@ def compute_regime_stratified_metrics(
             "timesteps": int(residual_flat.size),
         },
         "mvp_regimes": mvp_regimes,
+        "mvp_regime_representatives": _regime_representatives(
+            mvp_regimes,
+            residual_mv,
+            {
+                "far_from_spike_subthreshold": far_subthreshold,
+                "near_spike": near_spike_mask,
+                "post_spike_refractory": post_spike_mask,
+                "post_input_event": post_event_mask,
+            },
+            trace_ids,
+        ),
         "voltage_regime": voltage_rows,
         "slope_regime": slope_rows,
         "spike_proximity": spike_proximity_rows,
@@ -356,3 +372,46 @@ def compute_regime_stratified_metrics(
             "semantics": "fixed logit threshold learned on a separate calibration split and frozen before evaluation",
         }
     return result
+
+
+def _regime_representatives(
+    rows: list[dict[str, Any]],
+    residual_mv: np.ndarray,
+    masks: dict[str, np.ndarray],
+    trace_ids: list[str],
+    *,
+    limit: int = 3,
+) -> dict[str, Any]:
+    representatives: dict[str, Any] = {}
+    for row in rows:
+        label = str(row["regime_label"])
+        mask = masks.get(label)
+        if mask is None or int(mask.sum()) == 0:
+            representatives[label] = {
+                "status": "no_support",
+                "worst_trace_ids": [],
+                "examples": [],
+            }
+            continue
+        examples = []
+        for index, trace_id in enumerate(trace_ids):
+            trace_mask = mask[index]
+            count = int(trace_mask.sum())
+            if count == 0:
+                continue
+            trace_residual = residual_mv[index][trace_mask]
+            examples.append({
+                "trace_id": trace_id,
+                "count": count,
+                "rmse_mv": float(np.sqrt(np.mean(trace_residual ** 2))),
+                "mae_mv": float(np.mean(np.abs(trace_residual))),
+                "max_error_mv": float(np.max(np.abs(trace_residual))),
+            })
+        examples.sort(key=lambda item: (item["rmse_mv"], item["count"]), reverse=True)
+        representatives[label] = {
+            "status": "ok",
+            "worst_trace_ids": [item["trace_id"] for item in examples[:limit]],
+            "examples": examples[:limit],
+            "semantics": "highest per-trace RMSE within this regime; use these trace IDs for visual inspection",
+        }
+    return representatives

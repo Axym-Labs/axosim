@@ -58,6 +58,8 @@ def test_benchmark_suite_reports_mvp_schema_and_masked_m1(tmp_path):
     assert report["trace_shape_fidelity"]["kind"] == "multiscale_trace_shape_fidelity"
     assert report["m1_trace_fidelity"]["spike_target_count"] == 1
     assert report["m1_trace_fidelity"]["spike_brier"] < 0.001
+    assert report["m1_trace_fidelity"]["worst_trace_ids"]["soma_rmse"] == ["trace-a", "trace-b"]
+    assert report["m1_trace_fidelity"]["per_trace_summary"]["rows"][0]["trace_id"] == "trace-a"
     assert report["m1b_feature_fidelity"]["features"]["spike_count"]["teacher_mean"] == 0.5
     assert report["m1b_feature_fidelity"]["worst_trace_ids"]["spike_count_abs_error"] == []
     assert report["m4_intervention"]["status"] == "not_run"
@@ -146,6 +148,7 @@ def test_regime_metrics_do_not_leak_spike_windows_across_trace_boundaries():
     assert far["count"] == 7
     assert mvp["near_spike"]["count"] == 3
     assert mvp["far_from_spike_subthreshold"]["count"] == 7
+    assert metrics["mvp_regime_representatives"]["near_spike"]["worst_trace_ids"] == ["0"]
     assert "near_spike" in metrics["what_failure_means"]
     warned = {row["regime_label"] for row in metrics["support_warnings"]}
     assert {"post_spike_refractory", "post_input_event"}.issubset(warned)
@@ -175,6 +178,7 @@ def test_regime_post_event_uses_high_drive_for_many_input_channels():
     assert post["count"] == 3
     assert no_recent["count"] == 7
     assert mvp["far_from_spike_subthreshold"]["count"] == 7
+    assert metrics["mvp_regime_representatives"]["post_input_event"]["worst_trace_ids"] == ["0"]
     assert "post_input_event" in metrics["what_failure_means"]
 
 

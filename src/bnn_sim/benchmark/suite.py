@@ -78,6 +78,7 @@ class BenchmarkSuite:
             targets,
             soma_scale,
             ignore_start,
+            trace_ids,
             calibrated_spike_threshold=calibrated_spike_threshold,
         )
         m1b = _compute_m1b_feature_fidelity(
@@ -97,6 +98,7 @@ class BenchmarkSuite:
             soma_bias_mv=soma_bias_mv,
             ignore_start=ignore_start,
             calibrated_spike_threshold=calibrated_spike_threshold,
+            trace_ids=trace_ids,
         )
         state_metrics = compute_state_conditioned_metrics(
             predictions,
@@ -420,6 +422,7 @@ def _compute_m1_trace_fidelity(
     targets: np.ndarray,
     soma_scale: float,
     ignore_start: int,
+    trace_ids: list[str],
     *,
     calibrated_spike_threshold: float | None = None,
 ) -> dict[str, Any]:
@@ -429,6 +432,8 @@ def _compute_m1_trace_fidelity(
         raise ValueError(f"prediction and target shapes must match, got {pred.shape} and {tgt.shape}")
     if pred.shape[1] == 0:
         raise ValueError("ignore_start leaves no timesteps to evaluate")
+    if len(trace_ids) != pred.shape[0]:
+        raise ValueError(f"trace_ids length must match number of traces, got {len(trace_ids)} and {pred.shape[0]}")
 
     residual = pred[..., 1] - tgt[..., 1]
     residual_mv = residual / soma_scale
@@ -446,6 +451,16 @@ def _compute_m1_trace_fidelity(
     pred_counts = spike_binary.sum(axis=1)
     matched_counts = matched_binary.sum(axis=1)
     target_counts = target_binary.sum(axis=1)
+    calibrated_binary = spike_scores >= calibrated_spike_threshold if calibrated_spike_threshold is not None else None
+    calibrated_counts = calibrated_binary.sum(axis=1) if calibrated_binary is not None else None
+    per_trace = _m1_per_trace_rows(
+        residual_mv,
+        target_binary,
+        spike_binary,
+        trace_ids,
+        matched_binary=matched_binary,
+        calibrated_binary=calibrated_binary,
+    )
 
     result = {
         "soma_rmse_normalized": float(np.sqrt(np.mean(residual ** 2))),
@@ -469,20 +484,76 @@ def _compute_m1_trace_fidelity(
             "count_mae_per_trace": float(np.mean(np.abs(matched_counts - target_counts))),
             "semantics": "diagnostic threshold chosen so total predicted spike count matches the teacher under the current mask",
         },
+        "per_trace_summary": per_trace,
+        "worst_trace_ids": {
+            "soma_rmse": [row["trace_id"] for row in per_trace["worst_soma_rmse"]],
+            "spike_count_abs_error": [row["trace_id"] for row in per_trace["worst_spike_count_abs_error"]],
+            "calibrated_spike_count_abs_error": (
+                [row["trace_id"] for row in per_trace["worst_calibrated_spike_count_abs_error"]]
+                if calibrated_spike_threshold is not None
+                else None
+            ),
+        },
         "what_failure_means": {
             "soma": "Large RMSE/MAE means the surrogate misses open-loop voltage traces under the stated mask.",
             "spike": "Poor AUC/Brier/log-loss means spike scores do not rank or calibrate event likelihoods well.",
+            "worst_trace_ids": "Trace IDs with largest per-trace voltage or spike-count failures are intended for visual inspection and qualitative failure analysis.",
         },
     }
     if calibrated_spike_threshold is not None:
-        calibrated_binary = spike_scores >= calibrated_spike_threshold
-        calibrated_counts = calibrated_binary.sum(axis=1)
         result["spike_calibrated_threshold"] = {
             "threshold": float(calibrated_spike_threshold),
             "predicted_count": int(calibrated_binary.sum()),
             "count_mae_per_trace": float(np.mean(np.abs(calibrated_counts - target_counts))),
             "semantics": "fixed logit threshold learned on a separate calibration split and frozen before evaluation",
         }
+    return result
+
+
+def _m1_per_trace_rows(
+    residual_mv: np.ndarray,
+    target_spikes: np.ndarray,
+    zero_threshold_spikes: np.ndarray,
+    trace_ids: list[str],
+    *,
+    matched_binary: np.ndarray,
+    calibrated_binary: np.ndarray | None,
+    limit: int = 5,
+) -> dict[str, Any]:
+    rows = []
+    for index, trace_id in enumerate(trace_ids):
+        target_count = int(target_spikes[index].sum())
+        zero_count = int(zero_threshold_spikes[index].sum())
+        matched_count = int(matched_binary[index].sum())
+        row = {
+            "trace_id": trace_id,
+            "soma_rmse_mv": float(np.sqrt(np.mean(residual_mv[index] ** 2))),
+            "soma_mae_mv": float(np.mean(np.abs(residual_mv[index]))),
+            "soma_max_abs_error_mv": float(np.max(np.abs(residual_mv[index]))),
+            "target_spike_count": target_count,
+            "zero_threshold_spike_count": zero_count,
+            "zero_threshold_spike_count_abs_error": abs(zero_count - target_count),
+            "prevalence_matched_spike_count": matched_count,
+            "prevalence_matched_spike_count_abs_error": abs(matched_count - target_count),
+        }
+        if calibrated_binary is not None:
+            calibrated_count = int(calibrated_binary[index].sum())
+            row["calibrated_spike_count"] = calibrated_count
+            row["calibrated_spike_count_abs_error"] = abs(calibrated_count - target_count)
+        rows.append(row)
+    worst_soma = sorted(rows, key=lambda row: row["soma_rmse_mv"], reverse=True)[:limit]
+    worst_spike = sorted(rows, key=lambda row: row["zero_threshold_spike_count_abs_error"], reverse=True)[:limit]
+    result = {
+        "rows": rows,
+        "worst_soma_rmse": worst_soma,
+        "worst_spike_count_abs_error": worst_spike,
+    }
+    if calibrated_binary is not None:
+        result["worst_calibrated_spike_count_abs_error"] = sorted(
+            rows,
+            key=lambda row: row["calibrated_spike_count_abs_error"],
+            reverse=True,
+        )[:limit]
     return result
 
 

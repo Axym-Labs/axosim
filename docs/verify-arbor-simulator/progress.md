@@ -3,6 +3,36 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 13:46): Closed the main M1/M2 reportability gap
+  by adding per-trace audit examples. M1 now records per-trace voltage
+  RMSE/MAE/max error plus spike-count errors at zero, prevalence-matched, and
+  calibrated thresholds, and exposes worst trace IDs. M2 now reports
+  representative worst trace IDs for each MVP regime
+  (`far_from_spike_subthreshold`, `near_spike`, `post_spike_refractory`,
+  `post_input_event`). The CoreNEURON/Hay report renderer now includes an
+  `Audit Trace IDs` section. Regenerated real `16`-trace CUDA report under
+  ignored `artifacts/coreneuron_neuro_bench_audit_m1m2_pair16_20260606/`;
+  common high-value inspection traces include `000008`, `000004`, and
+  `000012` across models/regimes. Tracked report:
+  `artifacts/m1_m2_audit_closeout_20260606.md`. Verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_suite.py tests/test_cli.py -q`
+  passed (`29` tests); py_compile passed for touched benchmark modules and
+  runner.
+
+- DECISION (2026-06-06 13:44): Used the `thinking` and
+  `sci-scientific-work` skills to set the completion strategy for M1-M4.
+  Scientific framing: M1/M2 are close enough that the priority is not more
+  raw metric invention, but paper-facing auditability: representative traces,
+  worst/failure examples, clear mask/threshold semantics, and state/regime
+  interpretation. M3/M4 need serious validation breadth rather than local
+  polish: M3 should expand normalized-routing simulated-baseline checks across
+  multiple ranked Allen L5 candidates and then evaluate models; M4 should
+  evaluate models across a structured intervention battery covering event,
+  E/I, timing, branch/site, and morphology-dependent perturbations with
+  teacher sanity checks. Execution order accepted: finish M1/M2 reportability
+  first, then expand M3 teacher/model coverage, then broaden M4 model
+  intervention coverage and summarize direction/gain/timing preservation.
+
 - EXPERIMENT (2026-06-06 13:24): Ran the first valid M3 held-out morphology
   model smoke on the corrected normalized-routing event-dropout pair
   (`8` traces, baseline and intervention both simulated under Allen

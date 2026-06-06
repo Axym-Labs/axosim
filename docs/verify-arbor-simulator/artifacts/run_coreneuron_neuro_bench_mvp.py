@@ -228,6 +228,12 @@ def compact_summary(payload: dict[str, Any]) -> dict[str, Any]:
                 m4["spike_count_delta_abs_error_per_trace"]["ci95_high"],
             ],
             "m4_direction_agreement": m4["direction_agreement"],
+            "worst_soma_trace_ids": m1["worst_trace_ids"]["soma_rmse"],
+            "worst_calibrated_spike_trace_ids": m1["worst_trace_ids"]["calibrated_spike_count_abs_error"],
+            "m2_representatives": {
+                label: row.get("worst_trace_ids", [])
+                for label, row in m2.get("mvp_regime_representatives", {}).items()
+            },
         }
     return {
         "metadata": payload["metadata"],
@@ -281,6 +287,20 @@ def render_markdown(payload: dict[str, Any]) -> str:
         )
     lines.extend(["", "## Limitations", ""])
     lines.extend(f"- {item}" for item in payload["limitations"])
+    lines.extend(["", "## Audit Trace IDs", ""])
+    for name, row in payload["models"].items():
+        report = row["benchmark"]
+        m1 = report["m1_trace_fidelity"]
+        m2 = report["m2_regimes"]
+        calibrated_worst = m1["worst_trace_ids"].get("calibrated_spike_count_abs_error") or []
+        lines.append(f"### {name}")
+        lines.append("")
+        lines.append(f"- Worst soma RMSE: `{', '.join(m1['worst_trace_ids']['soma_rmse'])}`")
+        lines.append(f"- Worst calibrated spike count: `{', '.join(calibrated_worst)}`")
+        for label, representatives in m2.get("mvp_regime_representatives", {}).items():
+            ids = representatives.get("worst_trace_ids", [])
+            lines.append(f"- M2 `{label}` examples: `{', '.join(ids)}`")
+        lines.append("")
     lines.append("")
     return "\n".join(lines)
 
