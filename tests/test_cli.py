@@ -60,8 +60,17 @@ def test_cli_prints_benchmark_axis_profile(capsys):
     assert payload["metric_state_evaluation"]["mode"] == "dense"
     assert (
         payload["morphology_intervention_sanity"]["selected_pairs"]
-        < payload["morphology_intervention_sanity"]["full_cartesian_pairs_avoided"]
+        < payload["morphology_intervention_sanity"]["full_cartesian_pairs"]
     )
+    assert payload["capacity_estimate"]["within_target_wallclock"] is True
+
+
+def test_cli_prints_benchmark_profile_cost(capsys):
+    assert main(["benchmark-profile", "--name", "paper-default", "--cost"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["total_hours"] > 0
+    assert payload["teacher_total_seconds"] > payload["model_eval_seconds"]
 
 
 def test_cli_make_arbor_hetero_data_writes_shards_and_report(tmp_path):

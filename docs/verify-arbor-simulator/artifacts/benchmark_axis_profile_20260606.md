@@ -6,15 +6,57 @@ Date: 2026-06-06
 
 Use an explicit benchmark profile layer instead of hard-coding the cartesian
 product of metrics, states, interventions, and morphologies in experiment
-scripts.  The importable default is `paper-default`; it can be inspected with:
+scripts.  The profile values are provisional, capacity-audited hypotheses,
+not final truths.  The importable default candidate is `paper-default`; it can
+be inspected with:
 
 ```bash
 PYTHONPATH=src python -m bnn_sim.cli benchmark-profile --name paper-default --plan
 ```
 
+The local cost estimate can be inspected with:
+
+```bash
+PYTHONPATH=src python -m bnn_sim.cli benchmark-profile --name paper-default --cost
+```
+
+## Heuristic Basis
+
+This profile is now framed as a staged, budget-constrained experimental design:
+
+- Dense metric/state evaluation is retained after predictions exist because it
+  is cheap and diagnoses behavior-specific failures.
+- Expensive simulator axes use staged/fractional coverage instead of a full
+  factorial grid.
+- Morphology transfer is treated as a main benchmark task, analogous to
+  evaluating across multiple datasets/environments, not as a single smoke
+  example.
+- Interventions are paired-delta probes; they are closer to controlled
+  screening experiments than to ordinary IID held-out trace metrics.
+- Report uncertainty intervals and rank stability because small benchmark
+  budgets can make model rankings fragile.
+
+Relevant external anchors:
+
+- Demsar 2006 recommends robust non-parametric comparisons over multiple data
+  sets for ML algorithm comparison, supporting the idea that morphology/task
+  breadth matters for model ranking:
+  <https://www.jmlr.org/papers/v7/demsar06a.html>
+- Fractional/orthogonal experimental-design ideas are used to improve sample
+  efficiency when full grids are too expensive; MOFA is one ML/HPO example
+  using orthogonal Latin hypercube and fractional-factorial analysis:
+  <https://openreview.net/forum?id=OpUJ46CNv43>
+- Method-comparison literature argues for combining benchmark datasets and
+  simulations rather than treating either alone as sufficient:
+  <https://arxiv.org/abs/2208.01457>
+- Recent RL benchmarking analysis shows that aggregate rankings can need many
+  seeds/environments for tight confidence intervals; our benchmark should
+  therefore expose uncertainty rather than overclaiming from small profiles:
+  <https://people.cs.umass.edu/~pthomas/papers/Jordan2024b.pdf>
+
 ## Paper-Default Axis Policy
 
-| Axis area | Default | Rationale |
+| Axis area | Default candidate | Rationale |
 | --- | ---: | --- |
 | Source traces | 64 | Main in-distribution M1/M1b/M2/state/trace-shape estimate. |
 | Metric x state product | Dense: 5 metric suites x 7 states | This is cheap once predictions exist and is central to behavior diagnosis. |
@@ -22,6 +64,44 @@ PYTHONPATH=src python -m bnn_sim.cli benchmark-profile --name paper-default --pl
 | Source interventions | 5 interventions x 16 traces | M4 behavior is measured as paired teacher/model response deltas. |
 | Morphology-intervention sanity | 5 morphologies x 2 interventions x 8 traces | Avoids the full 15 x 5 morphology/intervention product while checking that intervention direction remains meaningful under transfer. |
 | Training budget | <=80k presentations | Matches the current paper constraint; no metric run should silently exceed it. |
+
+## Capacity Audit
+
+Local cost model: `local_coreneuron_hay_cpu_20260606`.
+
+Assumptions:
+
+- Source validation traces are cached, so source teacher generation is not part
+  of the default evaluation cost.
+- Source intervention teacher generation costs about `25 s` per 6 s trace,
+  anchored to the measured `16`-trace event-dropout run (`401 s`).
+- Held-out morphology baseline+intervention generation costs about `28 s` per
+  trace pair, anchored to the measured `8`-trace held-out morphology run
+  (`223 s`).
+- A held-out morphology baseline-only trace is estimated at half that pair
+  cost (`14 s`).
+- Model prediction/metric work is estimated at `0.15 s` per trace per model.
+
+Current `paper-default` estimate with `3` models:
+
+| Component | Estimated seconds |
+| --- | ---: |
+| Cached source distribution | `0` |
+| Morphology baselines | `3360` |
+| Source interventions | `2000` |
+| Morphology-intervention sanity | `2240` |
+| Model eval and metrics | `280.8` |
+| Total | `7880.8` (`2.19 h`) |
+
+The target sequential wall-clock budget is `4 h`, so the current default
+candidate is feasible under the local estimate.  The selected morphology-
+intervention slice avoids `520` expensive trace pairs relative to the full
+`15 x 5 x 8` morphology/intervention grid, about `4.04` local teacher-hours.
+The recommended local parallelism is about `5` independent teacher jobs.
+
+This audit is a guardrail, not proof.  The standalone package should replace
+these constants with measured local timings and should fail or warn when a
+chosen profile exceeds a declared capacity budget.
 
 ## What Interventions Measure
 
@@ -64,4 +144,6 @@ The profile API is path-free and package-facing:
 
 This gives the future standalone benchmark package a clean place to expose
 default budgets while letting local scripts decide which datasets, checkpoints,
-and simulator runners instantiate the plan.
+and simulator runners instantiate the plan.  The package should expose the
+profile status as provisional until a final capacity and uncertainty analysis
+is completed.

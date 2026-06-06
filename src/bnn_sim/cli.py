@@ -40,6 +40,7 @@ from bnn_sim.arbor_sim import (
 )
 from bnn_sim.benchmark.profiles import (
     build_axis_plan,
+    estimate_profile_cost,
     get_benchmark_profile,
     list_benchmark_profiles,
 )
@@ -125,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     profile = subparsers.add_parser("benchmark-profile", help="print a NEURO-BENCH axis/default profile")
     profile.add_argument("--name", default="paper-default", choices=list_benchmark_profiles())
     profile.add_argument("--plan", action="store_true", help="print the expanded axis-composition plan")
+    profile.add_argument("--cost", action="store_true", help="print only the local capacity estimate")
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a model with the corrected full-trace metric path")
     evaluate.add_argument("--preset", choices=sorted(list_presets()["evaluate"]))
@@ -293,7 +295,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "benchmark-profile":
-        payload = build_axis_plan(args.name) if args.plan else get_benchmark_profile(args.name).to_dict()
+        if args.cost:
+            payload = estimate_profile_cost(args.name)
+        elif args.plan:
+            payload = build_axis_plan(args.name)
+        else:
+            payload = get_benchmark_profile(args.name).to_dict()
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 

@@ -28,7 +28,10 @@ from bnn_sim.benchmark.morphology_transfer import MorphologyTransferEvaluator, l
 from bnn_sim.benchmark.branch_adapter import adapt_branch_count, evaluate_with_branch_adaptation
 from bnn_sim.benchmark.profiles import (
     BenchmarkProfile,
+    BenchmarkCostModel,
+    LOCAL_CORENEURON_HAY_COST_MODEL,
     build_axis_plan,
+    estimate_profile_cost,
     get_benchmark_profile,
     list_benchmark_profiles,
 )
@@ -51,7 +54,10 @@ __all__ = [
     "adapt_branch_count",
     "evaluate_with_branch_adaptation",
     "BenchmarkProfile",
+    "BenchmarkCostModel",
+    "LOCAL_CORENEURON_HAY_COST_MODEL",
     "build_axis_plan",
+    "estimate_profile_cost",
     "get_benchmark_profile",
     "list_benchmark_profiles",
     "BenchmarkSuite",
