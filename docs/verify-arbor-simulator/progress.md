@@ -3,6 +3,20 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- EXPERIMENT (2026-06-06 13:24): Ran the first valid M3 held-out morphology
+  model smoke on the corrected normalized-routing event-dropout pair
+  (`8` traces, baseline and intervention both simulated under Allen
+  `specimen_487664663.swc`). Source-trained models degrade sharply on
+  held-out baseline voltage: `soma075_calibrated_80k` RMSE/trace-shape
+  `2.7701 mV / 0.4155`, `mamba_exc0925_80k` `2.7900 / 0.4319`,
+  `rnn_exc0925_80k` `2.8524 / 0.4423`. All preserve qualitative event-dropout
+  soma/spike direction. `soma075` is best on held-out voltage/trace-shape;
+  prior `mamba_exc0925_80k` is best on spike-train distance, calibrated
+  count MAE, and event-dropout spike-delta MAE (`4.7500`). Interpretation:
+  morphology transfer is a real stressor and not solved by current
+  source-trained checkpoints; M3 can now expose that failure mode. Tracked
+  report: `artifacts/m3_model_eval_normroute_event_dropout_20260606.md`.
+
 - VERIFICATION (2026-06-06 13:22): Corrected the M3 held-out morphology
   teacher protocol by adding `--simulate-baseline` to the structured
   intervention runner. The previous held-out SWC intervention checks compared
