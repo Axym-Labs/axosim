@@ -90,6 +90,39 @@ def test_cli_prints_diagnostic_catalog(capsys):
     assert "clipping_distortion" in catalog["suites"]["paper-summary"]
 
 
+def test_cli_writes_teacher_qc_benchmark_rows(tmp_path, capsys):
+    data_dir = tmp_path / "v1"
+    output = tmp_path / "rows.jsonl"
+    assert main(["make-demo-data", "--output", str(data_dir / "val"), "--samples", "2", "--time-steps", "8", "--input-dim", "4"]) == 0
+
+    result = main(
+        [
+            "benchmark-rows",
+            "--mode",
+            "teacher-qc",
+            "--dataset-root",
+            str(data_dir),
+            "--selector",
+            "val",
+            "--output",
+            str(output),
+            "--ignore-start",
+            "0",
+            "--morphology-id",
+            "unit-morph",
+        ]
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["rows"] > 0
+    assert payload["output"] == str(output)
+    assert output.exists()
+    rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    assert any(row["diagnostic"] == "teacher_distribution_qc" for row in rows)
+    assert all(row["morphology_id"] == "unit-morph" for row in rows)
+
+
 def test_cli_make_arbor_hetero_data_writes_shards_and_report(tmp_path):
     data_dir = tmp_path / "arbor-hetero"
     report_path = tmp_path / "report.json"

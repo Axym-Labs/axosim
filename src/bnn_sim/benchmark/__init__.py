@@ -55,6 +55,12 @@ from bnn_sim.benchmark.diagnostic_rows import (
     validate_diagnostic_rows,
     write_diagnostic_rows,
 )
+from bnn_sim.benchmark.selectors import DatasetSelector, V1DatasetLayout
+from bnn_sim.benchmark.runner import (
+    load_selector_batch,
+    run_model_diagnostics_on_selector,
+    run_teacher_qc_on_selector,
+)
 from bnn_sim.benchmark.suite import BenchmarkSuite
 
 __all__ = [
@@ -96,5 +102,10 @@ __all__ = [
     "teacher_qc_diagnostic_rows",
     "validate_diagnostic_rows",
     "write_diagnostic_rows",
+    "DatasetSelector",
+    "V1DatasetLayout",
+    "load_selector_batch",
+    "run_model_diagnostics_on_selector",
+    "run_teacher_qc_on_selector",
     "BenchmarkSuite",
 ]

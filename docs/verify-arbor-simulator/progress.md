@@ -3,6 +3,19 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 21:18): Added v1 benchmark selector and runner
+  glue. `V1DatasetLayout` resolves default `val/` and top-level
+  `interventions/<name>/` selectors, validates minimal v1 dataset layout, and
+  loads `ShardedNeuronIODataset` batches. Added runner helpers to execute
+  teacher-QC or model diagnostic row paths on selectors and write rows. Added
+  CLI command `bnn-sim benchmark-rows --mode teacher-qc` for dataframe-first
+  teacher-QC output on `val` or intervention selectors. Remaining benchmark
+  work: model checkpoint row CLI, real pilot/model validation, report summary
+  rendering, and intervention-pair selector support. Verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest -q` passed (`103` tests, `1`
+  skipped); focused CLI/runner/selector/row tests passed (`30` tests);
+  `py_compile` and `git diff --check` passed.
+
 - IMPLEMENTATION (2026-06-06 21:15): Started the benchmark completion block
   after the teacher-QC pilot. Added dataframe-first diagnostic row substrate
   in `src/bnn_sim/benchmark/diagnostic_rows.py`: model diagnostics reuse the

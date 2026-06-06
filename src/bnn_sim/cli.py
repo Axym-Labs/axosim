@@ -48,6 +48,9 @@ from bnn_sim.benchmark.dataset_schema import (
     build_diagnostic_suite_catalog,
     build_v1_dataset_manifest_template,
 )
+from bnn_sim.benchmark.diagnostic_rows import DiagnosticContext
+from bnn_sim.benchmark.runner import run_teacher_qc_on_selector
+from bnn_sim.benchmark.selectors import V1DatasetLayout
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.neuronio_raw import convert_neuronio_pickles
 from bnn_sim.official import create_official_elm, load_official_elm_config, load_official_state_dict
@@ -137,6 +140,24 @@ def main(argv: list[str] | None = None) -> int:
         help="print the v1 dataset manifest template or diagnostic suite catalog",
     )
     dataset_schema.add_argument("--kind", choices=["manifest", "diagnostics"], default="manifest")
+
+    benchmark_rows = subparsers.add_parser(
+        "benchmark-rows",
+        help="write dataframe-first v1 benchmark diagnostic rows",
+    )
+    benchmark_rows.add_argument("--mode", choices=["teacher-qc"], default="teacher-qc")
+    benchmark_rows.add_argument("--dataset-root", required=True)
+    benchmark_rows.add_argument("--selector", choices=["val", "intervention"], default="val")
+    benchmark_rows.add_argument("--intervention", default="event_dropout")
+    benchmark_rows.add_argument("--output", required=True)
+    benchmark_rows.add_argument("--suites", default="teacher-qc")
+    benchmark_rows.add_argument("--morphology-id", default="unknown")
+    benchmark_rows.add_argument("--teacher-id", default="teacher")
+    benchmark_rows.add_argument("--max-samples", type=int)
+    benchmark_rows.add_argument("--cache-shards", type=int, default=1)
+    benchmark_rows.add_argument("--ignore-start", type=int, default=500)
+    benchmark_rows.add_argument("--soma-scale", type=float, default=0.1)
+    benchmark_rows.add_argument("--soma-bias-mv", type=float, default=-67.7)
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a model with the corrected full-trace metric path")
     evaluate.add_argument("--preset", choices=sorted(list_presets()["evaluate"]))
@@ -320,6 +341,36 @@ def main(argv: list[str] | None = None) -> int:
         else:
             payload = build_diagnostic_suite_catalog()
         print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "benchmark-rows":
+        try:
+            layout = V1DatasetLayout(args.dataset_root)
+            selector = (
+                layout.default_validation()
+                if args.selector == "val"
+                else layout.intervention(args.intervention)
+            )
+            context = DiagnosticContext(
+                suites=tuple(item.strip() for item in args.suites.split(",") if item.strip()),
+                model_id="teacher",
+                teacher_id=args.teacher_id,
+                morphology_id=args.morphology_id,
+                ignore_start=args.ignore_start,
+                soma_scale=args.soma_scale,
+                soma_bias_mv=args.soma_bias_mv,
+            )
+            rows = run_teacher_qc_on_selector(
+                selector,
+                context=context,
+                max_samples=args.max_samples,
+                output=args.output,
+                cache_shards=args.cache_shards,
+            )
+        except (FileNotFoundError, ValueError) as error:
+            print(str(error))
+            return 2
+        print(json.dumps({"rows": len(rows), "output": args.output}, indent=2, sort_keys=True))
         return 0
 
     if args.command == "make-demo-data":
