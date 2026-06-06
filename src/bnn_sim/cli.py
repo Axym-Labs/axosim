@@ -38,6 +38,11 @@ from bnn_sim.arbor_sim import (
     write_arbor_hetero_dataset,
     write_arbor_hetero_splits,
 )
+from bnn_sim.benchmark.profiles import (
+    build_axis_plan,
+    get_benchmark_profile,
+    list_benchmark_profiles,
+)
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.neuronio_raw import convert_neuronio_pickles
 from bnn_sim.official import create_official_elm, load_official_elm_config, load_official_state_dict
@@ -116,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
     repack.add_argument("--input-dtype", choices=["int8", "float32"], default="int8")
 
     preset_list = subparsers.add_parser("list-presets", help="list named train/evaluate presets")
+
+    profile = subparsers.add_parser("benchmark-profile", help="print a NEURO-BENCH axis/default profile")
+    profile.add_argument("--name", default="paper-default", choices=list_benchmark_profiles())
+    profile.add_argument("--plan", action="store_true", help="print the expanded axis-composition plan")
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a model with the corrected full-trace metric path")
     evaluate.add_argument("--preset", choices=sorted(list_presets()["evaluate"]))
@@ -281,6 +290,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list-presets":
         print(json.dumps(list_presets(), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "benchmark-profile":
+        payload = build_axis_plan(args.name) if args.plan else get_benchmark_profile(args.name).to_dict()
+        print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
     if args.command == "make-demo-data":

@@ -52,6 +52,18 @@ def test_cli_smoke_data_and_evaluate(tmp_path):
     assert Path(metrics_path).exists()
 
 
+def test_cli_prints_benchmark_axis_profile(capsys):
+    assert main(["benchmark-profile", "--name", "paper-default", "--plan"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["profile"]["name"] == "paper-default"
+    assert payload["metric_state_evaluation"]["mode"] == "dense"
+    assert (
+        payload["morphology_intervention_sanity"]["selected_pairs"]
+        < payload["morphology_intervention_sanity"]["full_cartesian_pairs_avoided"]
+    )
+
+
 def test_cli_make_arbor_hetero_data_writes_shards_and_report(tmp_path):
     data_dir = tmp_path / "arbor-hetero"
     report_path = tmp_path / "report.json"

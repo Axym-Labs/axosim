@@ -3,6 +3,26 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 17:53): Added a package-facing benchmark profile
+  layer to prevent accidental cartesian-product blowups across metrics,
+  states, interventions, and morphologies. New module
+  `src/bnn_sim/benchmark/profiles.py` exposes `smoke`, `paper-default`, and
+  `teacher-screen` profiles plus `build_axis_plan`; CLI command
+  `bnn-sim benchmark-profile --name paper-default --plan` prints the resolved
+  default. Accepted profile semantics: keep metric x state dense by default
+  (`5` suites x `7` states), use a larger morphology budget for M3 metric
+  evaluation (`15` morphologies x `16` traces), and use sparse paired-delta
+  M4 checks for interventions (`5` source interventions and only `5 x 2`
+  morphology/intervention sanity pairs). Interventions measure teacher sanity,
+  soma/spike delta error, gain, direction preservation, and trace IDs, not full
+  M1/M2 repeats by default. Also recorded the CPU/GPU simulator policy:
+  single-cell CoreNEURON/Hay CPU remains default because local GPU matched
+  numerically but was slower for `8 x 500 ms`; this is not a universal CPU
+  speed claim and must be re-benchmarked for batched/population use. Tracked
+  report: `artifacts/benchmark_axis_profile_20260606.md`. Verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_profiles.py tests/test_benchmark_suite.py tests/test_cli.py -q`
+  passed (`33` tests); py_compile passed for touched modules.
+
 - MILESTONE (2026-06-06 14:17): Promoted M4 from a set of separate pair
   evaluations to a summarized structured behavior battery. Added explicit
   soma/spike delta gain to `compute_paired_event_intervention_metrics`, plus

@@ -26,6 +26,12 @@ from bnn_sim.benchmark.structured_intervention import (
 )
 from bnn_sim.benchmark.morphology_transfer import MorphologyTransferEvaluator, load_available_morphologies
 from bnn_sim.benchmark.branch_adapter import adapt_branch_count, evaluate_with_branch_adaptation
+from bnn_sim.benchmark.profiles import (
+    BenchmarkProfile,
+    build_axis_plan,
+    get_benchmark_profile,
+    list_benchmark_profiles,
+)
 from bnn_sim.benchmark.suite import BenchmarkSuite
 
 __all__ = [
@@ -44,5 +50,9 @@ __all__ = [
     "load_available_morphologies",
     "adapt_branch_count",
     "evaluate_with_branch_adaptation",
+    "BenchmarkProfile",
+    "build_axis_plan",
+    "get_benchmark_profile",
+    "list_benchmark_profiles",
     "BenchmarkSuite",
 ]
