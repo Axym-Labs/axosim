@@ -3,6 +3,17 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- VERIFICATION (2026-06-06 12:07): Ran the new publishable-schema comparator
+  on the real current CoreNEURON/Hay `16`-trace reports. It reproduces the
+  expected model-decision split: `rnn_exc0925_80k` remains best on voltage and
+  state-weighted trace distance (`0.7987 mV`, `1.8707 mV`) and event-dropout
+  M4 soma-delta RMSE (`0.7522`); prior `mamba_exc0925_80k` remains best on
+  dynamic distance (`0.5249`), calibrated spike-count MAE (`2.0625`), and M4
+  spike-delta MAE (`2.0000`); `soma075_calibrated_80k` remains the current
+  Mamba voltage compromise (`0.8507 mV` RMSE). This validates that the richer
+  comparator changes interpretation relative to global RMSE alone. Tracked
+  artifact: `artifacts/publishable_schema_comparator_validation_20260606.md`.
+
 - IMPLEMENTATION (2026-06-06 12:06): Updated `BenchmarkSuite.compare_models`
   from the stale MVP/legacy comparator to a publishable-schema comparator.
   It now summarizes current `m1_trace_fidelity` fields (`soma_rmse_mv`,
