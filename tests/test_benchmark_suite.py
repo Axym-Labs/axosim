@@ -52,6 +52,8 @@ def test_benchmark_suite_reports_mvp_schema_and_masked_m1(tmp_path):
     assert "state_weighted_trace_distance_mv" in report["m1_trace_fidelity"]
     assert "dynamic_distance" in report["m1_trace_fidelity"]
     assert "trace_shape_distance" in report["m1_trace_fidelity"]
+    assert "state_trace_shape_distance" in report["m1_trace_fidelity"]
+    assert "spike_train_distance" in report["m1_trace_fidelity"]
     assert report["state_conditioned_fidelity"]["kind"] == "state_conditioned_dynamic_fidelity"
     assert report["trace_shape_fidelity"]["kind"] == "multiscale_trace_shape_fidelity"
     assert report["m1_trace_fidelity"]["spike_target_count"] == 1
@@ -228,7 +230,37 @@ def test_trace_shape_metric_is_lag_tolerant_for_shifted_events():
     assert metrics["lag_tolerant_voltage"]["symmetric_rmse_mv"] < metrics["pointwise"]["rmse_mv"]
     assert metrics["spike_triggered_waveform"]["matched_spikes"] == 1
     assert metrics["spike_triggered_waveform"]["waveform_rmse_mv"] == 0.0
+    assert metrics["spike_train_distance"]["mean_normalized_van_rossum_distance"] > 0.0
+    assert metrics["state_conditioned_trace_shape"]["state_trace_shape_distance"] >= 0.0
     assert metrics["trace_shape_distance"] >= 0.0
+
+
+def test_spike_train_distance_rewards_nearby_spikes_more_than_missed_spikes():
+    targets = np.zeros((1, 40, 2), dtype=np.float32)
+    near_predictions = np.zeros_like(targets)
+    missed_predictions = np.zeros_like(targets)
+    targets[0, 20, 0] = 1.0
+    near_predictions[0, 21, 0] = 8.0
+
+    near = compute_trace_shape_metrics(
+        near_predictions,
+        targets,
+        soma_scale=1.0,
+        soma_bias_mv=0.0,
+        spike_train_tau_steps=(10,),
+    )
+    missed = compute_trace_shape_metrics(
+        missed_predictions,
+        targets,
+        soma_scale=1.0,
+        soma_bias_mv=0.0,
+        spike_train_tau_steps=(10,),
+    )
+
+    assert (
+        near["spike_train_distance"]["mean_normalized_van_rossum_distance"]
+        < missed["spike_train_distance"]["mean_normalized_van_rossum_distance"]
+    )
 
 
 def test_event_dropout_only_removes_existing_events_deterministically():
@@ -486,8 +518,11 @@ def test_compare_models_uses_publishable_metric_schema():
     assert comparison["m1_fidelity"]["perfect"]["soma_rmse_mv"] == 0.0
     assert comparison["m1_fidelity"]["offset"]["soma_rmse_mv"] > 0.0
     assert comparison["m1_fidelity"]["perfect"]["trace_shape_distance"] == 0.0
+    assert comparison["m1_fidelity"]["perfect"]["state_trace_shape_distance"] == 0.0
+    assert comparison["m1_fidelity"]["perfect"]["spike_train_distance"] == 0.0
     assert "dynamic_distance" in comparison["state_conditioned_fidelity"]["perfect"]
     assert "trace_shape_distance" in comparison["trace_shape_fidelity"]["perfect"]
+    assert "spike_train_distance" in comparison["trace_shape_fidelity"]["perfect"]
     assert "spiking" in comparison["state_conditioned_fidelity"]["perfect"]["per_state_voltage_rmse_mv"]
     assert comparison["m1b_feature_fidelity"]["perfect"]["spike_count_mae"] == 0.0
     assert comparison["m4_intervention"]["perfect"]["status"] == "model_compared"

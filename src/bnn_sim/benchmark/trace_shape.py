@@ -12,10 +12,13 @@ from typing import Any
 
 import numpy as np
 
+from bnn_sim.benchmark.state_metrics import build_neuron_state_masks
+
 
 def compute_trace_shape_metrics(
     prediction: np.ndarray,
     target: np.ndarray,
+    inputs: np.ndarray | None = None,
     *,
     soma_scale: float = 0.1,
     soma_bias_mv: float = -67.7,
@@ -26,12 +29,14 @@ def compute_trace_shape_metrics(
     spike_pre_steps: int = 5,
     spike_post_steps: int = 15,
     quantile_count: int = 21,
+    spike_train_tau_steps: tuple[int, ...] = (2, 10, 50),
 ) -> dict[str, Any]:
     """Compute multi-scale, timing-tolerant voltage trace-shape metrics."""
     pred = _apply_time_mask(_as_trace_array(np.asarray(prediction)), ignore_start)
     tgt = _apply_time_mask(_as_trace_array(np.asarray(target)), ignore_start)
     if pred.shape != tgt.shape:
         raise ValueError(f"prediction and target shapes must match, got {pred.shape} and {tgt.shape}")
+    inp = _apply_time_mask(_as_trace_array(np.asarray(inputs)), ignore_start) if inputs is not None else None
     if pred.shape[1] == 0:
         raise ValueError("ignore_start leaves no timesteps to evaluate")
     if lag_tolerance_steps < 0:
@@ -78,6 +83,22 @@ def compute_trace_shape_metrics(
         pre=spike_pre_steps,
         post=spike_post_steps,
     )
+    spike_train = _spike_train_distances(
+        pred_spikes,
+        target_spikes,
+        tau_steps=spike_train_tau_steps,
+    )
+    state_conditioned = _state_conditioned_trace_shape(
+        pred_soma_mv,
+        tgt_soma_mv,
+        pred_dvdt,
+        tgt_dvdt,
+        pred_spikes,
+        target_spikes,
+        inp,
+        lag_tolerance_steps=lag_tolerance_steps,
+        lowpass_window=smoothing_windows[0] if smoothing_windows else 1,
+    )
     voltage_scale = _robust_scale(tgt_soma_mv)
     dvdt_scale = _robust_scale(tgt_dvdt)
     components = {
@@ -85,6 +106,7 @@ def compute_trace_shape_metrics(
         "multiscale_lowpass": float(np.mean([row["rmse_mv"] for row in lowpass_rows])) / voltage_scale,
         "dvdt": float(np.mean(np.abs(dvdt_residual))) / dvdt_scale,
         "voltage_distribution": quantile_distance["mean_abs_quantile_error_mv"] / voltage_scale,
+        "state_conditioned_trace_shape": state_conditioned["state_trace_shape_distance"],
     }
     if spike_waveform["matched_spikes"] > 0 and spike_waveform["waveform_rmse_mv"] is not None:
         components["spike_triggered_waveform"] = spike_waveform["waveform_rmse_mv"] / voltage_scale
@@ -99,6 +121,7 @@ def compute_trace_shape_metrics(
             "spike_pre_steps": int(spike_pre_steps),
             "spike_post_steps": int(spike_post_steps),
             "quantile_count": int(quantile_count),
+            "spike_train_tau_steps": [int(x) for x in spike_train_tau_steps],
             "spike_threshold": float(threshold),
             "spike_threshold_semantics": (
                 "calibrated threshold learned on a separate split"
@@ -115,14 +138,19 @@ def compute_trace_shape_metrics(
         "lag_tolerant_voltage": lag_tolerant,
         "multiscale_lowpass": lowpass_rows,
         "voltage_quantile_distance": quantile_distance,
+        "spike_train_distance": spike_train,
         "spike_triggered_waveform": spike_waveform,
+        "state_conditioned_trace_shape": state_conditioned,
         "trace_shape_distance": trace_shape_distance,
         "trace_shape_distance_components": components,
         "what_failure_means": (
             "High trace-shape distance means the surrogate misses multi-scale "
             "voltage dynamics, even after allowing small event-timing shifts. "
             "The components separate slow voltage level, local timing tolerance, "
-            "dV/dt, voltage-distribution, and spike-triggered waveform failures."
+            "dV/dt, voltage-distribution, behavioral-state shape, and "
+            "spike-triggered waveform failures. Spike-train distance is reported "
+            "as a sibling metric because its natural scale is event-count "
+            "dependent and should not silently dominate voltage-shape fidelity."
         ),
     }
 
@@ -243,6 +271,124 @@ def _spike_triggered_waveform_distance(
         "waveform_rmse_mv": float(np.mean(matched_errors)) if matched_errors else None,
         "window": {"pre_steps": int(pre), "post_steps": int(post)},
         "semantics": "AP-neighborhood waveform RMSE after nearest-spike alignment within the configured tolerance",
+    }
+
+
+def _spike_train_distances(
+    pred_spikes: np.ndarray,
+    target_spikes: np.ndarray,
+    *,
+    tau_steps: tuple[int, ...],
+) -> dict[str, Any]:
+    rows = []
+    for tau in tau_steps:
+        if tau <= 0:
+            raise ValueError("spike train tau values must be positive")
+        pred_filtered = _causal_exp_filter(pred_spikes.astype(np.float64), tau)
+        target_filtered = _causal_exp_filter(target_spikes.astype(np.float64), tau)
+        per_trace = np.sqrt(np.mean((pred_filtered - target_filtered) ** 2, axis=1))
+        target_counts = target_spikes.sum(axis=1)
+        scale = np.sqrt(np.maximum(target_counts, 1.0) / max(1, target_spikes.shape[1]))
+        normalized = per_trace / np.maximum(scale, 1e-12)
+        rows.append({
+            "tau_steps": int(tau),
+            "mean_van_rossum_rms": float(np.mean(per_trace)),
+            "mean_normalized_van_rossum_distance": float(np.mean(normalized)),
+            "semantics": "exponentially filtered spike-train RMS; lower is better and small timing offsets are softened by tau",
+        })
+    return {
+        "kind": "van_rossum_like_spike_train_distance",
+        "rows": rows,
+        "mean_normalized_van_rossum_distance": (
+            float(np.mean([row["mean_normalized_van_rossum_distance"] for row in rows]))
+            if rows else None
+        ),
+    }
+
+
+def _causal_exp_filter(spikes: np.ndarray, tau_steps: int) -> np.ndarray:
+    alpha = float(np.exp(-1.0 / tau_steps))
+    out = np.zeros_like(spikes, dtype=np.float64)
+    if spikes.shape[1] == 0:
+        return out
+    out[:, 0] = spikes[:, 0]
+    for index in range(1, spikes.shape[1]):
+        out[:, index] = alpha * out[:, index - 1] + spikes[:, index]
+    return out
+
+
+def _state_conditioned_trace_shape(
+    pred_soma: np.ndarray,
+    target_soma: np.ndarray,
+    pred_dvdt: np.ndarray,
+    target_dvdt: np.ndarray,
+    pred_spikes: np.ndarray,
+    target_spikes: np.ndarray,
+    inputs: np.ndarray | None,
+    *,
+    lag_tolerance_steps: int,
+    lowpass_window: int,
+) -> dict[str, Any]:
+    residual = pred_soma - target_soma
+    dvdt_residual = pred_dvdt - target_dvdt
+    lag_squares = 0.5 * (
+        _directed_local_min_square(pred_soma, target_soma, lag_tolerance_steps)
+        + _directed_local_min_square(target_soma, pred_soma, lag_tolerance_steps)
+    )
+    pred_low = _moving_average(pred_soma, lowpass_window)
+    target_low = _moving_average(target_soma, lowpass_window)
+    low_residual = pred_low - target_low
+    states = build_neuron_state_masks(target_soma, target_spikes, inputs)
+    voltage_scale = _robust_scale(target_soma)
+    dvdt_scale = _robust_scale(target_dvdt)
+    rows = []
+    for name, mask in states["primary_masks"].items():
+        count = int(mask.sum())
+        if count == 0:
+            rows.append({
+                "state": name,
+                "count": 0,
+                "fraction": 0.0,
+                "pointwise_rmse_mv": None,
+                "lag_tolerant_rmse_mv": None,
+                "lowpass_rmse_mv": None,
+                "dvdt_mae_mv_per_step": None,
+                "state_trace_shape_distance": None,
+                "target_spike_count": 0,
+                "predicted_spike_count": 0,
+            })
+            continue
+        pointwise = _rmse(residual[mask])
+        lag = float(np.sqrt(np.mean(lag_squares[mask])))
+        lowpass = _rmse(low_residual[mask])
+        dvdt = float(np.mean(np.abs(dvdt_residual[mask])))
+        distance = float(np.mean([
+            pointwise / voltage_scale,
+            lag / voltage_scale,
+            lowpass / voltage_scale,
+            dvdt / dvdt_scale,
+        ]))
+        rows.append({
+            "state": name,
+            "count": count,
+            "trace_support": int(np.any(mask, axis=1).sum()),
+            "fraction": float(count / mask.size),
+            "pointwise_rmse_mv": pointwise,
+            "lag_tolerant_rmse_mv": lag,
+            "lowpass_rmse_mv": lowpass,
+            "dvdt_mae_mv_per_step": dvdt,
+            "state_trace_shape_distance": distance,
+            "target_spike_count": int(target_spikes[mask].sum()),
+            "predicted_spike_count": int(pred_spikes[mask].sum()),
+        })
+    supported = [row["state_trace_shape_distance"] for row in rows if row["state_trace_shape_distance"] is not None]
+    return {
+        "kind": "state_conditioned_trace_shape",
+        "state_definitions": states["parameters"],
+        "lowpass_window_steps": int(lowpass_window),
+        "states": rows,
+        "state_trace_shape_distance": float(np.mean(supported)) if supported else None,
+        "semantics": "equal-weight average over behavior states of voltage, lag-tolerant voltage, low-pass voltage, and dV/dt errors",
     }
 
 

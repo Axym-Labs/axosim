@@ -113,6 +113,7 @@ class BenchmarkSuite:
         trace_shape = compute_trace_shape_metrics(
             predictions,
             targets,
+            inputs,
             soma_scale=soma_scale,
             soma_bias_mv=soma_bias_mv,
             ignore_start=ignore_start,
@@ -120,6 +121,8 @@ class BenchmarkSuite:
         )
         m1["trace_shape_distance"] = trace_shape["trace_shape_distance"]
         m1["lag_tolerant_voltage_rmse_mv"] = trace_shape["lag_tolerant_voltage"]["symmetric_rmse_mv"]
+        m1["state_trace_shape_distance"] = trace_shape["state_conditioned_trace_shape"]["state_trace_shape_distance"]
+        m1["spike_train_distance"] = trace_shape["spike_train_distance"]["mean_normalized_van_rossum_distance"]
 
         # M4: Perturbation stability
         m4 = {}
@@ -253,6 +256,8 @@ class BenchmarkSuite:
                 "dynamic_distance": m1.get("dynamic_distance"),
                 "trace_shape_distance": m1.get("trace_shape_distance"),
                 "lag_tolerant_voltage_rmse_mv": m1.get("lag_tolerant_voltage_rmse_mv"),
+                "state_trace_shape_distance": m1.get("state_trace_shape_distance"),
+                "spike_train_distance": m1.get("spike_train_distance"),
                 "spike_auc": m1.get("spike_auc"),
                 "spike_brier": m1.get("spike_brier"),
                 "spike_count_mae_per_trace": m1.get("spike_count_mae_per_trace"),
@@ -291,6 +296,15 @@ class BenchmarkSuite:
             comparison["trace_shape_fidelity"][name] = {
                 "trace_shape_distance": trace_shape.get("trace_shape_distance"),
                 "trace_shape_distance_components": trace_shape.get("trace_shape_distance_components"),
+                "state_trace_shape_distance": (
+                    trace_shape.get("state_conditioned_trace_shape", {}).get("state_trace_shape_distance")
+                    if isinstance(trace_shape.get("state_conditioned_trace_shape"), dict)
+                    else None
+                ),
+                "per_state_trace_shape_distance": _state_metric_map(
+                    trace_shape.get("state_conditioned_trace_shape", {}),
+                    "state_trace_shape_distance",
+                ),
                 "lag_tolerant_voltage_rmse_mv": (
                     trace_shape.get("lag_tolerant_voltage", {}).get("symmetric_rmse_mv")
                     if isinstance(trace_shape.get("lag_tolerant_voltage"), dict)
@@ -315,6 +329,11 @@ class BenchmarkSuite:
                 "spike_waveform_match_fraction": (
                     trace_shape.get("spike_triggered_waveform", {}).get("match_fraction")
                     if isinstance(trace_shape.get("spike_triggered_waveform"), dict)
+                    else None
+                ),
+                "spike_train_distance": (
+                    trace_shape.get("spike_train_distance", {}).get("mean_normalized_van_rossum_distance")
+                    if isinstance(trace_shape.get("spike_train_distance"), dict)
                     else None
                 ),
             }

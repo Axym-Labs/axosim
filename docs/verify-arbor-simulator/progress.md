@@ -3,6 +3,40 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- VERIFICATION (2026-06-06 12:56): Validated the M3 held-out SWC teacher
+  smoke with an explicit input-routing policy and a source-morphology control.
+  The SWC-aware Hay/NEURON path can instantiate and run held-out Allen
+  `specimen_487664663.swc`, but its provisional routing uses only `265/639`
+  source sites per sign and truncates `374` sites per sign. On the same first
+  `8` validation traces and the same `35%` event-dropout intervention, the
+  original `cell1.asc` control preserves the expected teacher direction
+  (`delta_soma_mean=-2.3968 mV`, `delta_spike_rate=-0.6136/1000 steps`),
+  while the held-out SWC hyperpolarizes but spikes more
+  (`delta_soma_mean=-1.7247 mV`, `delta_spike_rate=+0.9773/1000 steps`).
+  Interpretation: M3 runtime feasibility is real, but correctness replication
+  is not established for transfer scoring; use the scaffold only after a
+  morphology-normalized routing policy or closely matched site-count protocol
+  is implemented. Tracked report:
+  `artifacts/m3_swc_event_dropout_smoke_20260606.md`.
+
+- IMPLEMENTATION (2026-06-06 12:56): Extended the RMSE replacement path with
+  state-conditioned trace-shape metrics and a van-Rossum-like spike-train
+  distance. `trace_shape_fidelity` now reports per-state pointwise RMSE,
+  lag-tolerant RMSE, low-pass RMSE, dV/dt MAE, support, and spike counts using
+  the shared neuron-state masks. Spike-train distance is intentionally a
+  sibling metric rather than part of headline `trace_shape_distance`, because
+  its event-count-dependent scale dominated the voltage-shape components in
+  real validation. Real `16`-trace CoreNEURON/Hay eval:
+  `rnn_exc0925_80k` remains best on RMSE/trace-shape/state trace-shape
+  (`0.7987 mV`, `0.2427`, `0.2479`), `mamba_exc0925_80k` remains best on
+  spike-train distance/calibrated count MAE/M4 spike delta (`2.8244`,
+  `2.0625`, `2.0000`), and `soma075_calibrated_80k` remains the current Mamba
+  voltage compromise (`0.8507 mV`, trace-shape `0.2447`). Tracked report:
+  `artifacts/trace_shape_metric_v2_validation_20260606.md`. Verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_suite.py tests/test_cli.py -q`
+  passed (`29` tests); py_compile passed for touched benchmark modules and
+  runners.
+
 - VERIFICATION (2026-06-06 12:42): Cleared the immediate M3 SWC runtime
   feasibility gate. Installed `neuron==9.0.1` into `.venv`, compiled the
   existing deterministic Hay/CoreNEURON MOD set into ignored

@@ -72,7 +72,7 @@ def main() -> int:
         site_fraction=args.site_fraction,
         seed=args.seed,
     )
-    simulated_targets, simulated_soma_mv = simulate_intervention_targets(
+    simulated_targets, simulated_soma_mv, input_routing = simulate_intervention_targets(
         intervention_inputs,
         source_root=Path(args.source_root).resolve(),
         mechanism_root=Path(args.mechanism_root).resolve(),
@@ -137,6 +137,7 @@ def main() -> int:
             "changed_events": int(change_mask.sum()),
             "baseline_events": int(np.count_nonzero(baseline_inputs)),
             "intervention_events": int(np.count_nonzero(intervention_inputs)),
+            "input_routing": input_routing,
             "target_policy": "same clipped/normalized soma and local-peak spike labels as accepted CoreNEURON/Hay data",
         },
         "teacher_intervention": teacher_report,
@@ -175,7 +176,7 @@ def simulate_intervention_targets(
     v_init_mv: float,
     exc_gmax_scale: float,
     inh_gmax_scale: float,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     from neuron import coreneuron, h
 
     if backend == "coreneuron":
@@ -205,6 +206,7 @@ def simulate_intervention_targets(
 
     targets = np.zeros((signed_inputs.shape[0], signed_inputs.shape[1], 2), dtype=np.float32)
     soma_mv = np.zeros((signed_inputs.shape[0], signed_inputs.shape[1]), dtype=np.float32)
+    routing_rows = []
     for index in range(signed_inputs.shape[0]):
         trace = simulate_one_signed_trace(
             h=h,
@@ -218,7 +220,8 @@ def simulate_intervention_targets(
         )
         targets[index] = trace["targets"]
         soma_mv[index] = trace["soma_mv"]
-    return targets, soma_mv
+        routing_rows.append(trace["input_routing"])
+    return targets, soma_mv, _summarize_input_routing(routing_rows)
 
 
 def simulate_one_signed_trace(
@@ -241,8 +244,7 @@ def simulate_one_signed_trace(
         section.vshift_Ih = 0
     cell.soma[0].vshift_Ih = 0
 
-    inputs_exc = (signed_inputs[:, :639] > 0).T
-    inputs_inh = (signed_inputs[:, 639:] < 0).T
+    inputs_exc, inputs_inh, input_routing = _route_inputs_to_segments(signed_inputs, len(segments))
     pc = h.ParallelContext()
     netcons, synapses, stim_refs = attach_deterministic_synapses(
         h,
@@ -276,7 +278,66 @@ def simulate_one_signed_trace(
     targets = np.stack([spike_labels, normalized_soma], axis=1).astype(np.float32)
 
     del netcons, synapses, stim_refs, cell
-    return {"targets": targets, "soma_mv": low_soma}
+    return {"targets": targets, "soma_mv": low_soma, "input_routing": input_routing}
+
+
+def _route_inputs_to_segments(signed_inputs: np.ndarray, segment_count: int) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Route source E/I site channels onto the current morphology segments.
+
+    The original Hay/NeuronIO protocol has one excitatory and one inhibitory
+    channel per source segment.  Held-out morphologies can have fewer segments;
+    for the M3 smoke we preserve source channel order and use the first
+    `segment_count` sites, recording the truncation explicitly.  More segments
+    than source sites would require a new interpolation/routing policy and is
+    therefore rejected.
+    """
+    if signed_inputs.ndim != 2:
+        raise ValueError(f"signed_inputs must have shape (time, channels), got {signed_inputs.shape}")
+    if signed_inputs.shape[1] % 2 != 0:
+        raise ValueError(f"signed_inputs channel count must split evenly into E/I sites, got {signed_inputs.shape[1]}")
+    source_sites = signed_inputs.shape[1] // 2
+    if segment_count > source_sites:
+        raise ValueError(
+            "morphology has more segments than available source input sites; "
+            f"segments={segment_count}, source_sites={source_sites}. "
+            "Define an explicit interpolation/routing policy before using this morphology."
+        )
+    inputs_exc = (signed_inputs[:, :source_sites] > 0).T[:segment_count]
+    inputs_inh = (signed_inputs[:, source_sites:] < 0).T[:segment_count]
+    policy = "ordered_source_site_routing" if segment_count == source_sites else "ordered_source_site_truncation"
+    return inputs_exc, inputs_inh, {
+        "policy": policy,
+        "source_sites_per_sign": int(source_sites),
+        "morphology_segments": int(segment_count),
+        "used_sites_per_sign": int(segment_count),
+        "unused_source_sites_per_sign": int(source_sites - segment_count),
+        "defensibility_note": (
+            "Exact source-channel routing is preserved only when morphology segment count matches source sites. "
+            "For smaller held-out morphologies this smoke truncates distal source sites in collect_segments order; "
+            "a publishable M3 protocol should report this or replace it with morphology-normalized routing."
+        ),
+    }
+
+
+def _summarize_input_routing(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {"status": "not_run"}
+    keys = ("source_sites_per_sign", "morphology_segments", "used_sites_per_sign", "unused_source_sites_per_sign")
+    summary = {
+        "status": "recorded",
+        "policy": rows[0]["policy"],
+        "n_traces": len(rows),
+        "all_traces_identical": all(row == rows[0] for row in rows),
+        "defensibility_note": rows[0]["defensibility_note"],
+    }
+    for key in keys:
+        values = [int(row[key]) for row in rows]
+        summary[key] = {
+            "min": int(min(values)),
+            "max": int(max(values)),
+            "mean": float(np.mean(values)),
+        }
+    return summary
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -291,6 +352,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- Intervention: `{meta['intervention']}`",
             f"- Changed events: `{meta['changed_events']}` / `{meta['baseline_events']}`",
             f"- Intervention events: `{meta['intervention_events']}`",
+            f"- Input routing policy: `{meta['input_routing']['policy']}`",
+            f"- Used source sites per sign: `{meta['input_routing']['used_sites_per_sign']['mean']:.1f}`",
+            f"- Unused source sites per sign: `{meta['input_routing']['unused_source_sites_per_sign']['mean']:.1f}`",
             f"- Baseline event fraction: `{response['baseline_event_fraction']:.6f}`",
             f"- Intervention event fraction: `{response['intervention_event_fraction']:.6f}`",
             f"- Delta spike rate / 1000 steps: `{response['delta_spike_rate_per_1000_steps']:.4f}`",
