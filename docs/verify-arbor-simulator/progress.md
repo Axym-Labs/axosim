@@ -3,6 +3,20 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- VERIFICATION (2026-06-06 12:42): Cleared the immediate M3 SWC runtime
+  feasibility gate. Installed `neuron==9.0.1` into `.venv`, compiled the
+  existing deterministic Hay/CoreNEURON MOD set into ignored
+  `artifacts/hay_swc_template/x86_64/`, and verified that the generated
+  SWC-aware Hay template instantiates both original `cell1.asc` and held-out
+  Allen `specimen_487664663.swc`. Section counts: original `195` total
+  (`84` basal, `109` apical, `2` axonal); held-out SWC `101` total (`32`
+  basal, `67` apical, `2` axonal). A no-input `10 ms` fixed-step NEURON run
+  on the held-out SWC integrated successfully (`401` samples, soma
+  `-76.0 -> -79.1941 mV`). This does not yet prove M3 teacher correctness:
+  Allen candidates are `dendrite-only`, Hay active parameters are source-fit,
+  and synapse placement/input routing still need a paired teacher smoke.
+  Tracked report: `artifacts/m3_swc_template_smoke_20260606.md`.
+
 - IMPLEMENTATION (2026-06-06 12:39): Added a more sophisticated trace metric
   beyond pointwise RMSE, `trace_shape_fidelity`, in
   `src/bnn_sim/benchmark/trace_shape.py` and wired it into `BenchmarkSuite`,
