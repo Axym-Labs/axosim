@@ -3,6 +3,30 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- MILESTONE (2026-06-06 12:04): Hardened the M3 morphology-transfer scaffold
+  into an explicit morphology/routing compatibility diagnostic rather than a
+  bare branch-count placeholder. Fixed SWC branch extraction so soma-started
+  basal/apical dendrites are retained, added whole-morphology feature summaries
+  (`n_branches`, dendritic length, basal/apical length, apical fraction,
+  branch-length summaries, radial extent, bounding box), and separated
+  whole-morphology features from the selected branch subset used for model
+  input routing. `run_benchmark --run-morphology-transfer` now records this
+  comparison under `m3_morphology_transfer` instead of only listing shapes.
+  Local SWC check: the available candidates are not defensible same-cell-type
+  M3 targets for the current L5/Hay path. Compared with
+  `allen_l5_template.swc`, `specimen_327962063.swc` has only `43` extracted
+  basal/apical branches, dendritic-length ratio `0.376`, apical fraction delta
+  `-0.650`, radial extent ratio `0.399`, and routing shape mismatch;
+  `specimen_474267418.swc` is smaller still (`26` branches, length ratio
+  `0.212`, radial extent ratio `0.347`). Interpretation: this is useful
+  incompatibility evidence, not a successful M3 transfer benchmark. Publishable
+  M3 still needs a same-cell-type/closely matched L5 morphology set with
+  comparable apical/basal structure and a simulator/routing protocol per
+  morphology. Tracked report:
+  `artifacts/m3_morphology_feature_comparison_20260606.md`. Verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_suite.py tests/test_cli.py -q`
+  passed (`26` tests); py_compile passed for M3/CLI modules.
+
 - MILESTONE (2026-06-06 11:56): Moved the benchmark target from MVP scaffolding
   toward publishable evaluation per user update. Updated `spec.md` to require
   a primary metric upgrade beyond global RMSE, behavior/state-conditioned

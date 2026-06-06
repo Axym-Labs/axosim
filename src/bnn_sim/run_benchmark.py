@@ -115,21 +115,7 @@ def run_benchmark(
             train_morph = evaluator.load_morphology(morphologies[0], n_branches=45)
             test_morphs = [evaluator.load_morphology(m, n_branches=45) for m in morphologies[1:]]
 
-            # For now, just document the routing differences
-            m3_results = {
-                "train_morphology": train_morph["swc_path"],
-                "train_n_branches": train_morph["n_branches"],
-                "test_morphologies": [],
-            }
-
-            for test_morph in test_morphs:
-                m3_results["test_morphologies"].append({
-                    "path": test_morph["swc_path"],
-                    "n_branches": test_morph["n_branches"],
-                    "routing_shape": test_morph["routing_shape"],
-                })
-
-            results["m3_morphology_transfer"] = m3_results
+            results["m3_morphology_transfer"] = evaluator.compare_morphology_set(train_morph, test_morphs)
         else:
             print("  Skipped: Need >=2 morphologies for transfer")
 
@@ -157,28 +143,44 @@ def print_summary(results: dict) -> None:
     print(f"BENCHMARK RESULTS: {meta.get('model_name', 'Unknown')}")
     print("=" * 70)
 
-    m1 = results["m1_open_loop_fidelity"]
+    m1 = results["m1_trace_fidelity"]
     print(f"\nM1: Open-Loop Fidelity")
-    print(f"  RMSE: {m1['rmse_mv']:.2f} mV")
-    print(f"  AUC:  {m1['auc']:.4f}")
+    print(f"  RMSE: {m1['soma_rmse_mv']:.2f} mV")
+    print(f"  AUC:  {m1['spike_auc']:.4f}")
+    print(f"  State-weighted trace distance: {m1['state_weighted_trace_distance_mv']:.2f} mV")
 
-    m2 = results["m2_regime_stratified"]
+    m2 = results["m2_regimes"]
     print(f"\nM2: Regime-Stratified Errors")
-    print(f"  Near-spike RMSE:  {next(r['rmse'] for r in m2['spike_proximity'] if r['regime_label'] == 'near_spike'):.2f} mV")
-    print(f"  Far-from-spike RMSE: {next(r['rmse'] for r in m2['spike_proximity'] if r['regime_label'] == 'far_from_spike'):.2f} mV")
+    near = next((r for r in m2.get("spike_proximity", []) if r["regime_label"] == "near_spike"), None)
+    far = next((r for r in m2.get("spike_proximity", []) if r["regime_label"] == "far_from_spike"), None)
+    if near is not None and near.get("rmse") is not None:
+        print(f"  Near-spike RMSE: {near['rmse']:.2f} mV")
+    if far is not None and far.get("rmse") is not None:
+        print(f"  Far-from-spike RMSE: {far['rmse']:.2f} mV")
 
-    m4 = results["m4_perturbation_stability"]
-    sc = m4["stability_coefficient"]
-    print(f"\nM4: Perturbation Stability")
-    print(f"  Soma stability coeff: {sc['soma']:.4f}" if sc['soma'] else "  Soma stability coeff: N/A")
-    print(f"  Spike stability coeff: {sc['spike']:.4f}" if sc['spike'] else "  Spike stability coeff: N/A")
+    m4 = results["m4_intervention"]
+    print(f"\nM4: Structured Intervention")
+    print(f"  Status: {m4.get('status')}")
+    if m4.get("status") == "model_compared":
+        model_response = m4.get("model_response", {})
+        soma_delta = model_response.get("soma_delta_rmse_mv")
+        spike_delta = model_response.get("spike_count_delta_mae_per_trace")
+        print(f"  Soma-delta RMSE: {soma_delta:.4f} mV" if soma_delta is not None else "  Soma-delta RMSE: N/A")
+        print(f"  Spike-delta MAE: {spike_delta:.4f}" if spike_delta is not None else "  Spike-delta MAE: N/A")
 
     if "m3_morphology_transfer" in results:
         m3 = results["m3_morphology_transfer"]
         print(f"\nM3: Morphology Transfer")
-        print(f"  Train: {m3['train_n_branches']} branches")
+        print(f"  Train: {m3['train_features']['n_branches']} branches")
         for test in m3.get("test_morphologies", []):
-            print(f"  Test:  {test['n_branches']} branches ({Path(test['path']).name})")
+            features = test["features"]
+            mismatch = test["route_mismatch"]
+            print(
+                "  Test:  "
+                f"{features['n_branches']} branches "
+                f"({Path(test['swc_path']).name}), "
+                f"length ratio {mismatch['total_length_ratio']:.3f}"
+            )
 
     print("\n" + "=" * 70)
     print(f"Full results saved to: {meta.get('output_dir', 'N/A')}")

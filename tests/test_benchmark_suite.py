@@ -1,6 +1,7 @@
 import numpy as np
 
 from bnn_sim.benchmark.regime_stratified import compute_regime_stratified_metrics
+from bnn_sim.benchmark.morphology_transfer import MorphologyTransferEvaluator
 from bnn_sim.benchmark.state_metrics import compute_state_conditioned_metrics
 from bnn_sim.benchmark.suite import BenchmarkSuite
 from bnn_sim.benchmark.structured_intervention import (
@@ -254,6 +255,44 @@ def test_structured_intervention_input_transforms_are_targeted():
     assert np.count_nonzero(transformed == 1) == 2
     assert transformed_mask.sum() == 2
     assert meta["intervention"] == "inh_dropout"
+
+
+def test_morphology_transfer_reports_feature_and_route_mismatch(tmp_path):
+    train_swc = tmp_path / "train.swc"
+    test_swc = tmp_path / "test.swc"
+    train_swc.write_text(
+        "\n".join([
+            "1 1 0 0 0 5 -1",
+            "2 3 10 0 0 1 1",
+            "3 3 20 0 0 1 2",
+            "4 4 0 10 0 1 1",
+            "5 4 0 20 0 1 4",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    test_swc.write_text(
+        "\n".join([
+            "1 1 0 0 0 5 -1",
+            "2 3 30 0 0 1 1",
+            "3 3 60 0 0 1 2",
+            "4 4 0 30 0 1 1",
+            "5 4 0 60 0 1 4",
+            "6 4 0 90 0 1 5",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    evaluator = MorphologyTransferEvaluator(cache_dir=tmp_path)
+    train = evaluator.load_morphology(train_swc, n_branches=2)
+    test = evaluator.load_morphology(test_swc, n_branches=2)
+    report = evaluator.compare_morphology_set(train, [test])
+
+    assert report["status"] == "morphology_feature_comparison"
+    assert report["train_features"]["total_dendritic_length_um"] > 0
+    mismatch = report["test_morphologies"][0]["route_mismatch"]
+    assert mismatch["routing_shape_match"] is True
+    assert mismatch["total_length_ratio"] > 1.0
+    assert "what_failure_means" in report
 
 
 def test_paired_event_intervention_scores_teacher_and_model_delta_alignment():

@@ -11,7 +11,13 @@ from typing import Any, Callable
 import numpy as np
 import torch
 
-from bnn_sim.benchmark.swc_utils import load_swc, select_branches, create_routing_from_branches
+from bnn_sim.benchmark.swc_utils import (
+    create_routing_from_branches,
+    extract_branches,
+    load_swc,
+    select_branches,
+    summarize_morphology,
+)
 
 
 class MorphologyTransferEvaluator:
@@ -43,8 +49,11 @@ class MorphologyTransferEvaluator:
             return self._morphology_cache[cache_key]
 
         swc_data = load_swc(swc_path)
+        all_branches = extract_branches(swc_data, target_types=[3, 4])
         branches = select_branches(swc_data, n_branches=n_branches)
         routing = create_routing_from_branches(swc_data, branches)
+        morphology_features = summarize_morphology(swc_data, all_branches if all_branches else branches)
+        routing_features = summarize_morphology(swc_data, branches)
 
         result = {
             "swc_path": str(swc_path),
@@ -53,6 +62,9 @@ class MorphologyTransferEvaluator:
             "branches": branches,
             "routing_matrix": routing,
             "routing_shape": routing.shape,
+            "features": morphology_features,
+            "morphology_features": morphology_features,
+            "routing_features": routing_features,
         }
 
         self._morphology_cache[cache_key] = result
@@ -102,6 +114,7 @@ class MorphologyTransferEvaluator:
                 train_routing.shape == test_routing.shape and
                 np.allclose(train_routing, test_routing)
             )
+            route_mismatch = _route_mismatch_summary(train_morphology, test_morph)
 
             # Evaluate model
             preds = model_fn(inputs)
@@ -120,12 +133,94 @@ class MorphologyTransferEvaluator:
                 "test_n_branches": test_morph["n_branches"],
                 "routing_compatible": bool(routing_compatible),
                 "routing_shape_match": train_routing.shape == test_routing.shape,
+                "morphology_features": test_morph["morphology_features"],
+                "routing_features": test_morph["routing_features"],
+                "route_mismatch": route_mismatch,
                 "rmse_mv": float(rmse_mv),
                 "auc": float(auc),
                 "n_samples": inputs.shape[0],
             })
 
         return results
+
+    def compare_morphology_set(
+        self,
+        train_morphology: dict[str, Any],
+        test_morphologies: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Compare held-out morphology features without model predictions."""
+        return {
+            "status": "morphology_feature_comparison",
+            "train_morphology": train_morphology["swc_path"],
+            "train_features": train_morphology["morphology_features"],
+            "train_routing_features": train_morphology["routing_features"],
+            "test_morphologies": [
+                {
+                    "swc_path": morph["swc_path"],
+                    "features": morph["morphology_features"],
+                    "routing_features": morph["routing_features"],
+                    "route_mismatch": _route_mismatch_summary(train_morphology, morph),
+                }
+                for morph in test_morphologies
+            ],
+            "what_failure_means": (
+                "Large feature/routing mismatch means a later transfer score "
+                "mixes model generalization with morphology distribution shift; "
+                "same-cell-type transfer should control these axes where possible."
+            ),
+        }
+
+
+def _route_mismatch_summary(train_morphology: dict[str, Any], test_morphology: dict[str, Any]) -> dict[str, Any]:
+    train_routing = train_morphology["routing_matrix"]
+    test_routing = test_morphology["routing_matrix"]
+    shape_match = train_routing.shape == test_routing.shape
+    train_features = train_morphology["morphology_features"]
+    test_features = test_morphology["morphology_features"]
+    train_routing_features = train_morphology["routing_features"]
+    test_routing_features = test_morphology["routing_features"]
+    summary = {
+        "routing_shape_match": bool(shape_match),
+        "train_routing_shape": tuple(int(x) for x in train_routing.shape),
+        "test_routing_shape": tuple(int(x) for x in test_routing.shape),
+        "morphology_branch_count_delta": int(test_features["n_branches"] - train_features["n_branches"]),
+        "routing_branch_count_delta": int(
+            test_routing_features["n_branches"] - train_routing_features["n_branches"]
+        ),
+        "total_length_ratio": _safe_ratio(
+            test_features["total_dendritic_length_um"],
+            train_features["total_dendritic_length_um"],
+        ),
+        "routed_length_ratio": _safe_ratio(
+            test_routing_features["total_dendritic_length_um"],
+            train_routing_features["total_dendritic_length_um"],
+        ),
+        "apical_fraction_delta": _safe_delta(
+            test_features["apical_length_fraction"],
+            train_features["apical_length_fraction"],
+        ),
+        "max_radial_extent_ratio": _safe_ratio(
+            test_features["max_radial_extent_um"],
+            train_features["max_radial_extent_um"],
+        ),
+    }
+    if shape_match:
+        summary["routing_l1_mean"] = float(np.mean(np.abs(test_routing - train_routing)))
+    else:
+        summary["routing_l1_mean"] = None
+    return summary
+
+
+def _safe_ratio(value: float | None, reference: float | None) -> float | None:
+    if value is None or reference is None or reference == 0:
+        return None
+    return float(value / reference)
+
+
+def _safe_delta(value: float | None, reference: float | None) -> float | None:
+    if value is None or reference is None:
+        return None
+    return float(value - reference)
 
 
 def load_available_morphologies(cache_dir: str = "data/morphologies") -> list[Path]:

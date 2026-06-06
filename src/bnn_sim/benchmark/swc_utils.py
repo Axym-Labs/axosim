@@ -93,11 +93,11 @@ def extract_branches(swc_data: np.ndarray, target_types: list[int] | None = None
                 branch.append(current)
     
     # Start from soma (type 1) or branch points
-    soma_nodes = swc_data[swc_data[:, 1] == 1, 0].astype(int)
-    start_nodes = set(soma_nodes) | branch_points
-    
+    soma_nodes = set(swc_data[swc_data[:, 1] == 1, 0].astype(int))
+    start_nodes = soma_nodes | branch_points
+
     for start in start_nodes:
-        if start not in valid_nodes:
+        if start not in valid_nodes and start not in soma_nodes:
             continue
         for child in children.get(start, []):
             if child not in valid_nodes:
@@ -158,6 +158,55 @@ def select_branches(swc_data: np.ndarray, n_branches: int = 45, seed: int = 42) 
     return selected
 
 
+def branch_length_um(swc_data: np.ndarray, branch: list[int]) -> float:
+    """Compute path length of one SWC branch."""
+    total = 0.0
+    for i in range(len(branch) - 1):
+        idx1 = np.where(swc_data[:, 0] == branch[i])[0][0]
+        idx2 = np.where(swc_data[:, 0] == branch[i + 1])[0][0]
+        total += float(np.linalg.norm(swc_data[idx2, 2:5] - swc_data[idx1, 2:5]))
+    return total
+
+
+def summarize_morphology(swc_data: np.ndarray, branches: list[list[int]] | None = None) -> dict[str, Any]:
+    """Return interpretable morphology features for M3 transfer reports."""
+    if branches is None:
+        branches = extract_branches(swc_data, target_types=[3, 4])
+    type_counts = {int(t): int(np.sum(swc_data[:, 1] == t)) for t in np.unique(swc_data[:, 1])}
+    branch_lengths = np.asarray([branch_length_um(swc_data, branch) for branch in branches], dtype=np.float64)
+    node_by_id = {int(row[0]): row for row in swc_data}
+    basal_length = 0.0
+    apical_length = 0.0
+    for branch, length in zip(branches, branch_lengths):
+        tags = [int(node_by_id[node_id][1]) for node_id in branch if node_id in node_by_id]
+        if tags.count(4) >= tags.count(3):
+            apical_length += float(length)
+        else:
+            basal_length += float(length)
+    dendritic_length = basal_length + apical_length
+    coords = swc_data[:, 2:5]
+    soma = swc_data[swc_data[:, 1] == 1, 2:5]
+    soma_center = np.mean(soma, axis=0) if soma.size else np.mean(coords, axis=0)
+    radial_distances = np.linalg.norm(coords - soma_center, axis=1)
+    return {
+        "n_nodes": int(len(swc_data)),
+        "type_counts": type_counts,
+        "n_branches": int(len(branches)),
+        "total_dendritic_length_um": float(dendritic_length),
+        "basal_length_um": float(basal_length),
+        "apical_length_um": float(apical_length),
+        "apical_length_fraction": float(apical_length / dendritic_length) if dendritic_length > 0 else None,
+        "mean_branch_length_um": float(np.mean(branch_lengths)) if branch_lengths.size else None,
+        "max_branch_length_um": float(np.max(branch_lengths)) if branch_lengths.size else None,
+        "max_radial_extent_um": float(np.max(radial_distances)) if radial_distances.size else None,
+        "bounding_box_um": {
+            "x": [float(np.min(coords[:, 0])), float(np.max(coords[:, 0]))],
+            "y": [float(np.min(coords[:, 1])), float(np.max(coords[:, 1]))],
+            "z": [float(np.min(coords[:, 2])), float(np.max(coords[:, 2]))],
+        },
+    }
+
+
 def create_routing_from_branches(
     swc_data: np.ndarray,
     branches: list[list[int]],
@@ -172,6 +221,8 @@ def create_routing_from_branches(
         Routing matrix of shape (n_branches, input_dim)
     """
     n_branches = len(branches)
+    if n_branches == 0:
+        raise ValueError("Cannot create branch routing from an SWC with no extracted branches")
     branch_size = input_dim // n_branches
     
     routing = np.zeros((n_branches, input_dim))
