@@ -367,21 +367,20 @@ validating the benchmark code; the full dataset is not required for that step.
      teacher correctness; otherwise produce a measured throughput report and a
      defensible reason for the chosen backend.
    - Do not start full generation on a slow correctness-only path.
-   - Current source-Hay/CoreNEURON gate result: promote `8` independent CPU
-     CoreNEURON shard workers as the durable local default because measured
-     `8 x 6000 ms` generation finished in `28.08 s`, within `10%` of the
-     measured `16`-worker peak while preserving headroom. The GPU route is not
-     rejected on correctness; it is blocked in the current environment because
-     the compiled GPU mechanism requires `libcoreneuron-cuda.so` and no durable
-     NEURON GPU runtime library is present. Evidence:
-     `artifacts/generation_throughput_gate_20260606.md`.
+   - Current source-Hay/CoreNEURON gate result: a durable NEURON `9.0.1` GPU
+     runtime has been built, source-Hay CPU/GPU equivalence is validated, and
+     source-Hay GPU batching is useful only when many traces are solved in one
+     CoreNEURON launch. Measured source-Hay GPU throughput reached `1.675`
+     simulated trace seconds / wall second at `128 x 2000 ms`. Evidence:
+     `artifacts/gpu_generation_path_validation_20260606.md`.
    - `N=5` morphology generation path status: `artifacts/run_v1_parallel_generation.py`
      now generates v1-shaped ordinary split shards and specimen-coded
-     intervention pair shards. All-five smoke validation passed at `1000 ms`
-     and `6000 ms`, and `benchmark-v1` consumes the generated layout. Remaining
-     backend caveat: the SWC morphology route currently uses plain NEURON
-     workers; CoreNEURON/SWC remains a separate backend fix, while the accepted
-     near-term acceleration is independent shard parallelism.
+     intervention pair shards with bounded worker shard sizes. All-five smoke
+     validation passed with CPU CoreNEURON/SWC batching, and `benchmark-v1`
+     consumes the generated layout. Remaining backend caveat: SWC morphology
+     CPU CoreNEURON agrees exactly with plain NEURON on the current smoke, but
+     SWC CoreNEURON GPU aborts during GPU initialization before solve; current
+     defensible v1 generation route is therefore batched CPU CoreNEURON/SWC.
 6. **Full v1 dataset generation**
    - Generate ordinary splits and intervention pairs under the size target.
    - Store raw and clipped target views plus metadata.
