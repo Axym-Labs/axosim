@@ -117,14 +117,57 @@ def run_paired_intervention_on_selector(
     """Run paired intervention diagnostics from a v1 intervention selector."""
     if selector.intervention is None:
         raise ValueError("paired intervention diagnostics require an intervention selector")
-    pair_path = _resolve_pair_path(selector)
+    pair_paths = resolve_intervention_pair_paths(selector)
     context = _context_for_selector(selector, context)
-    return run_paired_intervention_on_npz(
-        pair_path,
+    if len(pair_paths) == 1:
+        return run_paired_intervention_on_npz(
+            pair_paths[0],
+            model_fn=model_fn,
+            context=context,
+            max_samples=max_samples,
+            output=output,
+        )
+    baseline_inputs, baseline_targets, intervention_inputs, intervention_targets, trace_ids = load_intervention_pair_npzs(
+        pair_paths,
+        max_samples=max_samples,
+    )
+    rows = paired_intervention_diagnostic_rows(
+        baseline_inputs,
+        baseline_targets,
+        intervention_inputs,
+        intervention_targets,
         model_fn=model_fn,
         context=context,
-        max_samples=max_samples,
-        output=output,
+        trace_ids=trace_ids,
+    )
+    if output is not None:
+        write_diagnostic_rows(rows, output)
+    return rows
+
+
+def load_intervention_pair_npzs(
+    paths: list[Path],
+    *,
+    max_samples: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
+    """Load and concatenate sharded intervention pair `.npz` artifacts."""
+    arrays = []
+    remaining = None if max_samples is None else int(max_samples)
+    for path in paths:
+        if remaining is not None and remaining <= 0:
+            break
+        loaded = load_intervention_pair_npz(path, max_samples=remaining)
+        arrays.append(loaded)
+        if remaining is not None:
+            remaining -= loaded[0].shape[0]
+    if not arrays:
+        raise ValueError("intervention pair shards contain no samples")
+    return (
+        np.concatenate([item[0] for item in arrays], axis=0),
+        np.concatenate([item[1] for item in arrays], axis=0),
+        np.concatenate([item[2] for item in arrays], axis=0),
+        np.concatenate([item[3] for item in arrays], axis=0),
+        [trace_id for item in arrays for trace_id in item[4]],
     )
 
 
@@ -181,4 +224,24 @@ def _resolve_pair_path(selector: DatasetSelector) -> Path:
     raise FileNotFoundError(
         "missing intervention pair file; expected one of "
         + ", ".join(str(candidate) for candidate in candidates)
+    )
+
+
+def resolve_intervention_pair_paths(selector: DatasetSelector) -> list[Path]:
+    """Resolve one or more intervention pair files from a v1 intervention selector."""
+    candidates = [
+        selector.root / "intervention_pair.npz",
+        selector.root / f"{selector.intervention}_pair.npz",
+        selector.root / "event_dropout_pair.npz",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return [candidate]
+    shards = sorted({*selector.root.glob("intervention_pair_*.npz"), *selector.root.glob("*_intervention_pair_*.npz")})
+    if shards:
+        return shards
+    raise FileNotFoundError(
+        "missing intervention pair file; expected one of "
+        + ", ".join(str(candidate) for candidate in candidates)
+        + f" or sharded files matching {selector.root / 'intervention_pair_*.npz'}"
     )

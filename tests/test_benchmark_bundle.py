@@ -63,3 +63,24 @@ def test_run_v1_benchmark_bundle_writes_manifest_rows_and_summaries(tmp_path):
     assert all(row["model_id"] == "teacher" for row in intervention_rows)
     assert len(manifest["artifacts"]) == 3
     assert json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))["artifacts"]
+
+
+def test_run_v1_benchmark_bundle_expands_sharded_intervention_selector_by_morphology(tmp_path):
+    dataset_root = tmp_path / "dataset"
+    output_dir = tmp_path / "bundle"
+    write_demo_shards(dataset_root / "val", shard_count=1, samples_per_shard=1, time_steps=8, input_dim=4)
+    _write_pair(dataset_root / "interventions" / "event_dropout" / "specimen_111_intervention_pair_00000.npz")
+    _write_pair(dataset_root / "interventions" / "event_dropout" / "specimen_222_intervention_pair_00001.npz")
+
+    manifest = run_v1_benchmark_bundle(
+        dataset_root=dataset_root,
+        output_dir=output_dir,
+        base_context=DiagnosticContext(ignore_start=0),
+        max_val_samples=1,
+        max_intervention_samples=1,
+    )
+
+    assert (output_dir / "intervention_specimen_111_event_dropout.jsonl").exists()
+    assert (output_dir / "intervention_specimen_222_event_dropout.jsonl").exists()
+    assert (output_dir / "morphology_contrast_interventions.jsonl").exists()
+    assert len(manifest["artifacts"]) == 5

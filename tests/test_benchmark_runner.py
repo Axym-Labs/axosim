@@ -6,6 +6,7 @@ from bnn_sim.benchmark.diagnostic_rows import DiagnosticContext
 from bnn_sim.benchmark.runner import (
     load_selector_batch,
     run_paired_intervention_on_npz,
+    run_paired_intervention_on_selector,
     run_model_diagnostics_on_selector,
     run_teacher_qc_on_selector,
 )
@@ -115,3 +116,38 @@ def test_runner_writes_paired_intervention_rows_from_npz(tmp_path):
     assert any(row["diagnostic"] == "intervention_response" for row in rows)
     assert any(row["metric"] == "teacher_direction" for row in rows)
     assert all(row["condition"] == "interventions/event_dropout" for row in rows)
+
+
+def test_runner_reads_sharded_paired_intervention_selector(tmp_path):
+    pair_dir = tmp_path / "interventions" / "event_dropout"
+    pair_dir.mkdir(parents=True)
+    for shard_idx, trace_id in enumerate(("trace-a", "trace-b")):
+        baseline_inputs = np.zeros((1, 8, 4), dtype=np.int8)
+        intervention_inputs = baseline_inputs.copy()
+        intervention_inputs[:, 2, 0] = 1
+        baseline_targets = np.zeros((1, 8, 2), dtype=np.float32)
+        intervention_targets = baseline_targets.copy()
+        intervention_targets[..., 1] = 0.5 + shard_idx
+        np.savez_compressed(
+            pair_dir / f"intervention_pair_{shard_idx:05d}.npz",
+            baseline_inputs=baseline_inputs,
+            baseline_targets=baseline_targets,
+            intervention_inputs=intervention_inputs,
+            intervention_targets=intervention_targets,
+            sample_ids=np.asarray([trace_id]),
+        )
+
+    rows = run_paired_intervention_on_selector(
+        V1DatasetLayout(tmp_path).intervention("event_dropout"),
+        context=DiagnosticContext(
+            suites=("teacher-qc", "intervention-response", "paper-summary"),
+            condition="interventions/event_dropout",
+            intervention="event_dropout",
+            ignore_start=0,
+        ),
+        max_samples=2,
+    )
+
+    delta_row = next(row for row in rows if row["metric"] == "delta_soma_mean_mv")
+    assert delta_row["value"] == 10.0
+    assert any(row["diagnostic"] == "intervention_response" for row in rows)

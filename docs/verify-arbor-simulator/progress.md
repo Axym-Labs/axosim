@@ -3,6 +3,60 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 23:35): Added the v1 shard-parallel morphology
+  generation path and fixed the benchmark bundle to understand sharded
+  intervention directories. New artifact script:
+  `artifacts/run_v1_parallel_generation.py`. It generates v1-shaped ordinary
+  split shards and specimen-coded intervention pair shards for the selected
+  `N=5` morphologies using the validated SWC Hay template, normalized-by-type
+  source input routing, raw `soma_mv`, clipped/normalized training targets,
+  and shard manifests. The default script settings are a small smoke, while
+  full counts can be requested through CLI sample-count flags. Benchmark
+  support change: `run_paired_intervention_on_selector` now accepts multiple
+  `intervention_pair_*.npz` / `*_intervention_pair_*.npz` shards, and
+  `benchmark-v1` expands specimen-coded shards into morphology-specific
+  intervention reports plus a morphology-contrast report. Validation:
+  all-five `1000 ms` smoke (`5` val traces + `5` event-dropout pairs) finished
+  in `14.53 s`; all-five full-trace `6000 ms` smoke finished in `73.61 s`.
+  The full-trace smoke bundle wrote teacher QC, routing QC, five
+  specimen-specific event-dropout summaries, and morphology-contrast rows.
+  Sanity signals from the full-trace smoke: event fraction `0.0101`, soma mean
+  `-67.41 mV`, trace spike count mean `18.8`, clipping fraction `0.00545`,
+  and event dropout produced detected responses across all five morphologies
+  with mean soma delta `-1.50 mV` and mean spike-rate delta `-2.84`
+  spikes/1000 steps. Focused verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_runner.py
+  tests/test_benchmark_bundle.py -q` passed (`9` tests). Remaining caveat:
+  this `N=5` SWC morphology path currently uses plain NEURON workers because
+  CoreNEURON/SWC still needs a separate backend fix; it is nevertheless
+  shard-parallel and layout-compatible.
+
+- EXPERIMENT (2026-06-06 23:10): Closed the current generation-throughput
+  gate for the durable source-Hay/CoreNEURON generator and made it
+  reproducible with
+  `artifacts/run_generation_throughput_gate.py`; tracked report:
+  `artifacts/generation_throughput_gate_20260606.md`. Findings: the old GPU
+  validation path depended on `/tmp/nrn-gpu-build-9` and the old source default
+  depended on `/tmp/neuron-as-deep-net`; both are absent in the current
+  environment, while the durable source copy under
+  `artifacts/source_models/neuron_as_deep_net/` is present. The compiled GPU
+  mechanism artifact still exists, but `ldd` shows `libcoreneuron-cuda.so =>
+  not found`, so the GPU route is blocked by a missing durable NEURON GPU
+  runtime library, not by a teacher-correctness failure. Measured timings with
+  conda NEURON `8.2.7` and the CPU CoreNEURON mechanism root: sequential
+  CPU CoreNEURON `8 x 1000 ms` took `32.88 s`; plain NEURON took `34.05 s`;
+  sequential CPU CoreNEURON `2 x 6000 ms` took `49.63 s`; plain NEURON took
+  `51.17 s`. Parallel independent CPU CoreNEURON shards were the practical
+  speedup: `4 x 6000 ms` in `26.92 s`, `8 x 6000 ms` in `28.08 s`, and
+  `16 x 6000 ms` in `51.39 s`. Promoted default: `8` independent CPU
+  CoreNEURON shard workers because it is within `10%` of peak measured
+  throughput while preserving headroom; `16` remains max-throughput but
+  less comfortable. This is not a CPU fallback for correctness; GPU remains a
+  follow-up gate requiring a durable NEURON 9 GPU rebuild plus equivalence and
+  throughput validation. Remaining caveat before full v1 generation: apply the
+  same fast shard policy to the actual `N=5` morphology generator, not only the
+  source `cell1.asc` generator.
+
 - IMPLEMENTATION (2026-06-06 22:35): Added the promoted package-facing
   `bnn-sim benchmark-v1` bundle command and reusable
   `run_v1_benchmark_bundle` helper. The bundle writes validation teacher-QC

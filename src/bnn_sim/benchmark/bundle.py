@@ -19,6 +19,7 @@ from bnn_sim.benchmark.diagnostic_rows import (
 )
 from bnn_sim.benchmark.reports import write_diagnostic_summary
 from bnn_sim.benchmark.runner import (
+    resolve_intervention_pair_paths,
     run_model_diagnostics_on_selector,
     run_paired_intervention_on_npz,
     run_paired_intervention_on_selector,
@@ -127,25 +128,50 @@ def run_v1_benchmark_bundle(
     else:
         for intervention in layout.available_interventions():
             selector = layout.intervention(intervention)
-            intervention_model_id = model_id if model_fn is not None else "teacher"
-            context = _replace_context(
-                base,
-                suites=DEFAULT_INTERVENTION_SUITES,
-                model_id=intervention_model_id,
-                split="",
-                condition=f"interventions/{intervention}",
-                intervention=intervention,
-            )
-            filename = f"intervention_{_slug(base.morphology_id)}_{_slug(intervention)}"
-            rows = run_paired_intervention_on_selector(
-                selector,
-                model_fn=model_fn,
-                context=context,
-                max_samples=max_intervention_samples,
-                output=output / f"{filename}.jsonl",
-            )
-            intervention_row_sets.extend(rows)
-            _write_summary_artifact(rows, output / f"{filename}.md", artifacts)
+            selector_pair_paths = resolve_intervention_pair_paths(selector)
+            if len(selector_pair_paths) == 1:
+                intervention_model_id = model_id if model_fn is not None else "teacher"
+                context = _replace_context(
+                    base,
+                    suites=DEFAULT_INTERVENTION_SUITES,
+                    model_id=intervention_model_id,
+                    split="",
+                    condition=f"interventions/{intervention}",
+                    intervention=intervention,
+                )
+                filename = f"intervention_{_slug(base.morphology_id)}_{_slug(intervention)}"
+                rows = run_paired_intervention_on_selector(
+                    selector,
+                    model_fn=model_fn,
+                    context=context,
+                    max_samples=max_intervention_samples,
+                    output=output / f"{filename}.jsonl",
+                )
+                intervention_row_sets.extend(rows)
+                _write_summary_artifact(rows, output / f"{filename}.md", artifacts)
+                continue
+            for pair_path in selector_pair_paths:
+                inferred_intervention, morphology_id = infer_pair_metadata(pair_path, default_morphology=base.morphology_id)
+                intervention_model_id = model_id if model_fn is not None else "teacher"
+                context = _replace_context(
+                    base,
+                    suites=DEFAULT_INTERVENTION_SUITES,
+                    model_id=intervention_model_id,
+                    morphology_id=morphology_id,
+                    split="",
+                    condition=f"interventions/{inferred_intervention}",
+                    intervention=inferred_intervention,
+                )
+                filename = f"intervention_{_slug(morphology_id)}_{_slug(inferred_intervention)}"
+                rows = run_paired_intervention_on_npz(
+                    pair_path,
+                    model_fn=model_fn,
+                    context=context,
+                    max_samples=max_intervention_samples,
+                    output=output / f"{filename}.jsonl",
+                )
+                intervention_row_sets.extend(rows)
+                _write_summary_artifact(rows, output / f"{filename}.md", artifacts)
 
     contrast_rows = morphology_contrast_diagnostic_rows(
         intervention_row_sets,
