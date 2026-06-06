@@ -54,11 +54,12 @@ def test_run_v1_benchmark_bundle_writes_manifest_rows_and_summaries(tmp_path):
     assert (output_dir / "manifest.json").exists()
     assert (output_dir / "teacher_qc_val.jsonl").exists()
     assert (output_dir / "teacher_qc_val.md").exists()
+    assert (output_dir / "morphology_routing_qc.jsonl").exists()
     assert (output_dir / "intervention_specimen_488683425_event_dropout.jsonl").exists()
     intervention_rows = [
         json.loads(line)
         for line in (output_dir / "intervention_specimen_488683425_event_dropout.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert all(row["model_id"] == "teacher" for row in intervention_rows)
-    assert len(manifest["artifacts"]) == 2
+    assert len(manifest["artifacts"]) == 3
     assert json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))["artifacts"]

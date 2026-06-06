@@ -267,8 +267,9 @@ def test_cli_runs_v1_benchmark_bundle(tmp_path, capsys):
 
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
-    assert len(payload["artifacts"]) == 2
+    assert len(payload["artifacts"]) == 3
     assert (output_dir / "teacher_qc_val.md").exists()
+    assert (output_dir / "morphology_routing_qc.md").exists()
     assert (output_dir / "intervention_specimen_488683425_event_dropout.md").exists()
 
 

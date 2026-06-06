@@ -11,7 +11,12 @@ from typing import Any
 import numpy as np
 
 from bnn_sim.benchmark.dataset_schema import INTERVENTION_CONDITIONS
-from bnn_sim.benchmark.diagnostic_rows import DiagnosticContext, morphology_contrast_diagnostic_rows, write_diagnostic_rows
+from bnn_sim.benchmark.diagnostic_rows import (
+    DiagnosticContext,
+    morphology_contrast_diagnostic_rows,
+    morphology_routing_qc_rows,
+    write_diagnostic_rows,
+)
 from bnn_sim.benchmark.reports import write_diagnostic_summary
 from bnn_sim.benchmark.runner import (
     run_model_diagnostics_on_selector,
@@ -68,6 +73,12 @@ def run_v1_benchmark_bundle(
         cache_shards=cache_shards,
     )
     _write_summary_artifact(teacher_rows, output / "teacher_qc_val.md", artifacts)
+
+    routing_rows = morphology_routing_qc_rows(
+        context=_replace_context(base, suites=("teacher-qc", "paper-summary"), model_id="teacher")
+    )
+    write_diagnostic_rows(routing_rows, output / "morphology_routing_qc.jsonl")
+    _write_summary_artifact(routing_rows, output / "morphology_routing_qc.md", artifacts)
 
     if model_fn is not None:
         resolved_model_id = model_id or base.model_id

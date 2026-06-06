@@ -405,6 +405,20 @@ def default_diagnostic_specs() -> tuple[DiagnosticSpec, ...]:
             description="Differences and rough uncertainty across all v1 morphologies.",
         ),
         DiagnosticSpec(
+            name="morphology_routing_qc",
+            suites=("teacher-qc", "paper-summary", "full"),
+            selectors=("metadata/morphologies",),
+            plotters=(
+                PlotterSpec(
+                    name="routing_feature_table",
+                    kind="atomic",
+                    consumes=("morphology_routing_qc",),
+                    description="Morphology and routing feature sanity table for v1 teacher validation.",
+                ),
+            ),
+            description="Morphology/routing sanity rows for the selected v1 morphology set.",
+        ),
+        DiagnosticSpec(
             name="intervention_response",
             suites=("teacher-qc", "intervention-response", "paper-summary", "full"),
             selectors=("condition=interventions/<name>",),

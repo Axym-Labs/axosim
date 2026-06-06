@@ -14,6 +14,7 @@ import numpy as np
 from bnn_sim.benchmark.dataset_schema import (
     DIAGNOSTIC_ROW_COLUMNS,
     default_diagnostic_specs,
+    provisional_v1_morphologies,
 )
 from bnn_sim.benchmark.structured_intervention import compute_paired_event_intervention_metrics
 from bnn_sim.benchmark.suite import BenchmarkSuite
@@ -225,6 +226,34 @@ def morphology_contrast_diagnostic_rows(
             row["source_diagnostic"] = diagnostic
             row["source_metric"] = metric
             row["morphology_values"] = morphology_values
+            rows.append(row)
+    return _filter_rows_for_suites(rows, context.suites)
+
+
+def morphology_routing_qc_rows(
+    *,
+    context: DiagnosticContext | None = None,
+) -> list[dict[str, Any]]:
+    """Return teacher-QC rows for provisional v1 morphology/routing sanity."""
+    context = context or DiagnosticContext(suites=("teacher-qc", "paper-summary"), model_id="teacher")
+    rows: list[dict[str, Any]] = []
+    for morphology in provisional_v1_morphologies():
+        row_context = _replace_context(context, morphology_id=f"specimen_{morphology.specimen_id}")
+        for metric, value, unit in (
+            ("extracted_branches", morphology.extracted_branches, "count"),
+            ("routed_branches", morphology.routed_branches, "count"),
+            ("total_length_ratio_vs_reference", morphology.total_length_ratio_vs_reference, "ratio"),
+            ("routed_length_ratio_vs_reference", morphology.routed_length_ratio_vs_reference, "ratio"),
+            ("apical_fraction_delta_vs_reference", morphology.apical_fraction_delta_vs_reference, "fraction"),
+            ("radial_extent_ratio_vs_reference", morphology.radial_extent_ratio_vs_reference, "ratio"),
+            ("routing_shape_match", float(morphology.routing_shape_match), "bool"),
+        ):
+            row = _row("morphology_routing_qc", row_context, metric, value, unit=unit, n=1)
+            row["role"] = morphology.role
+            row["line_name"] = morphology.line_name
+            row["reconstruction_type"] = morphology.reconstruction_type
+            row["swc_path"] = morphology.swc_path
+            row["caveat"] = morphology.caveat
             rows.append(row)
     return _filter_rows_for_suites(rows, context.suites)
 

@@ -13,8 +13,8 @@ Date: 2026-06-06
 
 | run | output dir | artifacts | tracked here |
 | --- | --- | ---: | --- |
-| teacher-only | `artifacts/v1_benchmark_bundle_teacher_pilot_20260606/` | 12 | no, ignored bundle dir |
-| Mamba | `artifacts/v1_benchmark_bundle_mamba_pilot_20260606/` | 13 | no, ignored bundle dir |
+| teacher-only | `artifacts/v1_benchmark_bundle_teacher_pilot_20260606/` | 13 | no, ignored bundle dir |
+| Mamba | `artifacts/v1_benchmark_bundle_mamba_pilot_20260606/` | 14 | no, ignored bundle dir |
 
 The directories contain per-condition `.jsonl` rows, `.md` summaries, and a
 `manifest.json`. This report is the tracked compact validation record.
@@ -26,6 +26,7 @@ Teacher-only bundle:
 | check | result |
 | --- | --- |
 | validation teacher-QC rows | 9 |
+| morphology-routing QC rows | 35 |
 | intervention pairs covered | 10 |
 | v1 morphologies covered | 5 |
 | interventions covered | `event_dropout`, `inh_dropout` |
@@ -38,6 +39,7 @@ Mamba bundle:
 | check | result |
 | --- | --- |
 | validation teacher-QC rows | 7 |
+| morphology-routing QC rows | 35 |
 | validation model rows | 105 |
 | validation trace-core soma RMSE on 2-trace pilot | 0.5805 mV summary mean |
 | validation trace-core spike AUC on 2-trace pilot | 0.9966 |

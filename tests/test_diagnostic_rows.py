@@ -5,6 +5,7 @@ from bnn_sim.benchmark.diagnostic_rows import (
     DiagnosticContext,
     evaluate_model_diagnostic_rows,
     morphology_contrast_diagnostic_rows,
+    morphology_routing_qc_rows,
     paired_intervention_diagnostic_rows,
     teacher_qc_diagnostic_rows,
     validate_diagnostic_rows,
@@ -144,6 +145,18 @@ def test_morphology_contrast_rows_summarize_numeric_rows_across_morphologies():
     assert metrics[key]["n"] == 3
     assert metrics[key]["morphology_id"] == "all_v1"
     assert metrics[key]["morphology_values"] == {"morph-a": 1.0, "morph-b": 3.0, "morph-c": 5.0}
+
+
+def test_morphology_routing_qc_rows_emit_v1_routing_metadata():
+    rows = morphology_routing_qc_rows(
+        context=DiagnosticContext(suites=("teacher-qc", "paper-summary"), model_id="teacher")
+    )
+
+    validate_diagnostic_rows(rows)
+    assert {row["diagnostic"] for row in rows} == {"morphology_routing_qc"}
+    assert {row["morphology_id"] for row in rows} >= {"specimen_488683425", "specimen_488679042"}
+    assert any(row["metric"] == "routing_shape_match" and row["value"] == 1.0 for row in rows)
+    assert all("dendrite-only" in row["caveat"] or row["morphology_id"] == "specimen_488683425" for row in rows)
 
 
 def test_write_diagnostic_rows_supports_dataframe_friendly_formats(tmp_path):
