@@ -199,6 +199,11 @@ def main(argv: list[str] | None = None) -> int:
     benchmark_v1.add_argument("--device", default="cpu")
     benchmark_v1.add_argument("--batch-size", type=int, default=4)
     benchmark_v1.add_argument("--model-id", default="model")
+    benchmark_v1.add_argument("--model-kind", choices=MODEL_KIND_CHOICES, default="baseline")
+    benchmark_v1.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
+    benchmark_v1.add_argument("--input-dim", type=int, default=1278)
+    benchmark_v1.add_argument("--memory-units", type=int, default=30)
+    benchmark_v1.add_argument("--branches", type=int, default=32)
     benchmark_v1.add_argument("--calibrated-spike-threshold", type=float)
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a model with the corrected full-trace metric path")

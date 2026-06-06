@@ -3,6 +3,20 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- VERIFICATION (2026-06-07 01:15): Validated checkpoint-backed
+  `benchmark-v1` model diagnostics on the all-five v1 SWC pilot dataset for
+  three baselines: RNN `rnn_exc0925_80k_best`, Mamba
+  `mamba_exc0925_80k_best`, and Branch-ELM
+  `branch_elm_official_fulltrace_80k_best`. Added model-kind/model-config
+  flags to `benchmark-v1` so official/checkpoint fallback loading is
+  package-facing. All three smokes wrote `9` bundle artifacts including
+  `177` model validation rows and specimen-specific event-dropout reports.
+  Compact report: `artifacts/v1_model_bundle_smoke_20260607.md`. Smoke-scale
+  headline metrics on the short v1 pilot: Mamba soma RMSE `3.119 mV`, RNN
+  `3.165 mV`, Branch-ELM `3.237 mV`; spike AUCs `0.854`, `0.833`, and
+  `0.863`, respectively. These are compatibility/domain-shift smoke numbers,
+  not final model-performance claims.
+
 - IMPLEMENTATION (2026-06-07 01:03): Added package-facing suite profiles to
   `bnn-sim benchmark-v1`: `--suite teacher-qc|paper-summary|full`. The bundle
   now records the selected suite and suite config in `manifest.json`, uses
