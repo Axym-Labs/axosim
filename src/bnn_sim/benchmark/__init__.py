@@ -57,10 +57,14 @@ from bnn_sim.benchmark.diagnostic_rows import (
 )
 from bnn_sim.benchmark.selectors import DatasetSelector, V1DatasetLayout
 from bnn_sim.benchmark.runner import (
+    load_intervention_pair_npz,
     load_selector_batch,
     run_model_diagnostics_on_selector,
+    run_paired_intervention_on_npz,
+    run_paired_intervention_on_selector,
     run_teacher_qc_on_selector,
 )
+from bnn_sim.benchmark.reports import summarize_diagnostic_rows, write_diagnostic_summary
 from bnn_sim.benchmark.suite import BenchmarkSuite
 
 __all__ = [
@@ -104,8 +108,13 @@ __all__ = [
     "write_diagnostic_rows",
     "DatasetSelector",
     "V1DatasetLayout",
+    "load_intervention_pair_npz",
     "load_selector_batch",
     "run_model_diagnostics_on_selector",
+    "run_paired_intervention_on_npz",
+    "run_paired_intervention_on_selector",
     "run_teacher_qc_on_selector",
+    "summarize_diagnostic_rows",
+    "write_diagnostic_summary",
     "BenchmarkSuite",
 ]

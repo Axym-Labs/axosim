@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 
+import numpy as np
 import torch
 
 from bnn_sim.cli import main
@@ -121,6 +122,107 @@ def test_cli_writes_teacher_qc_benchmark_rows(tmp_path, capsys):
     rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
     assert any(row["diagnostic"] == "teacher_distribution_qc" for row in rows)
     assert all(row["morphology_id"] == "unit-morph" for row in rows)
+
+
+def test_cli_writes_model_benchmark_rows(tmp_path, capsys):
+    data_dir = tmp_path / "v1"
+    output = tmp_path / "model_rows.json"
+    summary = tmp_path / "model_summary.md"
+    assert main(["make-demo-data", "--output", str(data_dir / "val"), "--samples", "2", "--time-steps", "8", "--input-dim", "4"]) == 0
+
+    result = main(
+        [
+            "benchmark-rows",
+            "--mode",
+            "model",
+            "--dataset-root",
+            str(data_dir),
+            "--selector",
+            "val",
+            "--output",
+            str(output),
+            "--summary-output",
+            str(summary),
+            "--ignore-start",
+            "0",
+            "--suites",
+            "trace-core,paper-summary",
+            "--model-kind",
+            "baseline",
+            "--input-dim",
+            "4",
+            "--memory-units",
+            "4",
+            "--branches",
+            "2",
+            "--batch-size",
+            "1",
+            "--model-id",
+            "unit-baseline",
+        ]
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["rows"] > 0
+    rows = json.loads(output.read_text(encoding="utf-8"))
+    assert any(row["diagnostic"] == "trace_core" for row in rows)
+    assert all(row["model_id"] == "unit-baseline" for row in rows)
+    assert "Benchmark Diagnostic Summary" in summary.read_text(encoding="utf-8")
+
+
+def test_cli_writes_intervention_benchmark_rows_from_pair_path(tmp_path, capsys):
+    pair_path = tmp_path / "intervention_pair.npz"
+    output = tmp_path / "intervention_rows.jsonl"
+    baseline_inputs = np.zeros((1, 8, 4), dtype=np.int8)
+    intervention_inputs = baseline_inputs.copy()
+    intervention_inputs[:, 2, 0] = 1
+    baseline_targets = np.zeros((1, 8, 2), dtype=np.float32)
+    intervention_targets = baseline_targets.copy()
+    baseline_targets[..., 1] = 1.0
+    intervention_targets[..., 1] = 0.5
+    np.savez_compressed(
+        pair_path,
+        baseline_inputs=baseline_inputs,
+        baseline_targets=baseline_targets,
+        intervention_inputs=intervention_inputs,
+        intervention_targets=intervention_targets,
+        sample_ids=np.asarray(["trace-a"]),
+    )
+
+    result = main(
+        [
+            "benchmark-rows",
+            "--mode",
+            "intervention",
+            "--dataset-root",
+            str(tmp_path / "unused-v1-root"),
+            "--selector",
+            "intervention",
+            "--intervention",
+            "event_dropout",
+            "--pair-path",
+            str(pair_path),
+            "--output",
+            str(output),
+            "--ignore-start",
+            "0",
+            "--suites",
+            "teacher-qc,intervention-response,paper-summary",
+            "--morphology-id",
+            "unit-morph",
+        ]
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["rows"] > 0
+    rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    assert any(row["diagnostic"] == "intervention_response" for row in rows)
+    assert any(row["metric"] == "teacher_direction" for row in rows)
+    assert all(row["morphology_id"] == "unit-morph" for row in rows)
+    assert all(row["condition"] == "interventions/event_dropout" for row in rows)
+    assert all(row["intervention"] == "event_dropout" for row in rows)
 
 
 def test_cli_make_arbor_hetero_data_writes_shards_and_report(tmp_path):

@@ -11,6 +11,7 @@ import numpy as np
 from bnn_sim.benchmark.diagnostic_rows import (
     DiagnosticContext,
     evaluate_model_diagnostic_rows,
+    paired_intervention_diagnostic_rows,
     teacher_qc_diagnostic_rows,
     write_diagnostic_rows,
 )
@@ -34,6 +35,32 @@ def load_selector_batch(
     return inputs, targets, trace_ids
 
 
+def load_intervention_pair_npz(
+    path: str | Path,
+    *,
+    max_samples: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
+    """Load a paired intervention `.npz` artifact into diagnostic arrays."""
+    payload = np.load(Path(path), allow_pickle=True)
+    required = ("baseline_inputs", "baseline_targets", "intervention_inputs", "intervention_targets")
+    missing = [name for name in required if name not in payload.files]
+    if missing:
+        raise ValueError(f"intervention pair file missing arrays: {missing}")
+    baseline_inputs = np.asarray(payload["baseline_inputs"])
+    baseline_targets = np.asarray(payload["baseline_targets"])
+    intervention_inputs = np.asarray(payload["intervention_inputs"])
+    intervention_targets = np.asarray(payload["intervention_targets"])
+    n = baseline_inputs.shape[0] if max_samples is None else min(int(max_samples), baseline_inputs.shape[0])
+    if n <= 0:
+        raise ValueError("intervention pair contains no samples")
+    trace_ids = (
+        [str(item) for item in payload["sample_ids"][:n]]
+        if "sample_ids" in payload.files
+        else [str(index) for index in range(n)]
+    )
+    return baseline_inputs[:n], baseline_targets[:n], intervention_inputs[:n], intervention_targets[:n], trace_ids
+
+
 def run_model_diagnostics_on_selector(
     model_fn: Callable[[np.ndarray], np.ndarray],
     selector: DatasetSelector,
@@ -50,6 +77,55 @@ def run_model_diagnostics_on_selector(
     if output is not None:
         write_diagnostic_rows(rows, output)
     return rows
+
+
+def run_paired_intervention_on_npz(
+    path: str | Path,
+    *,
+    model_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+    context: DiagnosticContext | None = None,
+    max_samples: int | None = None,
+    output: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Run paired teacher/model intervention diagnostics on a pair file."""
+    baseline_inputs, baseline_targets, intervention_inputs, intervention_targets, trace_ids = load_intervention_pair_npz(
+        path,
+        max_samples=max_samples,
+    )
+    rows = paired_intervention_diagnostic_rows(
+        baseline_inputs,
+        baseline_targets,
+        intervention_inputs,
+        intervention_targets,
+        model_fn=model_fn,
+        context=context,
+        trace_ids=trace_ids,
+    )
+    if output is not None:
+        write_diagnostic_rows(rows, output)
+    return rows
+
+
+def run_paired_intervention_on_selector(
+    selector: DatasetSelector,
+    *,
+    model_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+    context: DiagnosticContext | None = None,
+    max_samples: int | None = None,
+    output: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Run paired intervention diagnostics from a v1 intervention selector."""
+    if selector.intervention is None:
+        raise ValueError("paired intervention diagnostics require an intervention selector")
+    pair_path = _resolve_pair_path(selector)
+    context = _context_for_selector(selector, context)
+    return run_paired_intervention_on_npz(
+        pair_path,
+        model_fn=model_fn,
+        context=context,
+        max_samples=max_samples,
+        output=output,
+    )
 
 
 def run_teacher_qc_on_selector(
@@ -78,5 +154,19 @@ def _context_for_selector(selector: DatasetSelector, context: DiagnosticContext 
         "condition": selector.condition,
         "intervention": selector.intervention,
     }
-    data.pop("trace_id", None)
     return DiagnosticContext(**data)
+
+
+def _resolve_pair_path(selector: DatasetSelector) -> Path:
+    candidates = [
+        selector.root / "intervention_pair.npz",
+        selector.root / f"{selector.intervention}_pair.npz",
+        selector.root / "event_dropout_pair.npz",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        "missing intervention pair file; expected one of "
+        + ", ".join(str(candidate) for candidate in candidates)
+    )

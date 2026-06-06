@@ -5,6 +5,7 @@ import numpy as np
 from bnn_sim.benchmark.diagnostic_rows import DiagnosticContext
 from bnn_sim.benchmark.runner import (
     load_selector_batch,
+    run_paired_intervention_on_npz,
     run_model_diagnostics_on_selector,
     run_teacher_qc_on_selector,
 )
@@ -59,3 +60,37 @@ def test_runner_writes_teacher_qc_rows_for_selector(tmp_path):
     assert rows
     assert output.exists()
     assert any(row["diagnostic"] == "teacher_distribution_qc" for row in rows)
+
+
+def test_runner_writes_paired_intervention_rows_from_npz(tmp_path):
+    pair_path = tmp_path / "intervention_pair.npz"
+    baseline_inputs = np.zeros((2, 8, 4), dtype=np.int8)
+    intervention_inputs = baseline_inputs.copy()
+    intervention_inputs[:, 2, 0] = 1
+    baseline_targets = np.zeros((2, 8, 2), dtype=np.float32)
+    intervention_targets = baseline_targets.copy()
+    baseline_targets[..., 1] = 1.0
+    intervention_targets[..., 1] = 0.5
+    np.savez_compressed(
+        pair_path,
+        baseline_inputs=baseline_inputs,
+        baseline_targets=baseline_targets,
+        intervention_inputs=intervention_inputs,
+        intervention_targets=intervention_targets,
+        sample_ids=np.asarray(["trace-a", "trace-b"]),
+    )
+
+    rows = run_paired_intervention_on_npz(
+        pair_path,
+        context=DiagnosticContext(
+            suites=("teacher-qc", "intervention-response", "paper-summary"),
+            condition="interventions/event_dropout",
+            intervention="event_dropout",
+            ignore_start=0,
+        ),
+        output=tmp_path / "intervention_rows.json",
+    )
+
+    assert any(row["diagnostic"] == "intervention_response" for row in rows)
+    assert any(row["metric"] == "teacher_direction" for row in rows)
+    assert all(row["condition"] == "interventions/event_dropout" for row in rows)

@@ -3,6 +3,42 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 22:08): Advanced the v1 benchmark completion
+  block from schema/teacher-QC rows to package-facing model, intervention,
+  and report outputs. `bnn-sim benchmark-rows` now supports
+  `--mode model` for checkpoint-backed row export and `--mode intervention`
+  for paired intervention `.npz` artifacts or future v1 intervention
+  selectors. Added `src/bnn_sim/benchmark/reports.py` so the same tidy rows
+  can produce compact Markdown/JSON summaries with diagnostics, suites,
+  models, morphologies, conditions, trace IDs, numeric metric summaries, and
+  label counts. Fixed row metadata so pair-path intervention artifacts retain
+  `condition=interventions/<name>` and `intervention=<name>`, not the default
+  validation label. Real validation artifacts written:
+  `artifacts/teacher_qc_rows_val16_exc0925_20260606.{jsonl,md}`,
+  `artifacts/model_rows_rnn_exc0925_val2_20260606.{jsonl,md}`,
+  `artifacts/model_rows_mamba_exc0925_val2_20260606.{jsonl,md}`,
+  `artifacts/model_rows_branch_elm_neuronio80k_on_hay_val2_20260606.{jsonl,md}`,
+  `artifacts/intervention_rows_v1_specimen488683425_event_dropout_20260606.{jsonl,md}`,
+  and
+  `artifacts/intervention_rows_mamba_exc0925_specimen488683425_event_dropout_20260606.{jsonl,md}`.
+  Validation: `.venv` full test suite passed
+  (`PYTHONPATH=src .venv/bin/python -m pytest -q`: `108` passed, `1`
+  skipped), focused row/report tests passed (`31` tests), `py_compile`
+  passed for touched benchmark/CLI modules, and `git diff --check` passed.
+  Important environment note: official Mamba checkpoint row validation still
+  requires `.venv-mamba` because `.venv` lacks `mamba_ssm`; `.venv-mamba`
+  reports Torch `2.7.1+cu128`, RTX 5090 CUDA availability, and
+  `mamba_ssm 2.3.2.post1`.
+
+- DECISION (2026-06-06 22:08): The benchmark is not fully done in the
+  publication/package sense, but it is now past the narrow schema scaffold.
+  Remaining benchmark-first work before full dataset generation/BSSM/noise:
+  one promoted default command or script that runs the intended `val` +
+  `interventions/*` suite bundle, broader real pilot coverage over all `N=5`
+  morphologies and the selected intervention set, and the later plot-quality
+  pass once numeric semantics are stable. Full v1 dataset generation remains
+  gated on a faster measured generation path, as requested.
+
 - IMPLEMENTATION (2026-06-06 21:18): Added v1 benchmark selector and runner
   glue. `V1DatasetLayout` resolves default `val/` and top-level
   `interventions/<name>/` selectors, validates minimal v1 dataset layout, and

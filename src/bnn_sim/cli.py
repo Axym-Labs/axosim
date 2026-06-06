@@ -49,7 +49,12 @@ from bnn_sim.benchmark.dataset_schema import (
     build_v1_dataset_manifest_template,
 )
 from bnn_sim.benchmark.diagnostic_rows import DiagnosticContext
-from bnn_sim.benchmark.runner import run_teacher_qc_on_selector
+from bnn_sim.benchmark.runner import (
+    run_paired_intervention_on_npz,
+    run_paired_intervention_on_selector,
+    run_teacher_qc_on_selector,
+)
+from bnn_sim.benchmark.reports import write_diagnostic_summary
 from bnn_sim.benchmark.selectors import V1DatasetLayout
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.neuronio_raw import convert_neuronio_pickles
@@ -145,11 +150,13 @@ def main(argv: list[str] | None = None) -> int:
         "benchmark-rows",
         help="write dataframe-first v1 benchmark diagnostic rows",
     )
-    benchmark_rows.add_argument("--mode", choices=["teacher-qc"], default="teacher-qc")
+    benchmark_rows.add_argument("--mode", choices=["teacher-qc", "model", "intervention"], default="teacher-qc")
     benchmark_rows.add_argument("--dataset-root", required=True)
     benchmark_rows.add_argument("--selector", choices=["val", "intervention"], default="val")
     benchmark_rows.add_argument("--intervention", default="event_dropout")
+    benchmark_rows.add_argument("--pair-path", help="paired intervention .npz path, for pilot artifacts outside a v1 layout")
     benchmark_rows.add_argument("--output", required=True)
+    benchmark_rows.add_argument("--summary-output", help="optional compact benchmark summary path (.md or .json)")
     benchmark_rows.add_argument("--suites", default="teacher-qc")
     benchmark_rows.add_argument("--morphology-id", default="unknown")
     benchmark_rows.add_argument("--teacher-id", default="teacher")
@@ -158,6 +165,17 @@ def main(argv: list[str] | None = None) -> int:
     benchmark_rows.add_argument("--ignore-start", type=int, default=500)
     benchmark_rows.add_argument("--soma-scale", type=float, default=0.1)
     benchmark_rows.add_argument("--soma-bias-mv", type=float, default=-67.7)
+    benchmark_rows.add_argument("--input-dim", type=int, default=1278)
+    benchmark_rows.add_argument("--memory-units", type=int, default=30)
+    benchmark_rows.add_argument("--branches", type=int, default=32)
+    benchmark_rows.add_argument("--model-kind", choices=MODEL_KIND_CHOICES, default="baseline")
+    benchmark_rows.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
+    benchmark_rows.add_argument("--checkpoint")
+    benchmark_rows.add_argument("--device", default="cpu")
+    benchmark_rows.add_argument("--batch-size", type=int, default=4)
+    benchmark_rows.add_argument("--model-id", default="model")
+    benchmark_rows.add_argument("--calibrated-spike-threshold", type=float)
+    benchmark_rows.add_argument("--compare-model", action="store_true", help="include model response rows for intervention mode")
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a model with the corrected full-trace metric path")
     evaluate.add_argument("--preset", choices=sorted(list_presets()["evaluate"]))
@@ -353,23 +371,72 @@ def main(argv: list[str] | None = None) -> int:
             )
             context = DiagnosticContext(
                 suites=tuple(item.strip() for item in args.suites.split(",") if item.strip()),
-                model_id="teacher",
+                model_id="teacher" if args.mode == "teacher-qc" else args.model_id,
                 teacher_id=args.teacher_id,
                 morphology_id=args.morphology_id,
+                split=selector.split or "",
+                condition=selector.condition,
+                intervention=selector.intervention,
                 ignore_start=args.ignore_start,
                 soma_scale=args.soma_scale,
                 soma_bias_mv=args.soma_bias_mv,
+                calibrated_spike_threshold=args.calibrated_spike_threshold,
             )
-            rows = run_teacher_qc_on_selector(
-                selector,
-                context=context,
-                max_samples=args.max_samples,
-                output=args.output,
-                cache_shards=args.cache_shards,
-            )
+            model_fn = None
+            if args.mode in {"model", "intervention"} and (
+                args.mode == "model" or args.compare_model or args.checkpoint
+            ):
+                if args.checkpoint:
+                    model = _load_checkpoint_for_evaluate(args)
+                else:
+                    model = _build_model_from_args(args)
+                model_fn = _numpy_model_predict_fn(model, device=args.device, batch_size=args.batch_size)
+
+            if args.mode == "teacher-qc":
+                rows = run_teacher_qc_on_selector(
+                    selector,
+                    context=context,
+                    max_samples=args.max_samples,
+                    output=args.output,
+                    cache_shards=args.cache_shards,
+                )
+            elif args.mode == "model":
+                from bnn_sim.benchmark.runner import run_model_diagnostics_on_selector
+
+                rows = run_model_diagnostics_on_selector(
+                    model_fn,
+                    selector,
+                    context=context,
+                    max_samples=args.max_samples,
+                    output=args.output,
+                    cache_shards=args.cache_shards,
+                )
+            else:
+                if args.pair_path:
+                    rows = run_paired_intervention_on_npz(
+                        args.pair_path,
+                        model_fn=model_fn,
+                        context=context,
+                        max_samples=args.max_samples,
+                        output=args.output,
+                    )
+                else:
+                    rows = run_paired_intervention_on_selector(
+                        selector,
+                        model_fn=model_fn,
+                        context=context,
+                        max_samples=args.max_samples,
+                        output=args.output,
+                    )
         except (FileNotFoundError, ValueError) as error:
             print(str(error))
             return 2
+        if args.summary_output:
+            try:
+                write_diagnostic_summary(rows, args.summary_output)
+            except ValueError as error:
+                print(str(error))
+                return 2
         print(json.dumps({"rows": len(rows), "output": args.output}, indent=2, sort_keys=True))
         return 0
 
@@ -776,6 +843,22 @@ def _load_checkpoint_for_evaluate(args):
         state_dict = load_official_state_dict(args.checkpoint, map_location=args.device)
         model.load_state_dict(state_dict, strict=True)
         return model
+
+
+def _numpy_model_predict_fn(model, *, device: str, batch_size: int):
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    model = model.to(device).eval()
+
+    def predict(inputs: np.ndarray) -> np.ndarray:
+        outputs = []
+        with torch.inference_mode():
+            for start in range(0, inputs.shape[0], batch_size):
+                batch = torch.as_tensor(inputs[start : start + batch_size], dtype=torch.float32, device=device)
+                outputs.append(model(batch).detach().cpu().numpy())
+        return np.concatenate(outputs, axis=0).astype(np.float32, copy=False)
+
+    return predict
 
 
 def _apply_arbor_data_config(args, explicit_dests: set[str]) -> None:

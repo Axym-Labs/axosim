@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,7 @@ class DiagnosticContext:
     split: str = "val"
     condition: str = "val"
     intervention: str | None = None
+    trace_id: str | None = None
     target_view: str = "neuronio_clipped_normalized"
     soma_scale: float = 0.1
     soma_bias_mv: float = DEFAULT_Y_TRAIN_SOMA_BIAS
@@ -399,7 +400,7 @@ def _row(
         "split": context.split,
         "condition": context.condition,
         "intervention": context.intervention,
-        "trace_id": getattr(context, "trace_id", None),
+        "trace_id": context.trace_id,
         "state": state,
         "metric": metric,
         "value": _json_scalar(value),
@@ -412,15 +413,11 @@ def _row(
 
 
 def _replace_context_trace(context: DiagnosticContext, trace_id: str) -> DiagnosticContext:
-    data = context.__dict__.copy()
-    out = DiagnosticContext(**data)
-    object.__setattr__(out, "trace_id", trace_id)
-    return out
+    return replace(context, trace_id=trace_id)
 
 
 def _replace_context_condition(context: DiagnosticContext, condition: str) -> DiagnosticContext:
-    data = {**context.__dict__, "condition": condition}
-    return DiagnosticContext(**data)
+    return replace(context, condition=condition)
 
 
 def _as_trace_array(array: np.ndarray) -> np.ndarray:
