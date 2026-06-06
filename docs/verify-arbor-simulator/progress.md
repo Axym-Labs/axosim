@@ -3,6 +3,21 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- VERIFICATION (2026-06-07 00:53): Ran the validated v1 SWC CPU
+  CoreNEURON batched route over all `N=5` provisional morphologies with
+  `4` validation traces per morphology and `2` paired event-dropout examples
+  per morphology at `1000 ms`. Command used the durable NEURON `9.0.1`
+  runtime, the durable SWC mechanism root, `--backend coreneuron`,
+  `--parallelism 4`, and `--samples-per-shard 4`. Generation finished in
+  `34.06 s` for `30` semantic units across `10` worker tasks. The
+  `benchmark-v1` bundle then completed on the generated dataset, writing
+  `teacher_qc_val` (`50` rows), `morphology_routing_qc` (`35` rows), five
+  specimen-specific `event_dropout` intervention reports (`8` rows each),
+  and `morphology_contrast_interventions` (`35` rows). Artifact root:
+  `artifacts/v1_swc_cpu_core_batched_smoke_20260607/`. This validates that
+  the current non-GPU v1 generation path feeds the benchmark correctly while
+  SWC GPU remains unresolved.
+
 - IMPLEMENTATION (2026-06-07 00:42): Rebuilt the simulator generation path
   around a durable NEURON `9.0.1` + CoreNEURON GPU runtime instead of the
   stale `/tmp` GPU build. Durable prefix:
