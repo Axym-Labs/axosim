@@ -218,31 +218,71 @@ class BenchmarkSuite:
         comparison = {
             "models": list(model_results.keys()),
             "m1_fidelity": {},
+            "m1b_feature_fidelity": {},
+            "state_conditioned_fidelity": {},
             "m2_regime_summary": {},
+            "m4_intervention": {},
             "m4_stability": {},
         }
 
         for name, results in model_results.items():
-            m1 = results.get("m1_open_loop_fidelity", {})
+            m1 = results.get("m1_trace_fidelity", {})
+            if not m1:
+                legacy_m1 = results.get("m1_open_loop_fidelity", {})
+                m1 = {
+                    "soma_rmse_mv": legacy_m1.get("rmse_mv"),
+                    "spike_auc": legacy_m1.get("auc"),
+                }
             comparison["m1_fidelity"][name] = {
-                "rmse_mv": m1.get("rmse_mv"),
-                "auc": m1.get("auc"),
+                "soma_rmse_mv": m1.get("soma_rmse_mv"),
+                "soma_mae_mv": m1.get("soma_mae_mv"),
+                "state_weighted_trace_distance_mv": m1.get("state_weighted_trace_distance_mv"),
+                "dynamic_distance": m1.get("dynamic_distance"),
+                "spike_auc": m1.get("spike_auc"),
+                "spike_brier": m1.get("spike_brier"),
+                "spike_count_mae_per_trace": m1.get("spike_count_mae_per_trace"),
+                "calibrated_spike_count_mae_per_trace": (
+                    m1.get("spike_calibrated_threshold", {}).get("count_mae_per_trace")
+                    if isinstance(m1.get("spike_calibrated_threshold"), dict)
+                    else None
+                ),
             }
 
-            m2 = results.get("m2_regime_stratified", {})
+            m1b = results.get("m1b_feature_fidelity", {})
+            feature_block = (
+                m1b.get("calibrated_threshold", {}).get("features")
+                or m1b.get("features")
+                or {}
+            )
+            comparison["m1b_feature_fidelity"][name] = {
+                "spike_count_mae": _feature_mae(feature_block, "spike_count"),
+                "firing_rate_mae_per_1000_steps": _feature_mae(feature_block, "firing_rate_per_1000_steps"),
+                "peak_voltage_mae_mv": _feature_mae(feature_block, "peak_voltage_mv"),
+                "trough_voltage_mae_mv": _feature_mae(feature_block, "trough_voltage_mv"),
+                "non_spiking_mae": _feature_mae(feature_block, "non_spiking"),
+            }
+
+            state_metrics = results.get("state_conditioned_fidelity", {})
+            comparison["state_conditioned_fidelity"][name] = {
+                "state_weighted_trace_distance_mv": state_metrics.get("state_weighted_trace_distance_mv"),
+                "dynamic_distance": state_metrics.get("dynamic_distance"),
+                "dynamic_distance_components": state_metrics.get("dynamic_distance_components"),
+                "spike_timing_f1_at_2steps": state_metrics.get("spike_timing", {}).get("f1_at_2steps"),
+                "spike_count_mae_per_trace": state_metrics.get("spike_count_mae_per_trace"),
+                "per_state_voltage_rmse_mv": _state_metric_map(state_metrics, "voltage_rmse_mv"),
+                "per_state_fraction": _state_metric_map(state_metrics, "fraction"),
+            }
+
+            m2 = results.get("m2_regimes") or results.get("m2_regime_stratified", {})
             comparison["m2_regime_summary"][name] = {
-                "near_spike_rmse": next(
-                    (r["rmse"] for r in m2.get("spike_proximity", [])
-                     if r.get("regime_label") == "near_spike"),
-                    None
-                ),
-                "high_dvdt_rmse": next(
-                    (r["rmse"] for r in m2.get("slope_regime", [])
-                     if r.get("regime_label") == "spike_rise"),
-                    None
-                ),
+                "near_spike_rmse": _regime_rmse(m2, "spike_proximity", "near_spike"),
+                "far_from_spike_rmse": _regime_rmse(m2, "spike_proximity", "far_from_spike"),
+                "post_spike_refractory_rmse": _regime_rmse(m2, "mvp_regimes", "post_spike_refractory"),
+                "post_input_event_rmse": _regime_rmse(m2, "mvp_regimes", "post_input_event"),
+                "high_dvdt_rmse": _regime_rmse(m2, "slope_regime", "spike_rise"),
             }
 
+            comparison["m4_intervention"][name] = _m4_intervention_summary(results.get("m4_intervention", {}))
             m4 = results.get("m4_perturbation_stability", {})
             sc = m4.get("stability_coefficient", {})
             comparison["m4_stability"][name] = {
@@ -251,6 +291,50 @@ class BenchmarkSuite:
             }
 
         return comparison
+
+
+def _feature_mae(features: dict[str, Any], name: str) -> float | None:
+    row = features.get(name)
+    return row.get("mean_abs_error") if isinstance(row, dict) else None
+
+
+def _state_metric_map(state_metrics: dict[str, Any], field: str) -> dict[str, Any]:
+    return {
+        row["state"]: row.get(field)
+        for row in state_metrics.get("states", [])
+        if isinstance(row, dict) and "state" in row
+    }
+
+
+def _regime_rmse(m2: dict[str, Any], section: str, label: str) -> float | None:
+    return next(
+        (
+            row.get("rmse")
+            for row in m2.get(section, [])
+            if row.get("regime_label") == label
+        ),
+        None,
+    )
+
+
+def _m4_intervention_summary(m4: dict[str, Any]) -> dict[str, Any]:
+    teacher = m4.get("teacher_response", {}) if isinstance(m4, dict) else {}
+    model = m4.get("model_response", {}) if isinstance(m4, dict) else {}
+    direction = model.get("direction_agreement", {}) if isinstance(model, dict) else {}
+    return {
+        "status": m4.get("status") if isinstance(m4, dict) else None,
+        "intervention_name": m4.get("intervention_name") if isinstance(m4, dict) else None,
+        "teacher_response_detected": teacher.get("response_detected"),
+        "teacher_direction": teacher.get("teacher_direction"),
+        "teacher_delta_soma_mean_mv": teacher.get("delta_soma_mean_mv"),
+        "teacher_delta_spike_rate_per_1000_steps": teacher.get("delta_spike_rate_per_1000_steps"),
+        "soma_delta_rmse_mv": model.get("soma_delta_rmse_mv") if isinstance(model, dict) else None,
+        "spike_count_delta_mae_per_trace": (
+            model.get("spike_count_delta_mae_per_trace") if isinstance(model, dict) else None
+        ),
+        "soma_direction_agreement": direction.get("soma_mean"),
+        "spike_direction_agreement": direction.get("spike_count"),
+    }
 
 
 def _apply_time_mask(array: np.ndarray, ignore_start: int) -> np.ndarray:

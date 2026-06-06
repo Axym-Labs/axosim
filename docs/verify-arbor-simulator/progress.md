@@ -3,6 +3,19 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 12:06): Updated `BenchmarkSuite.compare_models`
+  from the stale MVP/legacy comparator to a publishable-schema comparator.
+  It now summarizes current `m1_trace_fidelity` fields (`soma_rmse_mv`,
+  `soma_mae_mv`, state-weighted trace distance, dynamic distance,
+  spike AUC/Brier, raw and calibrated spike-count MAE), lightweight M1b feature
+  MAEs, state-conditioned per-state RMSE/support fractions, repaired M2 regime
+  RMSEs, and paired structured-M4 teacher/model delta summaries. Legacy
+  Gaussian perturbation stability remains as a debug-only compatibility block.
+  Added a regression test so model comparison cannot silently collapse back to
+  global RMSE/AUC. Verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_suite.py tests/test_cli.py -q`
+  passed (`27` tests); py_compile passed for `suite.py`.
+
 - MILESTONE (2026-06-06 12:04): Hardened the M3 morphology-transfer scaffold
   into an explicit morphology/routing compatibility diagnostic rather than a
   bare branch-count placeholder. Fixed SWC branch extraction so soma-started

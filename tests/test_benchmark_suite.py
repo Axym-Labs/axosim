@@ -401,3 +401,65 @@ def test_benchmark_suite_accepts_paired_m4_intervention():
     assert report["m4_intervention"]["kind"] == "paired_event_intervention"
     assert report["m4_intervention"]["model_response"]["soma_delta_rmse_mv"] == 0.0
     assert "M4 structured intervention results are limited to the supplied paired traces and should be expanded before robustness claims." in report["limitations"]
+
+
+def test_compare_models_uses_publishable_metric_schema():
+    inputs = np.zeros((1, 8, 4), dtype=np.float32)
+    targets = np.zeros((1, 8, 2), dtype=np.float32)
+    targets[..., 1] = 1.0
+    targets[0, 4, 0] = 1.0
+    baseline_inputs = inputs.copy()
+    intervention_inputs = inputs.copy()
+    intervention_inputs[:, 2:, 0] = 1.0
+    baseline_targets = targets.copy()
+    intervention_targets = targets.copy()
+    intervention_targets[..., 1] = 0.5
+
+    def perfect_model(x):
+        if np.count_nonzero(x) > 0:
+            return intervention_targets.copy()
+        return baseline_targets.copy()
+
+    def offset_model(x):
+        out = perfect_model(x)
+        out[..., 1] += 0.25
+        return out
+
+    suite = BenchmarkSuite()
+    paired = {
+        "baseline_inputs": baseline_inputs,
+        "baseline_targets": baseline_targets,
+        "intervention_inputs": intervention_inputs,
+        "intervention_targets": intervention_targets,
+        "intervention_name": "unit_compare",
+    }
+    reports = {
+        "perfect": suite.evaluate_model(
+            perfect_model,
+            baseline_inputs,
+            baseline_targets,
+            soma_scale=1.0,
+            ignore_start=0,
+            run_perturbation=False,
+            m4_paired_intervention=paired,
+        ),
+        "offset": suite.evaluate_model(
+            offset_model,
+            baseline_inputs,
+            baseline_targets,
+            soma_scale=1.0,
+            ignore_start=0,
+            run_perturbation=False,
+            m4_paired_intervention=paired,
+        ),
+    }
+
+    comparison = suite.compare_models(reports)
+
+    assert comparison["m1_fidelity"]["perfect"]["soma_rmse_mv"] == 0.0
+    assert comparison["m1_fidelity"]["offset"]["soma_rmse_mv"] > 0.0
+    assert "dynamic_distance" in comparison["state_conditioned_fidelity"]["perfect"]
+    assert "spiking" in comparison["state_conditioned_fidelity"]["perfect"]["per_state_voltage_rmse_mv"]
+    assert comparison["m1b_feature_fidelity"]["perfect"]["spike_count_mae"] == 0.0
+    assert comparison["m4_intervention"]["perfect"]["status"] == "model_compared"
+    assert comparison["m4_intervention"]["perfect"]["soma_delta_rmse_mv"] == 0.0
