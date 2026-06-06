@@ -3,6 +3,27 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 22:35): Added the promoted package-facing
+  `bnn-sim benchmark-v1` bundle command and reusable
+  `run_v1_benchmark_bundle` helper. The bundle writes validation teacher-QC
+  rows, optional validation model rows, paired intervention rows, per-artifact
+  Markdown summaries, and a `manifest.json`; it supports existing pilot pair
+  files through `--intervention-pair-glob` and future v1 intervention
+  selectors when the dataset layout exists. Validation on real pilot data:
+  teacher-only bundle covered all `10` v1 pilot morphology/intervention pairs
+  (`5` morphologies x `event_dropout`/`inh_dropout`) and wrote `11`
+  artifacts; Mamba bundle via `.venv-mamba` wrote validation model rows plus
+  all `10` intervention pairs. Tracked compact report:
+  `artifacts/v1_benchmark_bundle_validation_20260606.md`. Sanity signal:
+  teacher directions were correct for all `10/10` pairs; Mamba preserved soma
+  direction for all `10/10`, preserved spike direction for inhibitory dropout
+  `5/5`, and missed spike direction for event dropout `0/5` in the tiny
+  two-trace-per-pair smoke, so spike-delta intervention behavior remains a
+  real benchmark target rather than a solved property. Focused verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest tests/test_benchmark_bundle.py
+  tests/test_cli.py tests/test_benchmark_runner.py tests/test_benchmark_reports.py -q`
+  passed (`30` tests); `py_compile` and `git diff --check` passed.
+
 - IMPLEMENTATION (2026-06-06 22:08): Advanced the v1 benchmark completion
   block from schema/teacher-QC rows to package-facing model, intervention,
   and report outputs. `bnn-sim benchmark-rows` now supports

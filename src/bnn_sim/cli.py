@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import sys
 import time
@@ -49,6 +50,7 @@ from bnn_sim.benchmark.dataset_schema import (
     build_v1_dataset_manifest_template,
 )
 from bnn_sim.benchmark.diagnostic_rows import DiagnosticContext
+from bnn_sim.benchmark.bundle import run_v1_benchmark_bundle
 from bnn_sim.benchmark.runner import (
     run_paired_intervention_on_npz,
     run_paired_intervention_on_selector,
@@ -176,6 +178,27 @@ def main(argv: list[str] | None = None) -> int:
     benchmark_rows.add_argument("--model-id", default="model")
     benchmark_rows.add_argument("--calibrated-spike-threshold", type=float)
     benchmark_rows.add_argument("--compare-model", action="store_true", help="include model response rows for intervention mode")
+
+    benchmark_v1 = subparsers.add_parser(
+        "benchmark-v1",
+        help="run the promoted v1 benchmark bundle on val plus paired interventions",
+    )
+    benchmark_v1.add_argument("--dataset-root", required=True)
+    benchmark_v1.add_argument("--output-dir", required=True)
+    benchmark_v1.add_argument("--intervention-pair-glob", action="append", default=[])
+    benchmark_v1.add_argument("--morphology-id", default="unknown")
+    benchmark_v1.add_argument("--teacher-id", default="teacher")
+    benchmark_v1.add_argument("--max-val-samples", type=int)
+    benchmark_v1.add_argument("--max-intervention-samples", type=int)
+    benchmark_v1.add_argument("--cache-shards", type=int, default=1)
+    benchmark_v1.add_argument("--ignore-start", type=int, default=500)
+    benchmark_v1.add_argument("--soma-scale", type=float, default=0.1)
+    benchmark_v1.add_argument("--soma-bias-mv", type=float, default=-67.7)
+    benchmark_v1.add_argument("--checkpoint")
+    benchmark_v1.add_argument("--device", default="cpu")
+    benchmark_v1.add_argument("--batch-size", type=int, default=4)
+    benchmark_v1.add_argument("--model-id", default="model")
+    benchmark_v1.add_argument("--calibrated-spike-threshold", type=float)
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a model with the corrected full-trace metric path")
     evaluate.add_argument("--preset", choices=sorted(list_presets()["evaluate"]))
@@ -438,6 +461,38 @@ def main(argv: list[str] | None = None) -> int:
                 print(str(error))
                 return 2
         print(json.dumps({"rows": len(rows), "output": args.output}, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "benchmark-v1":
+        try:
+            model_fn = None
+            if args.checkpoint:
+                model = _load_checkpoint_for_evaluate(args)
+                model_fn = _numpy_model_predict_fn(model, device=args.device, batch_size=args.batch_size)
+            pair_paths = _expand_globs(args.intervention_pair_glob)
+            manifest = run_v1_benchmark_bundle(
+                dataset_root=args.dataset_root,
+                output_dir=args.output_dir,
+                base_context=DiagnosticContext(
+                    model_id=args.model_id,
+                    teacher_id=args.teacher_id,
+                    morphology_id=args.morphology_id,
+                    ignore_start=args.ignore_start,
+                    soma_scale=args.soma_scale,
+                    soma_bias_mv=args.soma_bias_mv,
+                    calibrated_spike_threshold=args.calibrated_spike_threshold,
+                ),
+                model_fn=model_fn,
+                model_id=args.model_id if model_fn is not None else None,
+                intervention_pair_paths=pair_paths,
+                max_val_samples=args.max_val_samples,
+                max_intervention_samples=args.max_intervention_samples,
+                cache_shards=args.cache_shards,
+            )
+        except (FileNotFoundError, ValueError) as error:
+            print(str(error))
+            return 2
+        print(json.dumps(manifest, indent=2, sort_keys=True))
         return 0
 
     if args.command == "make-demo-data":
@@ -859,6 +914,16 @@ def _numpy_model_predict_fn(model, *, device: str, batch_size: int):
         return np.concatenate(outputs, axis=0).astype(np.float32, copy=False)
 
     return predict
+
+
+def _expand_globs(patterns: list[str]) -> list[Path]:
+    paths: list[Path] = []
+    for pattern in patterns:
+        matches = sorted(glob.glob(pattern))
+        if not matches:
+            raise FileNotFoundError(f"intervention pair glob matched no files: {pattern}")
+        paths.extend(Path(match) for match in matches)
+    return paths
 
 
 def _apply_arbor_data_config(args, explicit_dests: set[str]) -> None:

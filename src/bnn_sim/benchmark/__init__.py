@@ -65,6 +65,7 @@ from bnn_sim.benchmark.runner import (
     run_teacher_qc_on_selector,
 )
 from bnn_sim.benchmark.reports import summarize_diagnostic_rows, write_diagnostic_summary
+from bnn_sim.benchmark.bundle import run_v1_benchmark_bundle, infer_pair_metadata
 from bnn_sim.benchmark.suite import BenchmarkSuite
 
 __all__ = [
@@ -116,5 +117,7 @@ __all__ = [
     "run_teacher_qc_on_selector",
     "summarize_diagnostic_rows",
     "write_diagnostic_summary",
+    "run_v1_benchmark_bundle",
+    "infer_pair_metadata",
     "BenchmarkSuite",
 ]

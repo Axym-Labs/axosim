@@ -225,6 +225,53 @@ def test_cli_writes_intervention_benchmark_rows_from_pair_path(tmp_path, capsys)
     assert all(row["intervention"] == "event_dropout" for row in rows)
 
 
+def test_cli_runs_v1_benchmark_bundle(tmp_path, capsys):
+    data_dir = tmp_path / "v1"
+    output_dir = tmp_path / "bundle"
+    pair_dir = tmp_path / "pilot" / "specimen_488683425_event_dropout_simbase8"
+    pair_path = pair_dir / "intervention_pair.npz"
+    assert main(["make-demo-data", "--output", str(data_dir / "val"), "--samples", "1", "--time-steps", "8", "--input-dim", "4"]) == 0
+    pair_dir.mkdir(parents=True)
+    baseline_inputs = np.zeros((1, 8, 4), dtype=np.int8)
+    intervention_inputs = baseline_inputs.copy()
+    intervention_inputs[:, 2, 0] = 1
+    baseline_targets = np.zeros((1, 8, 2), dtype=np.float32)
+    intervention_targets = baseline_targets.copy()
+    intervention_targets[..., 1] = 0.5
+    np.savez_compressed(
+        pair_path,
+        baseline_inputs=baseline_inputs,
+        baseline_targets=baseline_targets,
+        intervention_inputs=intervention_inputs,
+        intervention_targets=intervention_targets,
+        sample_ids=np.asarray(["trace-a"]),
+    )
+
+    result = main(
+        [
+            "benchmark-v1",
+            "--dataset-root",
+            str(data_dir),
+            "--output-dir",
+            str(output_dir),
+            "--intervention-pair-glob",
+            str(tmp_path / "pilot" / "*" / "intervention_pair.npz"),
+            "--max-val-samples",
+            "1",
+            "--max-intervention-samples",
+            "1",
+            "--ignore-start",
+            "0",
+        ]
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload["artifacts"]) == 2
+    assert (output_dir / "teacher_qc_val.md").exists()
+    assert (output_dir / "intervention_specimen_488683425_event_dropout.md").exists()
+
+
 def test_cli_make_arbor_hetero_data_writes_shards_and_report(tmp_path):
     data_dir = tmp_path / "arbor-hetero"
     report_path = tmp_path / "report.json"
