@@ -3,6 +3,25 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- EXPERIMENT (2026-06-06 12:16): Found a much stronger M3 path than the two
+  old local L2/3 SWCs. Queried the official Allen Cell Types API for all
+  reconstructed mouse layer-5 spiny cells and downloaded/ranked `71` local SWC
+  reconstructions under ignored `data/morphologies/allen_mouse_l5_spiny/`.
+  Added reproducible acquisition/ranking script:
+  `artifacts/rank_allen_l5_m3_candidates.py`. The bundled
+  `src/bnn_sim/assets/allen_l5_template.swc` is byte-identical to Allen
+  specimen `488683425` (`Rbp4-Cre_KL100`), so that specimen must be excluded
+  from transfer. All matching Allen mouse L5 spiny reconstructions are marked
+  `dendrite-only`, so this is not a full-cell morphology-transfer claim, but
+  it is defensible for an M3a dendritic-routing feasibility benchmark. Top
+  held-out candidates after excluding the source specimen include
+  `487664663` (`Rbp4-Cre_KL100`; length ratio `0.930`, routed length `0.946`,
+  apical delta `0.053`, radial ratio `1.022`, route shape match true),
+  `515249852` (`Rbp4-Cre_KL100`; `1.019`, `0.931`, `0.106`, `0.983`), and
+  `479770916` (`Rorb-IRES2-Cre`; `1.116`, `1.037`, `-0.029`, `0.930`).
+  Tracked summary: `artifacts/allen_l5_m3_candidates_20260606.md`. Full
+  ranked JSON and downloaded SWCs remain ignored/regenerable.
+
 - VERIFICATION (2026-06-06 12:07): Ran the new publishable-schema comparator
   on the real current CoreNEURON/Hay `16`-trace reports. It reproduces the
   expected model-decision split: `rnn_exc0925_80k` remains best on voltage and
