@@ -3,6 +3,22 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- MILESTONE (2026-06-06 14:17): Promoted M4 from a set of separate pair
+  evaluations to a summarized structured behavior battery. Added explicit
+  soma/spike delta gain to `compute_paired_event_intervention_metrics`, plus
+  reusable evaluator `artifacts/evaluate_m4_model_suite.py`. Ran the full
+  source CoreNEURON/Hay M4 battery over `event_dropout`, `exc_dropout`,
+  `inh_dropout`, `temporal_jitter`, and `site_silence` on the three current
+  `80k` checkpoints. Aggregate results: all models preserve soma direction on
+  all interventions; `mamba_exc0925_80k` preserves spike direction on all
+  interventions and has best mean spike-delta MAE (`4.3375`) and spike gain
+  error (`0.6448`); `soma075_calibrated_80k` has best mean soma-delta RMSE
+  (`0.8527`) and soma gain error (`0.0617`); RNN remains competitive but fails
+  spike direction on weak temporal jitter. Interpretation: M4 is now a
+  publishable-direction structured behavior diagnostic, with the caveat that
+  temporal jitter is weak and site silence is site-level rather than true
+  branch morphology. Tracked report: `artifacts/m4_model_suite_20260606.md`.
+
 - MILESTONE (2026-06-06 14:13): Expanded M3 from one held-out SWC smoke to a
   three-morphology normalized-routing suite over top-ranked Allen L5 spiny
   candidates `487664663`, `515249852`, and `479770916`. Added reproducible

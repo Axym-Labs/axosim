@@ -396,6 +396,8 @@ def test_paired_event_intervention_scores_teacher_and_model_delta_alignment():
     assert report["teacher_response"]["delta_soma_trace_mean_mv"]["n"] == 2
     assert report["model_response"]["soma_delta_rmse_mv"] == 0.0
     assert report["model_response"]["spike_count_delta_mae_per_trace"] == 0.0
+    assert report["model_response"]["soma_delta_gain"] == 1.0
+    assert report["model_response"]["spike_count_delta_gain"] == 1.0
     assert report["model_response"]["soma_delta_rmse_per_trace"]["mean"] == 0.0
     assert report["model_response"]["spike_count_delta_abs_error_per_trace"]["n"] == 2
     assert report["representative_trace_ids"]

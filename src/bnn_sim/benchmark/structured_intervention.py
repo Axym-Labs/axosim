@@ -329,20 +329,28 @@ def _model_delta_summary(
     soma_delta_error = model_soma_delta - teacher_soma_delta
     per_trace_soma_rmse = np.sqrt(np.mean(soma_delta_error ** 2, axis=1))
     per_trace_spike_abs_error = np.abs(model_spike_delta - teacher_spike_delta)
+    teacher_soma_mean = float(np.mean(teacher_soma_delta))
+    model_soma_mean = float(np.mean(model_soma_delta))
+    teacher_spike_mean = float(np.mean(teacher_spike_delta))
+    model_spike_mean = float(np.mean(model_spike_delta))
     return {
         "soma_delta_rmse_mv": float(np.sqrt(np.mean(soma_delta_error ** 2))),
         "soma_delta_mae_mv": float(np.mean(np.abs(soma_delta_error))),
         "soma_delta_rmse_per_trace": _mean_interval(per_trace_soma_rmse),
         "soma_delta_correlation": _safe_corr(model_soma_delta.reshape(-1), teacher_soma_delta.reshape(-1)),
-        "soma_mean_delta_error_mv": float(np.mean(model_soma_delta) - np.mean(teacher_soma_delta)),
+        "soma_delta_gain": _safe_gain(model_soma_mean, teacher_soma_mean),
+        "soma_mean_delta_teacher_mv": teacher_soma_mean,
+        "soma_mean_delta_model_mv": model_soma_mean,
+        "soma_mean_delta_error_mv": model_soma_mean - teacher_soma_mean,
         "spike_count_delta_mae_per_trace": float(np.mean(np.abs(model_spike_delta - teacher_spike_delta))),
         "spike_count_delta_abs_error_per_trace": _mean_interval(per_trace_spike_abs_error),
-        "spike_count_delta_teacher_mean": float(np.mean(teacher_spike_delta)),
-        "spike_count_delta_model_mean": float(np.mean(model_spike_delta)),
+        "spike_count_delta_gain": _safe_gain(model_spike_mean, teacher_spike_mean),
+        "spike_count_delta_teacher_mean": teacher_spike_mean,
+        "spike_count_delta_model_mean": model_spike_mean,
         "model_spike_threshold": float(model_spike_threshold),
         "direction_agreement": {
-            "soma_mean": bool(np.sign(np.mean(model_soma_delta)) == np.sign(np.mean(teacher_soma_delta))),
-            "spike_count": bool(np.sign(np.mean(model_spike_delta)) == np.sign(np.mean(teacher_spike_delta))),
+            "soma_mean": bool(np.sign(model_soma_mean) == np.sign(teacher_soma_mean)),
+            "spike_count": bool(np.sign(model_spike_mean) == np.sign(teacher_spike_mean)),
         },
     }
 
@@ -351,6 +359,12 @@ def _safe_corr(x: np.ndarray, y: np.ndarray) -> float | None:
     if x.size < 2 or y.size < 2 or float(np.std(x)) == 0.0 or float(np.std(y)) == 0.0:
         return None
     return float(np.corrcoef(x, y)[0, 1])
+
+
+def _safe_gain(model_delta: float, teacher_delta: float) -> float | None:
+    if abs(teacher_delta) < 1e-12:
+        return None
+    return float(model_delta / teacher_delta)
 
 
 def _mean_interval(values: np.ndarray) -> dict[str, float | int | None]:
