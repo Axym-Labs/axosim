@@ -47,6 +47,14 @@ from bnn_sim.benchmark.dataset_schema import (
     provisional_v1_morphologies,
     validate_v1_manifest_template,
 )
+from bnn_sim.benchmark.diagnostic_rows import (
+    DiagnosticContext,
+    evaluate_model_diagnostic_rows,
+    paired_intervention_diagnostic_rows,
+    teacher_qc_diagnostic_rows,
+    validate_diagnostic_rows,
+    write_diagnostic_rows,
+)
 from bnn_sim.benchmark.suite import BenchmarkSuite
 
 __all__ = [
@@ -82,5 +90,11 @@ __all__ = [
     "default_target_views",
     "provisional_v1_morphologies",
     "validate_v1_manifest_template",
+    "DiagnosticContext",
+    "evaluate_model_diagnostic_rows",
+    "paired_intervention_diagnostic_rows",
+    "teacher_qc_diagnostic_rows",
+    "validate_diagnostic_rows",
+    "write_diagnostic_rows",
     "BenchmarkSuite",
 ]

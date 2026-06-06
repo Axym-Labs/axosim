@@ -3,6 +3,20 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 21:15): Started the benchmark completion block
+  after the teacher-QC pilot. Added dataframe-first diagnostic row substrate
+  in `src/bnn_sim/benchmark/diagnostic_rows.py`: model diagnostics reuse the
+  existing benchmark metrics but emit tidy rows; teacher-QC rows include
+  distribution and raw-vs-clipped distortion; paired intervention rows include
+  teacher and optional model delta metrics; row validation enforces the v1
+  required columns; row writers support `.json`, `.jsonl`, and `.csv`. This is
+  not the whole benchmark yet: remaining benchmark work includes package
+  selectors over v1 dataset layouts, CLI runner/report integration, and
+  validating the row path on real pilot/model outputs. Verification:
+  `PYTHONPATH=src .venv/bin/python -m pytest -q` passed (`95` tests, `1`
+  skipped); focused benchmark/CLI tests passed (`42` tests); `py_compile` and
+  `git diff --check` passed.
+
 - EXPERIMENT (2026-06-06 20:57): Ran the v1 teacher-QC morphology/intervention
   pilot over all `5` provisional morphologies with `8` paired traces each for
   `event_dropout` and `inh_dropout` using the working plain NEURON/Hay SWC
