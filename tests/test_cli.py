@@ -57,7 +57,7 @@ def test_cli_prints_benchmark_axis_profile(capsys):
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["profile"]["name"] == "paper-default"
-    assert payload["metric_state_evaluation"]["mode"] == "dense"
+    assert payload["diagnostic_state_evaluation"]["mode"] == "dense"
     assert (
         payload["morphology_intervention_sanity"]["selected_pairs"]
         < payload["morphology_intervention_sanity"]["full_cartesian_pairs"]
@@ -71,6 +71,23 @@ def test_cli_prints_benchmark_profile_cost(capsys):
 
     assert payload["total_hours"] > 0
     assert payload["teacher_total_seconds"] > payload["model_eval_seconds"]
+
+
+def test_cli_prints_dataset_schema(capsys):
+    assert main(["dataset-schema", "--kind", "manifest"]) == 0
+    manifest = json.loads(capsys.readouterr().out)
+
+    assert manifest["schema_version"] == 2
+    assert manifest["morphology_count"] == 5
+    assert "interventions" in {entry["name"] for entry in manifest["categories"]}
+
+
+def test_cli_prints_diagnostic_catalog(capsys):
+    assert main(["dataset-schema", "--kind", "diagnostics"]) == 0
+    catalog = json.loads(capsys.readouterr().out)
+
+    assert catalog["plotter_policy"]["shape"] == "variable_length_list"
+    assert "clipping_distortion" in catalog["suites"]["paper-summary"]
 
 
 def test_cli_make_arbor_hetero_data_writes_shards_and_report(tmp_path):

@@ -44,6 +44,10 @@ from bnn_sim.benchmark.profiles import (
     get_benchmark_profile,
     list_benchmark_profiles,
 )
+from bnn_sim.benchmark.dataset_schema import (
+    build_diagnostic_suite_catalog,
+    build_v1_dataset_manifest_template,
+)
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.neuronio_raw import convert_neuronio_pickles
 from bnn_sim.official import create_official_elm, load_official_elm_config, load_official_state_dict
@@ -127,6 +131,12 @@ def main(argv: list[str] | None = None) -> int:
     profile.add_argument("--name", default="paper-default", choices=list_benchmark_profiles())
     profile.add_argument("--plan", action="store_true", help="print the expanded axis-composition plan")
     profile.add_argument("--cost", action="store_true", help="print only the local capacity estimate")
+
+    dataset_schema = subparsers.add_parser(
+        "dataset-schema",
+        help="print the v1 dataset manifest template or diagnostic suite catalog",
+    )
+    dataset_schema.add_argument("--kind", choices=["manifest", "diagnostics"], default="manifest")
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a model with the corrected full-trace metric path")
     evaluate.add_argument("--preset", choices=sorted(list_presets()["evaluate"]))
@@ -301,6 +311,14 @@ def main(argv: list[str] | None = None) -> int:
             payload = build_axis_plan(args.name)
         else:
             payload = get_benchmark_profile(args.name).to_dict()
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "dataset-schema":
+        if args.kind == "manifest":
+            payload = build_v1_dataset_manifest_template()
+        else:
+            payload = build_diagnostic_suite_catalog()
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 

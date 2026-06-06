@@ -1,5 +1,6 @@
 from bnn_sim.benchmark.profiles import (
     DEFAULT_STATES,
+    DEFAULT_DIAGNOSTIC_SUITES,
     build_axis_plan,
     estimate_profile_cost,
     get_benchmark_profile,
@@ -7,24 +8,25 @@ from bnn_sim.benchmark.profiles import (
 )
 
 
-def test_paper_default_keeps_metric_state_product_dense():
+def test_paper_default_keeps_diagnostic_state_product_dense():
     profile = get_benchmark_profile("paper-default")
     plan = build_axis_plan(profile)
 
     assert "paper-default" in list_benchmark_profiles()
-    assert profile.profile_status == "provisional_capacity_audited"
-    assert tuple(plan["metric_state_evaluation"]["states"]) == DEFAULT_STATES
-    assert plan["metric_state_evaluation"]["mode"] == "dense"
-    assert plan["morphology_transfer"]["evaluates"] == "all metric suites over all states"
-    assert plan["design_strategy"]["profile_status"] == "provisional_capacity_audited"
+    assert profile.profile_status == "v1_capacity_audited"
+    assert tuple(plan["diagnostic_state_evaluation"]["states"]) == DEFAULT_STATES
+    assert tuple(plan["diagnostic_state_evaluation"]["diagnostic_suites"]) == DEFAULT_DIAGNOSTIC_SUITES
+    assert plan["diagnostic_state_evaluation"]["mode"] == "dense"
+    assert plan["morphology_transfer"]["evaluates"] == "all diagnostic suites over all states"
+    assert plan["design_strategy"]["profile_status"] == "v1_capacity_audited"
 
 
-def test_paper_default_prunes_intervention_morphology_cartesian_product():
+def test_paper_default_keeps_all_morphologies_but_avoids_full_intervention_product():
     plan = build_axis_plan("paper-default")
     morph = plan["morphology_intervention_sanity"]
 
-    assert plan["profile"]["morphology_count"] > 3
-    assert morph["morphology_count"] < plan["profile"]["morphology_count"]
+    assert plan["profile"]["morphology_count"] == 5
+    assert morph["morphology_count"] == plan["profile"]["morphology_count"]
     assert morph["selected_pairs"] < morph["full_cartesian_pairs"]
     assert morph["avoided_pairs"] == morph["full_cartesian_pairs"] - morph["selected_pairs"]
     assert plan["source_interventions"]["compute_full_metrics_on_interventions"] is False
@@ -38,7 +40,7 @@ def test_smoke_profile_is_not_the_publishable_morphology_budget():
     paper = get_benchmark_profile("paper-default")
 
     assert smoke.morphology_count == 3
-    assert paper.morphology_count >= 15
+    assert paper.morphology_count == 5
     assert smoke.morphology_intervention_count < paper.morphology_intervention_count
 
 

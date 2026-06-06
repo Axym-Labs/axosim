@@ -12,26 +12,25 @@ import math
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from bnn_sim.benchmark.dataset_schema import (
+    DIAGNOSTIC_SUITES,
+    INTERVENTION_CONDITIONS,
+    V1_MORPHOLOGY_COUNT,
+)
 from bnn_sim.benchmark.state_metrics import STATE_DEFINITIONS
 
 
-DEFAULT_METRIC_SUITES = (
-    "m1_trace_fidelity",
-    "m1b_feature_fidelity",
-    "m2_regimes",
-    "state_conditioned_fidelity",
-    "trace_shape_fidelity",
+DEFAULT_DIAGNOSTIC_SUITES = (
+    "trace-core",
+    "state-dynamics",
+    "spike-behavior",
+    "feature-fidelity",
+    "morphology-contrast",
 )
 
 DEFAULT_STATES = tuple(STATE_DEFINITIONS)
 
-DEFAULT_SOURCE_INTERVENTIONS = (
-    "event_dropout",
-    "exc_dropout",
-    "inh_dropout",
-    "temporal_jitter",
-    "site_silence",
-)
+DEFAULT_SOURCE_INTERVENTIONS = INTERVENTION_CONDITIONS
 
 DEFAULT_MORPHOLOGY_INTERVENTIONS = (
     "event_dropout",
@@ -81,17 +80,16 @@ class BenchmarkProfile:
 
     name: str
     description: str
-    profile_status: str = "provisional"
+    profile_status: str = "v1_capacity_audited"
     design_strategy: str = (
-        "Capacity-audited staged design: dense metrics over already-computed "
-        "predictions, stratified morphology coverage for the main transfer "
-        "axis, and fractional paired interventions for expensive simulator "
-        "axes."
+        "V1 deep-dataset design: dense diagnostic suites over validation "
+        "predictions for all five hand-selected morphologies, with "
+        "interventions treated as top-level paired conditions."
     )
-    metric_suites: tuple[str, ...] = DEFAULT_METRIC_SUITES
+    diagnostic_suites: tuple[str, ...] = DEFAULT_DIAGNOSTIC_SUITES
     states: tuple[str, ...] = DEFAULT_STATES
     source_trace_count: int = 64
-    morphology_count: int = 15
+    morphology_count: int = V1_MORPHOLOGY_COUNT
     morphology_trace_count: int = 16
     source_interventions: tuple[str, ...] = DEFAULT_SOURCE_INTERVENTIONS
     source_intervention_trace_count: int = 16
@@ -112,7 +110,9 @@ class BenchmarkProfile:
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable profile."""
-        return asdict(self)
+        payload = asdict(self)
+        payload["available_diagnostic_suites"] = list(DIAGNOSTIC_SUITES)
+        return payload
 
 
 PROFILES: dict[str, BenchmarkProfile] = {
@@ -136,24 +136,25 @@ PROFILES: dict[str, BenchmarkProfile] = {
     "paper-default": BenchmarkProfile(
         name="paper-default",
         description=(
-            "Provisional paper default candidate: dense metric/state "
-            "evaluation, wider same-cell-type morphology transfer, and sparse "
-            "paired intervention coverage."
+            "V1 paper default candidate: dense diagnostic/state evaluation "
+            "on the validation split across all five deep morphologies, plus "
+            "paired intervention coverage under top-level conditions."
         ),
-        profile_status="provisional_capacity_audited",
+        profile_status="v1_capacity_audited",
         source_trace_count=64,
-        morphology_count=15,
+        morphology_count=V1_MORPHOLOGY_COUNT,
         morphology_trace_count=16,
         source_intervention_trace_count=16,
-        morphology_intervention_count=5,
+        morphology_intervention_count=V1_MORPHOLOGY_COUNT,
         morphology_intervention_trace_count=8,
         notes=(
-            "Metric x state coverage is intentionally dense because it is cheap "
+            "Diagnostic x state coverage is intentionally dense because it is cheap "
             "once predictions exist and it exposes behavior-specific failures.",
-            "Interventions are paired-delta tests by default; full M1/M2 on "
-            "every intervention is an extended analysis, not the default.",
-            "Morphology-intervention checks are a sparse sanity slice rather "
-            "than the full intervention x morphology cartesian product.",
+            "Interventions are paired-delta tests by default; full trace/core "
+            "diagnostics on every intervention is an extended analysis, not "
+            "the default.",
+            "V1 is deep, trainable, diagnostic-rich, and lean; broad "
+            "morphology is deferred.",
         ),
     ),
     "teacher-screen": BenchmarkProfile(
@@ -199,7 +200,7 @@ def build_axis_plan(profile: BenchmarkProfile | str = "paper-default") -> dict[s
     if isinstance(profile, str):
         profile = get_benchmark_profile(profile)
 
-    metric_state_jobs = len(profile.metric_suites) * len(profile.states)
+    diagnostic_state_jobs = len(profile.diagnostic_suites) * len(profile.states)
     full_morphology_intervention_pairs = profile.morphology_count * len(profile.source_interventions)
     selected_morphology_intervention_pairs = profile.morphology_intervention_count * len(profile.morphology_interventions)
     avoided_morphology_intervention_pairs = max(
@@ -220,28 +221,29 @@ def build_axis_plan(profile: BenchmarkProfile | str = "paper-default") -> dict[s
                 "coverage shows the budget is too small or poorly allocated."
             ),
         },
-        "metric_state_evaluation": {
+        "diagnostic_state_evaluation": {
             "mode": "dense",
-            "metric_suites": list(profile.metric_suites),
+            "diagnostic_suites": list(profile.diagnostic_suites),
             "states": list(profile.states),
-            "nominal_metric_state_cells": metric_state_jobs,
+            "nominal_diagnostic_state_cells": diagnostic_state_jobs,
             "rationale": (
-                "Metric x state is not pruned by default: state-conditioned "
-                "M1/M1b/M2/trace-shape summaries are cheap after prediction "
-                "and are central to interpreting model behavior."
+                "Diagnostic x state is not pruned by default: "
+                "state-conditioned summaries are cheap after prediction and "
+                "central to interpreting model behavior."
             ),
         },
         "source_distribution": {
             "trace_count": profile.source_trace_count,
-            "evaluates": "all metric suites over all states",
+            "evaluates": "all diagnostic suites over all states",
         },
         "morphology_transfer": {
             "morphology_count": profile.morphology_count,
             "traces_per_morphology": profile.morphology_trace_count,
-            "evaluates": "all metric suites over all states",
+            "evaluates": "all diagnostic suites over all states",
             "rationale": (
-                "M3 uses the larger morphology budget for default metric "
-                "evaluation because morphology transfer is a headline axis."
+                "V1 uses all five hand-selected deep morphologies for default "
+                "validation diagnostics; it does not claim broad morphology "
+                "generalization."
             ),
         },
         "source_interventions": {
@@ -251,7 +253,7 @@ def build_axis_plan(profile: BenchmarkProfile | str = "paper-default") -> dict[s
             "semantics": (
                 "Interventions measure paired teacher/model response deltas: "
                 "direction, gain, timing/count behavior, and representative "
-                "failures. They are not plain M1 repeats by default."
+                "failures. They are not plain trace-core repeats by default."
             ),
             "compute_full_metrics_on_interventions": profile.compute_full_metrics_on_interventions,
         },
@@ -372,7 +374,7 @@ def estimate_profile_cost(
         "dominant_cost_component": max(teacher_seconds, key=teacher_seconds.get),
         "recommended_parallel_jobs": max(1, min(8, math.ceil(teacher_total_seconds / 1800.0))),
         "interpretation": (
-            "Teacher generation dominates runtime; metric x state expansion is "
+            "Teacher generation dominates runtime; diagnostic x state expansion is "
             "therefore kept dense after predictions exist, while simulator "
             "axes use staged/fractional coverage."
         ),

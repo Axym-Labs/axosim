@@ -3,6 +3,25 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-06 20:22): Started the v1 deep dataset +
+  diagnostic benchmark task arc with the schema/contract milestone. Added
+  `src/bnn_sim/benchmark/dataset_schema.py` with the manifest-v2 template,
+  required v1 categories (`train`, `val`, `test`, `private-test`,
+  top-level paired `interventions`), clipped and raw target views, diagnostic
+  row columns, overlapping suite catalog, and diagnostic-attached plotter
+  lists. The plotter contract is now explicitly a variable-length list per
+  diagnostic, not fixed attributes such as `plot_main` or `plot_breakdown`.
+  Added `bnn-sim dataset-schema --kind manifest|diagnostics` and realigned
+  `paper-default` profile language/defaults to v1: all `5` deep morphologies,
+  dense diagnostic/state evaluation, paired interventions as conditions, and
+  no broad-morphology claim. Updated `spec.md` so active BSSM/noise gates use
+  v1 diagnostics and the `80k` cap rather than stale old metric labels.
+  Verification: `PYTHONPATH=src .venv/bin/python -m pytest
+  tests/test_dataset_schema.py tests/test_benchmark_profiles.py
+  tests/test_cli.py tests/test_data.py tests/test_benchmark_suite.py -q`
+  passed (`50` tests); `py_compile` passed for touched modules; `git diff
+  --check` passed.
+
 - IMPLEMENTATION (2026-06-06 20:13): Updated `spec.md` to supersede the old
   numbered benchmark MVP with the new v1 dataset + diagnostic benchmark task
   arc. Marked the historical benchmark MVP milestones done, inserted the

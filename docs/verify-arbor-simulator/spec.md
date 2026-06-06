@@ -283,8 +283,9 @@ Each diagnostic should:
   and `n`;
 - include enough metadata to reproduce mask, threshold, clipping, calibration,
   and target-view semantics;
-- expose plotters as atomic evidence views attached to the diagnostic, not as
-  separate plot suites.
+- expose plotters as a variable-length list of atomic evidence views attached
+  to the diagnostic, not as fixed attributes such as `plot_main` or
+  `plot_breakdown` and not as separate plot suites.
 
 Suite-level plotters are allowed only when they synthesize multiple diagnostic
 tables into a specific scientific figure. Example and worst-case figures are a
@@ -415,7 +416,9 @@ Key design choices:
 ### Premise Validation Required
 - [ ] **P2.1:** Pure-PyTorch 6-state BSSM forward speed is acceptable (<2x compact Mamba)
 - [ ] **P2.2:** Learnable timescales converge to biologically plausible values (ms range)
-- [ ] **P2.3:** BSSM reaches RMSE <1.0 mV at 800k presentations ( Branch-ELM territory )
+- [ ] **P2.3:** In the bounded sprint, BSSM improves a predeclared v1
+  diagnostic failure mode under the `80k` presentation cap without merely
+  improving convergence speed.
 - [ ] **P2.4:** State interpretability holds: I_E correlates with excitatory input, I_I with inhibitory, V_m with soma voltage
 - [ ] **P2.5:** Structured-state RNN variant improves over current BranchTraceRNN
 
@@ -462,7 +465,8 @@ Training on mean traces only creates systematic overconfidence. Calibrating outp
 ### Premise Validation Required
 - [ ] **P3.1:** Arbor simulator produces non-trivial trial-to-trial variance across seeds
 - [ ] **P3.2:** Noise model can be characterized with <100 extra simulation runs
-- [ ] **P3.3:** Distributional training improves over point-estimate training on M1 metrics
+- [ ] **P3.3:** Distributional training improves over point-estimate training
+  on a predeclared v1 diagnostic suite.
 - [ ] **P3.4:** Calibrated distributions can be sampled at inference time without slowdown
 
 ---
@@ -508,7 +512,8 @@ Training on mean traces only creates systematic overconfidence. Calibrating outp
 1. Run a critical evaluation pass before implementation: is there measurable trial-to-trial variability from a plausible stochastic teacher, and is it relevant to the paper's use case?
 2. Generate 10-seed distributional dataset only if the teacher/noise premise is credible (validate P3.1)
 3. Characterize noise model
-4. Implement distributional training (validate P3.3)
+4. Implement distributional training only if the predeclared diagnostic target
+   is credible.
 5. Add sampling inference path only if it improves an identified downstream metric without unacceptable slowdown (P3.4)
 
 ### Phase 4: Integration & Paper Writing (2-3 weeks)
@@ -538,7 +543,11 @@ Training on mean traces only creates systematic overconfidence. Calibrating outp
 
 The benchmark slop test should be repeated in lighter form before each remaining task batch, but the standard should stay practical: the goal is to catch obvious slop before spending compute, not to require publication-grade validation before every implementation step.
 
-1. **BSSM:** Required. The current BSSM section risks being architecture-first. Before implementation, verify that the 6-state structure targets an observed failure mode in M1b/M2/M4, has an interpretable state-to-behavior test, and has clear falsification criteria.
+1. **BSSM:** Required. The current BSSM section risks being
+   architecture-first. Before implementation, verify that the 6-state
+   structure targets an observed failure mode in the v1 diagnostic suites, has
+   an interpretable state-to-behavior test, and has clear falsification
+   criteria.
 2. **Noise calibration:** Required. This is especially vulnerable to sounding biologically sophisticated while measuring simulator artifacts. Before implementation, verify that repeated-seed variability exists, is plausible, and affects a metric practitioners care about.
 3. **Baselines:** Required. Each baseline must have a role: accuracy reference, speed reference, morphology/heterogeneity reference, or ablation control. Do not include a baseline only because it is familiar.
 4. **Execution/timeline:** Required but lighter. Re-evaluate ordering after the dataset/diagnostic benchmark is resolved, because BSSM/NCS work is premature if the teacher dataset or diagnostic suite is not credible.
