@@ -3,6 +3,23 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- EXPERIMENT (2026-06-11 22:40): Checked whether full v1 generation was using
+  the machine efficiently and whether `--parallelism > 1` should replace the
+  conservative launch setting. Paused the full job cleanly at `68` completed
+  train shards (`8704` traces) and measured the actual completed-shard
+  baseline: mean shard time `279.1 s` for `128 x 6000 ms`, effective
+  throughput `1651` traces/hour, with solve-phase GPU utilization near
+  `93-94%`. A `parallelism=2` probe launched two concurrent full-trace
+  CoreNEURON GPU workers and drove the GPU to `100%`, but both shards were
+  still unfinished after roughly `9.4 min`, missing the break-even point for
+  two sequential `parallelism=1` shards (`~9.3 min` from the measured
+  baseline). Conclusion: for the current SWC/CoreNEURON GPU workload, worker
+  parallelism mostly adds GPU-kernel contention rather than useful throughput.
+  Skipped `parallelism=4` because `parallelism=2` already failed the
+  break-even test and would increase contention/risk. Restarted the full run
+  with the validated `parallelism=1` resume path under detached PID `84853`;
+  it resumed at missing shard `specimen_488683425_00068`.
+
 - MILESTONE (2026-06-11 17:15): Started the full v1 dataset generation on the
   corrected actual-SWC CoreNEURON GPU path. Detached launcher PID is recorded
   in `artifacts/v1_full_generation_gpu_20260611.pid`; output root is
