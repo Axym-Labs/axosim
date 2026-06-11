@@ -12,6 +12,24 @@ use `00:00` when no exact time was recorded.
   silently changed. Added a regression test to keep both Mamba presets on the
   promoted objective.
 
+- EXPERIMENT (2026-06-11 23:17): Tested stronger Mamba soma-loss weighting on
+  the accepted CoreNEURON/Hay `exc=0.925` train32/val16 setup, without
+  changing the standard preset. Paused the full v1 GPU dataset generator after
+  shard `74` completed (`75` train shards total), ran three 80k-presentation
+  candidates, then resumed generation under detached PID `90618` at missing
+  shard `specimen_488683425_00075`. Baseline for comparison:
+  `soma075_calibrated_80k` RMSE/AUC `0.8507/0.9666`. Results:
+  `soma085` RMSE/AUC `0.8600/0.9647`, lag RMSE `0.6571`, prevalence count
+  MAE `4.6250`, timing F1 `0.1417`; `soma090` RMSE/AUC `0.8463/0.9643`, lag
+  RMSE `0.6458`, prevalence count MAE `5.1250`, timing F1 `0.1648`;
+  `soma095` RMSE/AUC `0.8514/0.9610`, lag RMSE `0.6483`, prevalence count
+  MAE `4.7500`, timing F1 `0.1247`. All produced plots and no evaluator
+  sanity flags. Interpretation: `soma090` is a slightly better voltage/RMSE
+  point on this small split, but the gain is small and spike ranking/count
+  metrics are mixed, so no configuration change was applied. Tracked report:
+  `artifacts/coreneuron_soma_weight_probe_20260611.md`; raw summary:
+  `artifacts/coreneuron_soma_weight_probe_20260611/summary.json`.
+
 - EXPERIMENT (2026-06-11 22:40): Checked whether full v1 generation was using
   the machine efficiently and whether `--parallelism > 1` should replace the
   conservative launch setting. Paused the full job cleanly at `68` completed
