@@ -24,9 +24,12 @@ use `00:00` when no exact time was recorded.
   RMSE `0.6458`, prevalence count MAE `5.1250`, timing F1 `0.1648`;
   `soma095` RMSE/AUC `0.8514/0.9610`, lag RMSE `0.6483`, prevalence count
   MAE `4.7500`, timing F1 `0.1247`. All produced plots and no evaluator
-  sanity flags. Interpretation: `soma090` is a slightly better voltage/RMSE
-  point on this small split, but the gain is small and spike ranking/count
-  metrics are mixed, so no configuration change was applied. Tracked report:
+  sanity flags. Interpretation: the `soma090` neighborhood shows a real-looking
+  downward RMSE/loss dip relative to `soma075` and adjacent stronger settings,
+  so it warrants a later focused sweep around `0.85-0.95` plus validation at
+  longer training durations before full v1 training. Do not apply it yet:
+  spike ranking/count metrics are mixed and the current evidence is only one
+  small train32/val16 split. Tracked report:
   `artifacts/coreneuron_soma_weight_probe_20260611.md`; raw summary:
   `artifacts/coreneuron_soma_weight_probe_20260611/summary.json`.
 
