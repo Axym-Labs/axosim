@@ -3,6 +3,21 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- MILESTONE (2026-06-11 17:15): Started the full v1 dataset generation on the
+  corrected actual-SWC CoreNEURON GPU path. Detached launcher PID is recorded
+  in `artifacts/v1_full_generation_gpu_20260611.pid`; output root is
+  `data/v1-neuronio-like-gpu-20260611`; runtime log is
+  `artifacts/v1_full_generation_gpu_20260611.log`. Health check after launch:
+  first three full train shards for `specimen_488683425` completed with
+  `coreneuron_gpu=true` metadata and elapsed times `288.5`, `273.7`, and
+  `280.5` seconds for `128 x 6000 ms`; shard 3 then started normally. Live GPU
+  sampling during the solve phase showed sustained `93-94%` utilization,
+  `1118 MiB` memory use, and roughly `115 W`, while brief idle samples occurred
+  during setup/postprocessing. This supports the interpretation that the full
+  run is using the GPU backend rather than falling back to CPU. Expected
+  duration remains roughly `5-6 days`; rerun the launcher if interrupted
+  because `--resume` is enabled and validated.
+
 - IMPLEMENTATION (2026-06-11 16:58): Completed the full v1 dataset
   generation gate and corrected launch-critical generator semantics before
   starting the multi-day run. Full-trace actual-SWC GPU throughput on
