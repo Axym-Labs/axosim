@@ -6,6 +6,7 @@ import torch
 
 from bnn_sim.cli import main
 from bnn_sim.checkpoint import load_checkpoint
+from bnn_sim.experiments import apply_preset
 from bnn_sim.official import create_official_elm, load_official_elm_config
 
 
@@ -635,6 +636,21 @@ def test_cli_preset_and_registry_write_jsonl(tmp_path):
     entry = json.loads(lines[0])
     assert entry["command"] == "evaluate"
     assert entry["preset"] == "fulltrace-paper-metric"
+
+
+def test_mamba_presets_use_soma075_objective():
+    class Args:
+        spike_loss_weight = 0.5
+        soma_loss_weight = 0.5
+
+    for preset in ("mamba-official-probe", "mamba2-official-probe"):
+        args = Args()
+        args.preset = preset
+
+        apply_preset("train", preset, args, set())
+
+        assert args.spike_loss_weight == 0.25
+        assert args.soma_loss_weight == 0.75
 
 
 def test_cli_convert_neuronio_requires_existing_raw_path(tmp_path):

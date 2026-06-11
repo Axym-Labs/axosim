@@ -3,6 +3,15 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-11 23:20): Promoted the `soma075` objective into the
+  standard Mamba training presets. `mamba-official-probe` and
+  `mamba2-official-probe` now set `spike_loss_weight=0.25` and
+  `soma_loss_weight=0.75`, matching the best observed Mamba voltage/RMSE path
+  on the accepted CoreNEURON/Hay `exc=0.925` setup. The generic CLI defaults
+  remain `0.5/0.5` so non-Mamba baselines and explicit commands are not
+  silently changed. Added a regression test to keep both Mamba presets on the
+  promoted objective.
+
 - EXPERIMENT (2026-06-11 22:40): Checked whether full v1 generation was using
   the machine efficiently and whether `--parallelism > 1` should replace the
   conservative launch setting. Paused the full job cleanly at `68` completed

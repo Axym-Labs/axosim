@@ -56,7 +56,7 @@ _PRESETS: dict[str, dict[str, dict[str, Any]]] = {
             },
         },
         "mamba-official-probe": {
-            "description": "Official mamba-ssm backend probe with fused selective scan in an explicitly configured environment.",
+            "description": "Official mamba-ssm backend probe with fused selective scan and the voltage-heavy soma075 objective.",
             "options": {
                 "model_kind": "mamba-official",
                 "model_config": "configs/branch_mamba_official_45x64.json",
@@ -71,15 +71,15 @@ _PRESETS: dict[str, dict[str, dict[str, Any]]] = {
                 "lr_schedule_steps": 342000,
                 "optimizer": "adamw",
                 "weight_decay": 1e-4,
-                "spike_loss_weight": 0.5,
-                "soma_loss_weight": 0.5,
+                "spike_loss_weight": 0.25,
+                "soma_loss_weight": 0.75,
                 "prefetch_batches": 1,
                 "val_metric_ignore_start": 500,
                 "val_soma_affine_calibration": True,
             },
         },
         "mamba2-official-probe": {
-            "description": "Official Mamba-2 / SSD backend probe with the same branch-routed surrogate shell.",
+            "description": "Official Mamba-2 / SSD backend probe with the same branch-routed surrogate shell and soma075 objective.",
             "options": {
                 "model_kind": "mamba-official",
                 "model_config": "configs/branch_mamba2_official_45x64.json",
@@ -94,8 +94,8 @@ _PRESETS: dict[str, dict[str, dict[str, Any]]] = {
                 "lr_schedule_steps": 342000,
                 "optimizer": "adamw",
                 "weight_decay": 1e-4,
-                "spike_loss_weight": 0.5,
-                "soma_loss_weight": 0.5,
+                "spike_loss_weight": 0.25,
+                "soma_loss_weight": 0.75,
                 "prefetch_batches": 1,
                 "val_metric_ignore_start": 500,
                 "val_soma_affine_calibration": True,
