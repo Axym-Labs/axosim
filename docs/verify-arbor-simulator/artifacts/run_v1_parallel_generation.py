@@ -15,6 +15,12 @@ from typing import Any
 
 import numpy as np
 
+# CoreNEURON GPU uses the NVHPC/OpenACC runtime.  Import it before package
+# modules that may import torch/CUDA; otherwise the worker can later abort with
+# "Enabled GPU execution but couldn't find NVIDIA GPU!".
+from neuron import coreneuron as _early_coreneuron  # noqa: F401
+from neuron import h as _early_h  # noqa: F401
+
 
 ROOT = Path(__file__).resolve().parents[3]
 ARTIFACTS = ROOT / "docs" / "verify-arbor-simulator" / "artifacts"
@@ -108,8 +114,9 @@ def orchestrator_main(args: argparse.Namespace) -> int:
         "mechanism_root": str(SWC_MECH_ROOT),
         "template_hoc": str(TEMPLATE_HOC),
         "note": (
-            "SWC morphology path currently uses plain NEURON-compatible Hay template/mechanisms. "
-            "Generation is parallelized over independent shards; CoreNEURON/SWC remains a separate backend gate."
+            "SWC morphology path uses the Hay-compatible SWC template/mechanisms. "
+            "CoreNEURON GPU is supported for actual v1 SWC morphologies when the durable GPU runtime "
+            "and SWC mechanism root are on PATH/PYTHONPATH/LD_LIBRARY_PATH."
         ),
     }
     (output_root / "generation_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -395,6 +402,8 @@ def prepare_neuron(backend: str, coreneuron_gpu: bool) -> dict[str, Any]:
     if backend == "coreneuron":
         coreneuron.enable = True
         coreneuron.gpu = bool(coreneuron_gpu)
+        if coreneuron_gpu:
+            coreneuron.cell_permute = int(os.environ.get("BNN_SIM_CORENEURON_CELL_PERMUTE", "1"))
         if os.environ.get("BNN_SIM_CORENEURON_NUM_GPUS"):
             coreneuron.num_gpus = int(os.environ["BNN_SIM_CORENEURON_NUM_GPUS"])
         coreneuron.verbose = 0

@@ -13,6 +13,12 @@ from typing import Any
 
 import numpy as np
 
+# CoreNEURON GPU uses the NVHPC/OpenACC runtime.  Import it before package
+# modules that may import torch/CUDA; otherwise GPU discovery can fail later in
+# embedded CoreNEURON even when the device is present.
+from neuron import coreneuron as _early_coreneuron  # noqa: F401
+from neuron import h as _early_h  # noqa: F401
+
 ARTIFACTS = Path(__file__).resolve().parent
 CORENEURON_PROBE = ARTIFACTS / "coreneuron_hay_port_probe_20260605"
 DEFAULT_SOURCE_ROOT = ARTIFACTS / "source_models" / "neuron_as_deep_net" / "L5PC_NEURON_simulation"

@@ -3,6 +3,30 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-11 16:11): Fixed the actual v1 SWC morphology
+  CoreNEURON GPU generation path. Root cause was not an SWC morphology
+  incompatibility: the worker imported benchmark/model modules before NEURON,
+  and that torch-bearing import order made the NVHPC/OpenACC CoreNEURON
+  runtime later abort with `Enabled GPU execution but couldn't find NVIDIA
+  GPU!`. `run_v1_parallel_generation.py` and
+  `run_coreneuron_event_dropout_pair.py` now import NEURON/CoreNEURON before
+  benchmark/model modules; `run_v1_parallel_generation.py` also sets GPU
+  `cell_permute=1` explicitly. Verification: the exact formerly failing
+  actual-SWC worker (`1 x 100 ms`) now writes a valid GPU shard; actual-SWC
+  split CPU CoreNEURON vs GPU CoreNEURON (`2 x 250 ms`) matched exactly
+  (`inputs_equal=True`, `targets_max_abs=0.0`, `soma_max_abs=0.0`, spike
+  counts `7/7`); event-dropout worker CPU/GPU (`2 x 250 ms`) matched exactly
+  for baseline and intervention targets/soma (all max abs `0.0`, baseline
+  spikes `7/7`, intervention spikes `4/4`); all-five morphology GPU
+  orchestrator smoke wrote `5` validation shards and `5` event-dropout pair
+  shards at `artifacts/v1_swc_gpu_generation_smoke_20260611/`; a longer
+  actual-SWC GPU worker (`4 x 1000 ms`) wrote valid outputs with `46,232`
+  input events and `13` spike labels in `23.64 s`. Updated
+  `artifacts/gpu_generation_path_validation_20260606.md` and `spec.md` to
+  remove the stale CPU-only/SWC-GPU-blocked status. Remaining priority:
+  throughput tune GPU batch/worker sizing for full v1 dataset generation, but
+  this is no longer a correctness blocker or CPU fallback.
+
 - VERIFICATION (2026-06-07 01:15): Validated checkpoint-backed
   `benchmark-v1` model diagnostics on the all-five v1 SWC pilot dataset for
   three baselines: RNN `rnn_exc0925_80k_best`, Mamba

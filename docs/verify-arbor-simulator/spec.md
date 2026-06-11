@@ -375,12 +375,14 @@ validating the benchmark code; the full dataset is not required for that step.
      `artifacts/gpu_generation_path_validation_20260606.md`.
    - `N=5` morphology generation path status: `artifacts/run_v1_parallel_generation.py`
      now generates v1-shaped ordinary split shards and specimen-coded
-     intervention pair shards with bounded worker shard sizes. All-five smoke
-     validation passed with CPU CoreNEURON/SWC batching, and `benchmark-v1`
-     consumes the generated layout. Remaining backend caveat: SWC morphology
-     CPU CoreNEURON agrees exactly with plain NEURON on the current smoke, but
-     SWC CoreNEURON GPU aborts during GPU initialization before solve; current
-     defensible v1 generation route is therefore batched CPU CoreNEURON/SWC.
+     intervention pair shards with bounded worker shard sizes. The actual v1
+     SWC morphology GPU path is now correctness-valid under the durable
+     NEURON `9.0.1` CoreNEURON GPU runtime when NEURON/CoreNEURON is imported
+     before torch-bearing benchmark/model modules. The old abort was an
+     import-order/OpenACC runtime discovery failure, not an SWC morphology
+     incompatibility. CPU CoreNEURON and GPU CoreNEURON match exactly on the
+     current actual-SWC split and event-dropout worker checks; all-five
+     morphology GPU smoke writes the v1 layout and manifests.
 6. **Full v1 dataset generation**
    - Generate ordinary splits and intervention pairs under the size target.
    - Store raw and clipped target views plus metadata.
