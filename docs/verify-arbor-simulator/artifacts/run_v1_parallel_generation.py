@@ -60,6 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--python", type=Path, default=DEFAULT_PYTHON)
     parser.add_argument("--parallelism", type=int, default=8)
     parser.add_argument("--samples-per-shard", type=int, default=128)
+    parser.add_argument(
+        "--intervention-samples-per-shard",
+        type=int,
+        help="Shard size for paired intervention examples. Defaults to --samples-per-shard.",
+    )
     parser.add_argument("--duration-ms", type=int, default=6000)
     parser.add_argument("--backend", choices=["neuron", "coreneuron"], default="neuron")
     parser.add_argument("--coreneuron-gpu", action="store_true")
@@ -71,9 +76,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--test-samples-per-morphology", type=int, default=0)
     parser.add_argument("--private-test-samples-per-morphology", type=int, default=0)
     parser.add_argument("--intervention-samples-per-morphology", type=int, default=1)
+    parser.add_argument(
+        "--intervention-total-samples-per-morphology",
+        type=int,
+        help=(
+            "Total paired intervention examples per morphology, distributed across the selected "
+            "interventions. Prefer this for v1 full generation because the dataset target defines "
+            "the intervention category total, not a per-condition count."
+        ),
+    )
     parser.add_argument("--intervention", action="append", choices=INTERVENTION_CONDITIONS)
     parser.add_argument("--morphology", action="append", help="Specimen id to include; defaults to all v1 morphologies")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--resume", action="store_true", help="Skip existing valid shard outputs and rebuild manifests/summaries.")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--worker-kind", choices=["split", "intervention"], help=argparse.SUPPRESS)
     parser.add_argument("--worker-output", type=Path, help=argparse.SUPPRESS)
@@ -94,7 +109,21 @@ def orchestrator_main(args: argparse.Namespace) -> int:
 
     morphologies = selected_morphologies(args.morphology)
     interventions = tuple(args.intervention or INTERVENTION_CONDITIONS)
+    intervention_counts = intervention_counts_per_morphology(args, interventions)
     tasks = build_tasks(args, output_root, morphologies, interventions)
+    total_tasks = len(tasks)
+    total_samples = sum(task["samples"] for task in tasks)
+    skipped_tasks = 0
+    skipped_samples = 0
+    if args.resume:
+        remaining_tasks = []
+        for task in tasks:
+            if task_is_complete(task):
+                skipped_tasks += 1
+                skipped_samples += int(task["samples"])
+            else:
+                remaining_tasks.append(task)
+        tasks = remaining_tasks
     started = time.perf_counter()
     run_tasks(tasks, args.parallelism)
     write_split_manifests(output_root)
@@ -105,11 +134,19 @@ def orchestrator_main(args: argparse.Namespace) -> int:
         "coreneuron_gpu": bool(args.coreneuron_gpu),
         "duration_ms": int(args.duration_ms),
         "parallelism": int(args.parallelism),
+        "samples_per_shard": int(args.samples_per_shard),
+        "intervention_samples_per_shard": int(intervention_samples_per_shard(args)),
         "elapsed_seconds": time.perf_counter() - started,
         "morphologies": [morphology["id"] for morphology in morphologies],
         "interventions": list(interventions),
+        "intervention_samples_per_morphology_by_condition": intervention_counts,
+        "intervention_total_samples_per_morphology": sum(intervention_counts.values()),
         "tasks": len(tasks),
+        "tasks_total": total_tasks,
+        "tasks_skipped_existing": skipped_tasks,
         "samples": sum(task["samples"] for task in tasks),
+        "samples_total": total_samples,
+        "samples_skipped_existing": skipped_samples,
         "source_root": str(SOURCE_ROOT),
         "mechanism_root": str(SWC_MECH_ROOT),
         "template_hoc": str(TEMPLATE_HOC),
@@ -153,12 +190,14 @@ def build_tasks(
 ) -> list[dict[str, Any]]:
     if args.samples_per_shard <= 0:
         raise ValueError(f"--samples-per-shard must be positive, got {args.samples_per_shard}")
+    pair_samples_per_shard = intervention_samples_per_shard(args)
     split_counts = {
         "train": args.train_samples_per_morphology,
         "val": args.val_samples_per_morphology,
         "test": args.test_samples_per_morphology,
         "private-test": args.private_test_samples_per_morphology,
     }
+    intervention_counts = intervention_counts_per_morphology(args, interventions)
     tasks = []
     shard_index = 0
     for morphology in morphologies:
@@ -181,10 +220,11 @@ def build_tasks(
                 )
                 shard_index += 1
         for intervention in interventions:
-            if args.intervention_samples_per_morphology <= 0:
+            intervention_samples = intervention_counts[intervention]
+            if intervention_samples <= 0:
                 continue
-            for offset in range(0, args.intervention_samples_per_morphology, args.samples_per_shard):
-                shard_samples = min(args.samples_per_shard, args.intervention_samples_per_morphology - offset)
+            for offset in range(0, intervention_samples, pair_samples_per_shard):
+                shard_samples = min(pair_samples_per_shard, intervention_samples - offset)
                 tasks.append(
                     task_payload(
                         args,
@@ -199,6 +239,34 @@ def build_tasks(
                 )
                 shard_index += 1
     return tasks
+
+
+def intervention_samples_per_shard(args: argparse.Namespace) -> int:
+    value = args.intervention_samples_per_shard
+    if value is None:
+        value = args.samples_per_shard
+    value = int(value)
+    if value <= 0:
+        raise ValueError(f"--intervention-samples-per-shard must be positive, got {value}")
+    return value
+
+
+def intervention_counts_per_morphology(args: argparse.Namespace, interventions: tuple[str, ...]) -> dict[str, int]:
+    if not interventions:
+        return {}
+    total = args.intervention_total_samples_per_morphology
+    if total is None:
+        count = int(args.intervention_samples_per_morphology)
+        if count < 0:
+            raise ValueError(f"--intervention-samples-per-morphology must be non-negative, got {count}")
+        return {intervention: count for intervention in interventions}
+    if total < 0:
+        raise ValueError(f"--intervention-total-samples-per-morphology must be non-negative, got {total}")
+    base, remainder = divmod(int(total), len(interventions))
+    return {
+        intervention: base + (1 if index < remainder else 0)
+        for index, intervention in enumerate(interventions)
+    }
 
 
 def task_payload(
@@ -284,10 +352,33 @@ def run_tasks(tasks: list[dict[str, Any]], parallelism: int) -> None:
             time.sleep(0.25)
 
 
+def task_is_complete(task: dict[str, Any]) -> bool:
+    output = Path(task["output"])
+    metadata = output.with_suffix(".json")
+    if not output.exists() or not metadata.exists():
+        return False
+    try:
+        with np.load(output) as data:
+            key = "inputs" if task["kind"] == "split" else "baseline_inputs"
+            if key not in data or int(data[key].shape[0]) != int(task["samples"]):
+                return False
+            if "sample_ids" not in data or int(data["sample_ids"].shape[0]) != int(task["samples"]):
+                return False
+        meta = json.loads(metadata.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return (
+        meta.get("kind") == task["kind"]
+        and meta.get("morphology_id") == task["morphology_id"]
+        and int(meta.get("samples", -1)) == int(task["samples"])
+    )
+
+
 def worker_main(args: argparse.Namespace) -> int:
     if args.worker_samples is None or args.worker_output is None:
         raise ValueError("worker requires --worker-samples and --worker-output")
     started = time.perf_counter()
+    worker_output = args.worker_output.resolve()
     rng = np.random.default_rng(args.seed)
     setup = prepare_neuron(args.backend, args.coreneuron_gpu)
     sample_rows = []
@@ -359,10 +450,10 @@ def worker_main(args: argparse.Namespace) -> int:
             intervention_targets.append(intervention["targets"])
             intervention_soma.append(intervention["soma_mv"])
 
-    args.worker_output.parent.mkdir(parents=True, exist_ok=True)
+    worker_output.parent.mkdir(parents=True, exist_ok=True)
     if args.worker_kind == "split":
         np.savez_compressed(
-            args.worker_output,
+            worker_output,
             inputs=np.stack(baseline_inputs).astype(np.int8, copy=False),
             targets=np.stack(baseline_targets).astype(np.float32, copy=False),
             soma_mv=np.stack(baseline_soma).astype(np.float32, copy=False),
@@ -370,7 +461,7 @@ def worker_main(args: argparse.Namespace) -> int:
         )
     else:
         np.savez_compressed(
-            args.worker_output,
+            worker_output,
             baseline_inputs=np.stack(baseline_inputs).astype(np.int8, copy=False),
             baseline_targets=np.stack(baseline_targets).astype(np.float32, copy=False),
             baseline_soma_mv=np.stack(baseline_soma).astype(np.float32, copy=False),
@@ -392,7 +483,7 @@ def worker_main(args: argparse.Namespace) -> int:
         "shard_index": int(args.worker_shard_index),
         "input_routing": _summarize_input_routing(sample_rows),
     }
-    args.worker_output.with_suffix(".json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    worker_output.with_suffix(".json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
 

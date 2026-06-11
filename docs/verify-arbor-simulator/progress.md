@@ -3,6 +3,30 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-11 16:58): Completed the full v1 dataset
+  generation gate and corrected launch-critical generator semantics before
+  starting the multi-day run. Full-trace actual-SWC GPU throughput on
+  `specimen_488683425`: split batch `8/16/32/64/128` reached
+  `193/343/632/1089/1609` traces/hour; paired `event_dropout` batch `32/64`
+  reached `337/602` paired examples/hour. Measured full-target estimate with
+  split batch `128` and intervention batch `64`: `137,500` ordinary traces
+  plus `12,500` paired examples in `~106 h` on the reference morphology, with
+  a conservative all-morphology expectation of roughly `5-6 days` because the
+  selected routed segment counts range from `265` to `377`. Corrected three
+  operational design issues in `run_v1_parallel_generation.py`: worker output
+  paths are resolved before NEURON changes cwd; `--resume` skips existing
+  valid shard+metadata pairs; `--intervention-total-samples-per-morphology`
+  prevents accidentally generating `2500` pairs per intervention instead of
+  the intended `2500` pairs per morphology across all interventions, and
+  `--intervention-samples-per-shard` lets paired shards use the measured-safe
+  batch size. Added tracked design review
+  `artifacts/v1_dataset_generation_design_review_20260611.md` and launcher
+  `artifacts/run_v1_full_generation_gpu_20260611.sh`. Validation: py_compile
+  passed; count smoke produced exactly `137,500` ordinary trace tasks and
+  `12,500` paired examples for the full config; resume smoke skipped all
+  existing tiny shards; launcher smoke generated and counted one val shard and
+  one paired intervention shard.
+
 - IMPLEMENTATION (2026-06-11 16:11): Fixed the actual v1 SWC morphology
   CoreNEURON GPU generation path. Root cause was not an SWC morphology
   incompatibility: the worker imported benchmark/model modules before NEURON,
