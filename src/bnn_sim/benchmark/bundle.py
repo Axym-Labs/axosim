@@ -22,6 +22,7 @@ from bnn_sim.benchmark.runner import (
     resolve_intervention_pair_paths,
     run_model_diagnostics_on_selector,
     run_paired_intervention_on_npz,
+    run_paired_intervention_on_npzs,
     run_paired_intervention_on_selector,
     run_teacher_qc_on_selector,
 )
@@ -51,6 +52,7 @@ def run_v1_benchmark_bundle(
     max_val_samples: int | None = None,
     max_intervention_samples: int | None = None,
     cache_shards: int = 1,
+    write_summaries: bool = True,
 ) -> dict[str, Any]:
     """Run the promoted v1 validation plus intervention diagnostic bundle."""
     layout = V1DatasetLayout(dataset_root)
@@ -76,13 +78,18 @@ def run_v1_benchmark_bundle(
         output=output / "teacher_qc_val.jsonl",
         cache_shards=cache_shards,
     )
-    _write_summary_artifact(teacher_rows, output / "teacher_qc_val.md", artifacts)
+    _record_artifact(teacher_rows, output / "teacher_qc_val.jsonl", artifacts, write_summaries=write_summaries)
 
     routing_rows = morphology_routing_qc_rows(
         context=_replace_context(base, suites=suite_config["routing"], model_id="teacher")
     )
     write_diagnostic_rows(routing_rows, output / "morphology_routing_qc.jsonl")
-    _write_summary_artifact(routing_rows, output / "morphology_routing_qc.md", artifacts)
+    _record_artifact(
+        routing_rows,
+        output / "morphology_routing_qc.jsonl",
+        artifacts,
+        write_summaries=write_summaries,
+    )
 
     if model_fn is not None and suite_config["model"] is not None:
         resolved_model_id = model_id or base.model_id
@@ -102,32 +109,32 @@ def run_v1_benchmark_bundle(
             output=output / f"model_val_{_slug(resolved_model_id)}.jsonl",
             cache_shards=cache_shards,
         )
-        _write_summary_artifact(model_rows, output / f"model_val_{_slug(resolved_model_id)}.md", artifacts)
+        _record_artifact(
+            model_rows,
+            output / f"model_val_{_slug(resolved_model_id)}.jsonl",
+            artifacts,
+            write_summaries=write_summaries,
+        )
 
     pair_paths = [Path(path) for path in intervention_pair_paths]
     if pair_paths:
-        for pair_path in pair_paths:
-            intervention, morphology_id = infer_pair_metadata(pair_path, default_morphology=base.morphology_id)
-            intervention_model_id = model_id if model_fn is not None else "teacher"
-            context = _replace_context(
-                base,
+        for intervention, morphology_id, grouped_paths in _group_pair_paths_by_morphology(
+            pair_paths,
+            default_morphology=base.morphology_id,
+        ):
+            rows_path, rows = _run_grouped_intervention(
+                grouped_paths,
+                output=output,
+                base=base,
                 suites=suite_config["intervention"],
-                model_id=intervention_model_id,
-                morphology_id=morphology_id,
-                split="",
-                condition=f"interventions/{intervention}",
-                intervention=intervention,
-            )
-            filename = f"intervention_{_slug(morphology_id)}_{_slug(intervention)}"
-            rows = run_paired_intervention_on_npz(
-                pair_path,
                 model_fn=model_fn,
-                context=context,
+                model_id=model_id,
+                intervention=intervention,
+                morphology_id=morphology_id,
                 max_samples=max_intervention_samples,
-                output=output / f"{filename}.jsonl",
             )
             intervention_row_sets.extend(rows)
-            _write_summary_artifact(rows, output / f"{filename}.md", artifacts)
+            _record_artifact(rows, rows_path, artifacts, write_summaries=write_summaries)
     else:
         for intervention in layout.available_interventions():
             selector = layout.intervention(intervention)
@@ -151,30 +158,25 @@ def run_v1_benchmark_bundle(
                     output=output / f"{filename}.jsonl",
                 )
                 intervention_row_sets.extend(rows)
-                _write_summary_artifact(rows, output / f"{filename}.md", artifacts)
+                _record_artifact(rows, output / f"{filename}.jsonl", artifacts, write_summaries=write_summaries)
                 continue
-            for pair_path in selector_pair_paths:
-                inferred_intervention, morphology_id = infer_pair_metadata(pair_path, default_morphology=base.morphology_id)
-                intervention_model_id = model_id if model_fn is not None else "teacher"
-                context = _replace_context(
-                    base,
+            for inferred_intervention, morphology_id, grouped_paths in _group_pair_paths_by_morphology(
+                selector_pair_paths,
+                default_morphology=base.morphology_id,
+            ):
+                rows_path, rows = _run_grouped_intervention(
+                    grouped_paths,
+                    output=output,
+                    base=base,
                     suites=suite_config["intervention"],
-                    model_id=intervention_model_id,
-                    morphology_id=morphology_id,
-                    split="",
-                    condition=f"interventions/{inferred_intervention}",
-                    intervention=inferred_intervention,
-                )
-                filename = f"intervention_{_slug(morphology_id)}_{_slug(inferred_intervention)}"
-                rows = run_paired_intervention_on_npz(
-                    pair_path,
                     model_fn=model_fn,
-                    context=context,
+                    model_id=model_id,
+                    intervention=inferred_intervention,
+                    morphology_id=morphology_id,
                     max_samples=max_intervention_samples,
-                    output=output / f"{filename}.jsonl",
                 )
                 intervention_row_sets.extend(rows)
-                _write_summary_artifact(rows, output / f"{filename}.md", artifacts)
+                _record_artifact(rows, rows_path, artifacts, write_summaries=write_summaries)
 
     contrast_rows = morphology_contrast_diagnostic_rows(
         intervention_row_sets,
@@ -183,7 +185,12 @@ def run_v1_benchmark_bundle(
     if contrast_rows:
         contrast_path = output / "morphology_contrast_interventions.jsonl"
         write_diagnostic_rows(contrast_rows, contrast_path)
-        _write_summary_artifact(contrast_rows, output / "morphology_contrast_interventions.md", artifacts)
+        _record_artifact(
+            contrast_rows,
+            contrast_path,
+            artifacts,
+            write_summaries=write_summaries,
+        )
 
     manifest = {
         "dataset_root": str(dataset_root),
@@ -193,6 +200,7 @@ def run_v1_benchmark_bundle(
         "suite_config": {key: list(value) if value is not None else None for key, value in suite_config.items()},
         "max_val_samples": max_val_samples,
         "max_intervention_samples": max_intervention_samples,
+        "write_summaries": write_summaries,
         "artifacts": artifacts,
     }
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -236,15 +244,79 @@ def infer_pair_metadata(path: str | Path, *, default_morphology: str = "unknown"
     return intervention, morphology_id
 
 
-def _write_summary_artifact(rows: list[dict[str, Any]], path: Path, artifacts: list[dict[str, Any]]) -> None:
-    write_diagnostic_summary(rows, path)
-    artifacts.append(
-        {
-            "rows": len(rows),
-            "rows_path": str(path.with_suffix(".jsonl")),
-            "summary_path": str(path),
-        }
+def _group_pair_paths_by_morphology(
+    pair_paths: Iterable[Path],
+    *,
+    default_morphology: str,
+) -> list[tuple[str, str, list[Path]]]:
+    grouped: dict[tuple[str, str], list[Path]] = {}
+    for pair_path in pair_paths:
+        intervention, morphology_id = infer_pair_metadata(pair_path, default_morphology=default_morphology)
+        grouped.setdefault((intervention, morphology_id), []).append(pair_path)
+    return [
+        (intervention, morphology_id, sorted(paths))
+        for (intervention, morphology_id), paths in sorted(grouped.items())
+    ]
+
+
+def _run_grouped_intervention(
+    pair_paths: list[Path],
+    *,
+    output: Path,
+    base: DiagnosticContext,
+    suites: tuple[str, ...],
+    model_fn: Callable[[np.ndarray], np.ndarray] | None,
+    model_id: str | None,
+    intervention: str,
+    morphology_id: str,
+    max_samples: int | None,
+) -> tuple[Path, list[dict[str, Any]]]:
+    intervention_model_id = model_id if model_fn is not None else "teacher"
+    context = _replace_context(
+        base,
+        suites=suites,
+        model_id=intervention_model_id,
+        morphology_id=morphology_id,
+        split="",
+        condition=f"interventions/{intervention}",
+        intervention=intervention,
     )
+    rows_path = output / f"intervention_{_slug(morphology_id)}_{_slug(intervention)}.jsonl"
+    if len(pair_paths) == 1:
+        rows = run_paired_intervention_on_npz(
+            pair_paths[0],
+            model_fn=model_fn,
+            context=context,
+            max_samples=max_samples,
+            output=rows_path,
+        )
+    else:
+        rows = run_paired_intervention_on_npzs(
+            pair_paths,
+            model_fn=model_fn,
+            context=context,
+            max_samples=max_samples,
+            output=rows_path,
+        )
+    return rows_path, rows
+
+
+def _record_artifact(
+    rows: list[dict[str, Any]],
+    rows_path: Path,
+    artifacts: list[dict[str, Any]],
+    *,
+    write_summaries: bool,
+) -> None:
+    artifact = {
+        "rows": len(rows),
+        "rows_path": str(rows_path),
+    }
+    if write_summaries:
+        summary_path = rows_path.with_suffix(".md")
+        write_diagnostic_summary(rows, summary_path)
+        artifact["summary_path"] = str(summary_path)
+    artifacts.append(artifact)
 
 
 def _replace_context(context: DiagnosticContext, **updates: Any) -> DiagnosticContext:

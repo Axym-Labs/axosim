@@ -205,6 +205,13 @@ def main(argv: list[str] | None = None) -> int:
     benchmark_v1.add_argument("--memory-units", type=int, default=30)
     benchmark_v1.add_argument("--branches", type=int, default=32)
     benchmark_v1.add_argument("--calibrated-spike-threshold", type=float)
+    benchmark_v1.add_argument(
+        "--no-summaries",
+        action="store_false",
+        dest="write_summaries",
+        help="write only machine-readable benchmark rows/manifests, not Markdown summaries",
+    )
+    benchmark_v1.set_defaults(write_summaries=True)
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a model with the corrected full-trace metric path")
     evaluate.add_argument("--preset", choices=sorted(list_presets()["evaluate"]))
@@ -495,6 +502,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_val_samples=args.max_val_samples,
                 max_intervention_samples=args.max_intervention_samples,
                 cache_shards=args.cache_shards,
+                write_summaries=args.write_summaries,
             )
         except (FileNotFoundError, ValueError) as error:
             print(str(error))

@@ -3,6 +3,96 @@
 Reverse-chronological execution log. Historical entries from the pre-port file
 use `00:00` when no exact time was recorded.
 
+- IMPLEMENTATION (2026-06-17 12:39): Implemented the acceptable part of the
+  original TCN preprocessing in the pretrained benchmark adapter: overlapping
+  fixed-length windows, receptive-field-derived overlap from the training
+  pickle metadata, leading-overlap discard for non-initial windows, final-window
+  zero padding with padded timesteps trimmed from outputs, and no clipping or
+  test-target soma mean/std alignment. Overlap metadata now records
+  `tcn_dwt7_128_153` window/overlap/time-window `400/154/153`,
+  `tcn_dwt8_224_217` `500/218/217`, and `tcn_dwt9_256_241`
+  `500/242/241`. Re-ran the TCN family on the v1 pilot storage-only benchmark;
+  updated metrics: `tcn_dwt8_224_217` RMSE/AUC `68.9019/0.7775`,
+  `tcn_dwt7_128_153` `204.3985/0.5284`, `tcn_dwt9_256_241`
+  `1293.7712/0.4658`. Interpretation unchanged: the fair window adapter is now
+  implemented, but TCN soma outputs remain scale-incompatible without the
+  original transductive target-distribution alignment, so TCN remains a
+  compatibility/adaptation issue rather than a fair paper-facing score.
+  Validation: helper stitching smoke passed; py_compile passed; storage-only
+  TCN sweep completed; focused benchmark tests passed (`35 passed`).
+
+- VERIFICATION (2026-06-17 12:30): Evaluated all selected pretrained
+  literature checkpoints through the dataframe-first `benchmark-v1` bundle on
+  the all-five-morphology v1 pilot dataset, with plot/Markdown summaries
+  disabled so JSONL rows/manifests are the stored benchmark artifacts. Added
+  `--no-summaries`/`write_summaries=False`, lazy package imports so the
+  TensorFlow-only TCN env can import benchmark code without PyTorch, and fixed
+  sharded intervention evaluation to group by `(intervention, morphology)`
+  instead of multiplying `max_intervention_samples` per shard and overwriting
+  repeated morphology filenames. Stored result root:
+  `artifacts/pretrained_benchmark_eval_20260617/`; report:
+  `artifacts/pretrained_benchmark_eval_20260617.md`. Results: upstream
+  Branch-ELM/ELM checkpoints run and produce plausible v1-pilot smoke metrics
+  (`branch_elm_m30` RMSE/AUC `3.2235/0.8851`, `branch_elm_m100`
+  `3.2185/0.8648`, `branch_elm_best` `3.2371/0.8628`, `branch_elm_m1`
+  `3.4885/0.8885`). TCN `.h5` checkpoints load and run through the same
+  storage path, but their somatic outputs are not sane under the current v1
+  adapter/scaling (`tcn_dwt8_224_217` RMSE/AUC `73.35/0.7486`,
+  `tcn_dwt7_128_153` `187.71/0.5182`, `tcn_dwt9_256_241`
+  `1275.78/0.4775`); direct range checks show finite spike probabilities but
+  somatic predictions far outside the normalized target range. Interpretation:
+  Branch-ELM/ELM pretrained baselines are benchmark-compatible; TCN requires
+  recovery of the original NeuronIO TCN target scaling/window preprocessing
+  before paper-facing comparison. Also found a full-v1 evaluation bottleneck:
+  current compressed `128 x 6000 x 1278` shards make tiny `max_val_samples`
+  requests decompress a huge shard, so full-dataset model evaluation needs a
+  rechunked/streaming path before scaling beyond pilot.
+
+- VERIFICATION (2026-06-17 12:05): Downloaded and smoke-verified the
+  literature pretrained model set for later benchmark evaluation. Local TCN
+  cache already contained four Beniaguev/Kaggle NMDA `.h5` models; selected
+  three for the <=3/model-family cap: `7_128_153`, `8_224_217`, and
+  `9_256_241`. Downloaded ELM/Branch-ELM files from `AaronSpieler/elmneuron`
+  into ignored `.external/elmneuron/models/`: `best_elm_neuron`,
+  `num_memory_1`, `num_memory_30`, and `num_memory_100`, including configs,
+  stats, train configs, and eval metadata. Verification: all four
+  ELM/Branch-ELM checkpoints strictly load through the local official PyTorch
+  loader and produce finite `(2, 16, 2)` outputs; all three selected TCN
+  `.h5` files load in an isolated CPU TensorFlow env (`.venv-tcn`,
+  `CUDA_VISIBLE_DEVICES=-1`) and produce finite zero-input forward outputs.
+  Tracked report: `artifacts/pretrained_model_inventory_20260617.md`.
+
+- OPERATION (2026-06-17 01:28): Resumed the full v1 GPU dataset generation
+  with the existing `--resume` launcher. No prior generator was active; GPU was
+  idle before launch. Resume validation opened existing `.npz` shards and took
+  about `9-10 min` before launching the next worker, which restarted
+  `train/specimen_589427435_00835` as expected. Counts at resume:
+  `train=535`, `val=60`, `test=60`, `private-test=60`, `interventions=120`
+  (`835/1285` total shards, `450` remaining). ETA from observed shard speeds:
+  center estimate `~65 h` remaining, finish around `2026-06-19 18:10 CEST`;
+  plausible range `2026-06-19 07:00` to `2026-06-20 04:30 CEST`, with a slow
+  worst-case tail closer to `2026-06-21 11:00 CEST`.
+
+- OPERATION (2026-06-15 18:29): Paused the resumed full v1 GPU dataset
+  generation on request. The old PID file still pointed at the prior stopped
+  launcher (`90618`), but an active resumed job was found under process group
+  `83456` and terminated. No generator or worker processes remained afterward;
+  GPU was idle (`0%`, `42 MiB`). Completed shard metadata at pause:
+  `train=535`, `val=60`, `test=60`, `private-test=60`, `interventions=120`
+  (`835/1285` total shards). The active worker was on
+  `specimen_589427435_00835`; no `.json` metadata for that shard was present
+  after termination, so `--resume` should rerun it.
+
+- OPERATION (2026-06-14 14:39): Paused the full v1 GPU dataset generation on
+  request by terminating the resumable launcher process group. No generator or
+  worker processes remained afterward; GPU returned to idle (`0%`, `42 MiB`).
+  Completed shard metadata at pause: `train=530`, `val=60`, `test=60`,
+  `private-test=60`, `interventions=120` (`830/1285` total shards). The
+  interrupted/current train shard `specimen_589427435_00829` appears to have
+  completed and written both `.npz` and `.json`. Resume with the existing
+  `run_v1_full_generation_gpu_20260611.sh` launcher, which uses `--resume` to
+  skip valid completed shards.
+
 - IMPLEMENTATION (2026-06-11 23:20): Promoted the `soma075` objective into the
   standard Mamba training presets. `mamba-official-probe` and
   `mamba2-official-probe` now set `spike_loss_weight=0.25` and

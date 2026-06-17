@@ -145,6 +145,33 @@ def run_paired_intervention_on_selector(
     return rows
 
 
+def run_paired_intervention_on_npzs(
+    paths: list[Path],
+    *,
+    model_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+    context: DiagnosticContext | None = None,
+    max_samples: int | None = None,
+    output: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Run paired diagnostics on several shards as one intervention unit."""
+    baseline_inputs, baseline_targets, intervention_inputs, intervention_targets, trace_ids = load_intervention_pair_npzs(
+        paths,
+        max_samples=max_samples,
+    )
+    rows = paired_intervention_diagnostic_rows(
+        baseline_inputs,
+        baseline_targets,
+        intervention_inputs,
+        intervention_targets,
+        model_fn=model_fn,
+        context=context,
+        trace_ids=trace_ids,
+    )
+    if output is not None:
+        write_diagnostic_rows(rows, output)
+    return rows
+
+
 def load_intervention_pair_npzs(
     paths: list[Path],
     *,
