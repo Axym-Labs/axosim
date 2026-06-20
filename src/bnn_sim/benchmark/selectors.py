@@ -38,10 +38,15 @@ class V1DatasetLayout:
         return DatasetSelector(root=self.root / name, split=name, condition=name)
 
     def intervention(self, name: str) -> DatasetSelector:
-        if name not in INTERVENTION_CONDITIONS:
-            raise ValueError(f"unknown intervention {name!r}; expected one of {INTERVENTION_CONDITIONS}")
+        path = self.root / "interventions" / name
+        if name not in INTERVENTION_CONDITIONS and not path.exists():
+            available = self.available_interventions()
+            raise ValueError(
+                f"unknown intervention {name!r}; expected one of {INTERVENTION_CONDITIONS} "
+                f"or an existing intervention folder; available={available}"
+            )
         return DatasetSelector(
-            root=self.root / "interventions" / name,
+            root=path,
             split=None,
             condition=f"interventions/{name}",
             intervention=name,
@@ -54,11 +59,10 @@ class V1DatasetLayout:
         interventions_root = self.root / "interventions"
         if not interventions_root.exists():
             return ()
-        return tuple(
-            name
-            for name in INTERVENTION_CONDITIONS
-            if (interventions_root / name).exists()
-        )
+        names = {path.name for path in interventions_root.iterdir() if path.is_dir()}
+        ordered = [name for name in INTERVENTION_CONDITIONS if name in names]
+        ordered.extend(sorted(names - set(ordered)))
+        return tuple(ordered)
 
     def validate_minimal(self, *, require_interventions: bool = False) -> None:
         missing = []

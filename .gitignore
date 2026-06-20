@@ -11,6 +11,8 @@ checkpoints/
 
 # Agent/local experiment state.
 .codex/
+docs/ta1/
+docs/verify-arbor-simulator/
 
 # Generated experiment payloads. Commit source scripts and concise reports,
 # not datasets, checkpoints, plots, compiled mechanisms, or large run dumps.

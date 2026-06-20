@@ -237,8 +237,16 @@ def _suite_config(suite: SuiteProfile) -> dict[str, tuple[str, ...] | None]:
 
 def infer_pair_metadata(path: str | Path, *, default_morphology: str = "unknown") -> tuple[str, str]:
     """Infer intervention and morphology labels from a pilot pair-file path."""
+    path = Path(path)
+    parts = path.parts
+    intervention = None
+    if "interventions" in parts:
+        index = parts.index("interventions")
+        if index + 1 < len(parts):
+            intervention = parts[index + 1]
     text = str(path)
-    intervention = next((name for name in INTERVENTION_CONDITIONS if name in text), "event_dropout")
+    if intervention is None:
+        intervention = next((name for name in INTERVENTION_CONDITIONS if name in text), "event_dropout")
     match = re.search(r"specimen_(\d+)", text)
     morphology_id = f"specimen_{match.group(1)}" if match else default_morphology
     return intervention, morphology_id

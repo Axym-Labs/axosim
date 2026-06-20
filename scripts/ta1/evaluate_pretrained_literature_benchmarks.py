@@ -24,9 +24,9 @@ from bnn_sim.benchmark.bundle import run_v1_benchmark_bundle
 from bnn_sim.benchmark.diagnostic_rows import DiagnosticContext
 
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET = ROOT / "data/v1-neuronio-like-gpu-20260611"
-DEFAULT_OUTPUT = ROOT / "docs/verify-arbor-simulator/artifacts/pretrained_benchmark_eval_20260617"
+DEFAULT_OUTPUT = ROOT / "docs/ta1/artifacts/analysis_sources/existing_models/pretrained_benchmark_eval_20260617"
 
 
 OFFICIAL_MODELS = {
