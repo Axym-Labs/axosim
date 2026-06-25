@@ -142,12 +142,14 @@ def train_dataset(
                         spike_window=sparse_soma_spike_window,
                         post_event_window=sparse_soma_post_event_window,
                     )
-                    sparse_weight = sparse_mask.to(dtype=pred_soma.dtype)
-                    sparse_soma_loss = ((pred_soma - target_soma).square() * sparse_weight).sum()
-                    sparse_soma_loss = sparse_soma_loss / sparse_weight.sum().clamp_min(1.0)
+                    sparse_soma_loss, sparse_fraction = _sparse_soma_weighted_mse(
+                        pred_soma,
+                        target_soma,
+                        sparse_mask,
+                    )
                     loss = loss + sparse_soma_loss_weight * sparse_soma_loss
                     sparse_soma_loss_value = float(sparse_soma_loss.detach().cpu())
-                    sparse_soma_fraction_value = float(sparse_weight.mean().detach().cpu())
+                    sparse_soma_fraction_value = float(sparse_fraction.detach().cpu())
                     last_sparse_soma_loss = sparse_soma_loss_value
                     last_sparse_soma_fraction = sparse_soma_fraction_value
                 if soma_slope_loss_weight and pred_soma.shape[1] > 1:
@@ -419,6 +421,31 @@ def _sparse_soma_mask(
         input_event = input_activity > 0
     post_event = _dilate_time_mask(input_event, post_event_window, causal=True)
     return high_voltage | high_dvdt | spike_near | post_event
+
+
+def _sparse_soma_weighted_mse(
+    prediction_soma: torch.Tensor,
+    target_soma: torch.Tensor,
+    sparse_mask: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mean squared soma error on sparse, teacher-defined high-importance timesteps.
+
+    This is the training-side analogue of the imbalance critique in the
+    benchmark: ordinary voltage MSE weights AP-neighborhood, high-dV/dt, and
+    event-adjacent timesteps by their empirical frequency.  The sparse
+    auxiliary loss gives those selected timesteps their own normalized MSE
+    term, so the objective can attend to them without changing the target.
+    """
+    if prediction_soma.shape != target_soma.shape or prediction_soma.shape != sparse_mask.shape:
+        raise ValueError(
+            "prediction_soma, target_soma, and sparse_mask must have matching shapes, "
+            f"got {prediction_soma.shape}, {target_soma.shape}, {sparse_mask.shape}"
+        )
+    sparse_weight = sparse_mask.to(dtype=prediction_soma.dtype)
+    squared_error = (prediction_soma - target_soma).square()
+    sparse_loss = (squared_error * sparse_weight).sum() / sparse_weight.sum().clamp_min(1.0)
+    sparse_fraction = sparse_weight.mean()
+    return sparse_loss, sparse_fraction
 
 
 def _dilate_time_mask(mask: torch.Tensor, window: int, *, causal: bool) -> torch.Tensor:

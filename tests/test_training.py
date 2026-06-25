@@ -1,7 +1,34 @@
 import json
 
+import torch
+
 from bnn_sim.cli import main
 from bnn_sim.checkpoint import load_checkpoint
+from bnn_sim.train import _sparse_soma_weighted_mse
+
+
+def test_sparse_soma_weighted_mse_uses_only_selected_timesteps():
+    prediction = torch.tensor([[0.0, 2.0, 4.0, 8.0]])
+    target = torch.tensor([[0.0, 1.0, 2.0, 3.0]])
+    mask = torch.tensor([[False, True, False, True]])
+
+    loss, fraction = _sparse_soma_weighted_mse(prediction, target, mask)
+
+    assert torch.isclose(loss, torch.tensor((1.0**2 + 5.0**2) / 2.0))
+    assert torch.isclose(fraction, torch.tensor(0.5))
+
+
+def test_sparse_soma_weighted_mse_requires_matching_shapes():
+    prediction = torch.zeros(1, 4)
+    target = torch.zeros(1, 4)
+    mask = torch.zeros(1, 3, dtype=torch.bool)
+
+    try:
+        _sparse_soma_weighted_mse(prediction, target, mask)
+    except ValueError as error:
+        assert "matching shapes" in str(error)
+    else:
+        raise AssertionError("expected shape mismatch to fail")
 
 
 def test_cli_train_writes_checkpoint_and_metrics(tmp_path):
@@ -104,6 +131,18 @@ def test_cli_train_with_validation_writes_best_checkpoint(tmp_path):
             "0.5",
             "--soma-loss-weight",
             "0.5",
+            "--sparse-soma-loss-weight",
+            "0.25",
+            "--sparse-soma-high-voltage-quantile",
+            "0.8",
+            "--sparse-soma-high-dvdt-quantile",
+            "0.8",
+            "--sparse-soma-input-event-quantile",
+            "0.8",
+            "--sparse-soma-spike-window",
+            "1",
+            "--sparse-soma-post-event-window",
+            "1",
             "--prefetch-batches",
             "1",
             "--pin-memory",
@@ -126,6 +165,12 @@ def test_cli_train_with_validation_writes_best_checkpoint(tmp_path):
     assert metrics["lr_schedule_steps"] == 30
     assert metrics["spike_loss_weight"] == 0.5
     assert metrics["soma_loss_weight"] == 0.5
+    assert metrics["sparse_soma_loss_weight"] == 0.25
+    assert metrics["sparse_soma_high_voltage_quantile"] == 0.8
+    assert metrics["sparse_soma_high_dvdt_quantile"] == 0.8
+    assert metrics["sparse_soma_input_event_quantile"] == 0.8
+    assert metrics["sparse_soma_spike_window"] == 1
+    assert metrics["sparse_soma_post_event_window"] == 1
     assert metrics["prefetch_batches"] == 1
     assert metrics["pin_memory"] is True
     assert metrics["non_blocking"] is True
@@ -139,6 +184,8 @@ def test_cli_train_with_validation_writes_best_checkpoint(tmp_path):
     assert metrics["history"][0]["validation_metric_stitch_burn_in"] is None
     assert metrics["history"][0]["validation_soma_affine_calibration"] is True
     assert metrics["history"][0]["validation_soma_rmse_units"] == "millivolts"
+    assert "train_last_sparse_soma_loss" in metrics["history"][0]
+    assert 0.0 <= metrics["history"][0]["train_last_sparse_soma_fraction"] <= 1.0
     assert "validation_soma_rmse" in metrics["history"][0]
     assert (metrics_path.parent / "experiment-registry.jsonl").exists()
 

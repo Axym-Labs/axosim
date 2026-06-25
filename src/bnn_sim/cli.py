@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import sys
 import time
@@ -33,31 +32,6 @@ from bnn_sim.inference_benchmark import (
     parse_int_list,
     write_inference_benchmark,
 )
-from bnn_sim.arbor_sim import (
-    ArborHeteroConfig,
-    parse_split_samples,
-    write_arbor_hetero_dataset,
-    write_arbor_hetero_splits,
-)
-from bnn_sim.benchmark.profiles import (
-    build_axis_plan,
-    estimate_profile_cost,
-    get_benchmark_profile,
-    list_benchmark_profiles,
-)
-from bnn_sim.benchmark.dataset_schema import (
-    build_diagnostic_suite_catalog,
-    build_v1_dataset_manifest_template,
-)
-from bnn_sim.benchmark.diagnostic_rows import DiagnosticContext
-from bnn_sim.benchmark.bundle import run_v1_benchmark_bundle
-from bnn_sim.benchmark.runner import (
-    run_paired_intervention_on_npz,
-    run_paired_intervention_on_selector,
-    run_teacher_qc_on_selector,
-)
-from bnn_sim.benchmark.reports import write_diagnostic_summary
-from bnn_sim.benchmark.selectors import V1DatasetLayout
 from bnn_sim.model import BranchELM, BranchELMConfig
 from bnn_sim.neuronio_raw import convert_neuronio_pickles
 from bnn_sim.official import create_official_elm, load_official_elm_config, load_official_state_dict
@@ -89,39 +63,6 @@ def main(argv: list[str] | None = None) -> int:
     demo.add_argument("--input-dim", type=int, default=64)
     demo.add_argument("--seed", type=int, default=0)
 
-    arbor_data = subparsers.add_parser(
-        "make-arbor-hetero-data",
-        help="write Arbor-backed heterogeneous cable-cell shards for distillation",
-    )
-    arbor_data.add_argument("--config", help="JSON config with make-arbor-hetero-data option names")
-    arbor_data.add_argument("--output")
-    arbor_data.add_argument("--samples", type=int, default=128)
-    arbor_data.add_argument("--shards", type=int, default=1)
-    arbor_data.add_argument("--splits", help="comma-separated NAME:SAMPLES pairs, e.g. train:128,val:32,test:32")
-    arbor_data.add_argument("--shards-per-split", type=int, default=1)
-    arbor_data.add_argument("--time-steps", type=int, default=6000)
-    arbor_data.add_argument("--input-dim", type=int, default=1278)
-    arbor_data.add_argument("--branches", type=int, default=45)
-    arbor_data.add_argument("--integration-dt-ms", type=float, default=0.025)
-    arbor_data.add_argument("--input-protocol", choices=["arbor_poisson", "neuronio_smoothed"], default="arbor_poisson")
-    arbor_data.add_argument("--synapse-routing", choices=["branch", "distributed"], default="branch")
-    arbor_data.add_argument("--distributed-sites-per-polarity", type=int)
-    arbor_data.add_argument("--spike-label-mode", choices=["threshold_crossing", "local_peak"], default="threshold_crossing")
-    arbor_data.add_argument("--spike-peak-threshold-mv", type=float, default=-25.0)
-    arbor_data.add_argument("--base-event-rate-hz", type=float, default=2.0)
-    arbor_data.add_argument("--burst-probability", type=float, default=0.015)
-    arbor_data.add_argument("--burst-event-rate-hz", type=float, default=35.0)
-    arbor_data.add_argument("--arbor-gpu-id", type=int, default=0, help="GPU id for Arbor context; ignored with --cpu-only")
-    arbor_data.add_argument("--cpu-only", action="store_true", help="use Arbor CPU context instead of CUDA")
-    arbor_data.add_argument("--arbor-threads", type=int, default=1)
-    arbor_data.add_argument("--sim-batch-size", type=int, default=32, help="independent cells per Arbor simulation batch")
-    arbor_data.add_argument("--seed", type=int, default=0)
-    arbor_data.add_argument(
-        "--param-overrides",
-        help="JSON object or path to a JSON object overriding Arbor heterogeneity parameters for all samples",
-    )
-    arbor_data.add_argument("--report", help="optional path for a copy of the generation report")
-
     convert = subparsers.add_parser("convert-neuronio", help="convert raw NeuronIO pickle files to deterministic shards")
     convert.add_argument("--input", required=True)
     convert.add_argument("--output", required=True)
@@ -136,82 +77,6 @@ def main(argv: list[str] | None = None) -> int:
     repack.add_argument("--input-dtype", choices=["int8", "float32"], default="int8")
 
     preset_list = subparsers.add_parser("list-presets", help="list named train/evaluate presets")
-
-    profile = subparsers.add_parser("benchmark-profile", help="print a NEURO-BENCH axis/default profile")
-    profile.add_argument("--name", default="paper-default", choices=list_benchmark_profiles())
-    profile.add_argument("--plan", action="store_true", help="print the expanded axis-composition plan")
-    profile.add_argument("--cost", action="store_true", help="print only the local capacity estimate")
-
-    dataset_schema = subparsers.add_parser(
-        "dataset-schema",
-        help="print the v1 dataset manifest template or diagnostic suite catalog",
-    )
-    dataset_schema.add_argument("--kind", choices=["manifest", "diagnostics"], default="manifest")
-
-    benchmark_rows = subparsers.add_parser(
-        "benchmark-rows",
-        help="write dataframe-first v1 benchmark diagnostic rows",
-    )
-    benchmark_rows.add_argument("--mode", choices=["teacher-qc", "model", "intervention"], default="teacher-qc")
-    benchmark_rows.add_argument("--dataset-root", required=True)
-    benchmark_rows.add_argument("--selector", choices=["val", "intervention"], default="val")
-    benchmark_rows.add_argument("--intervention", default="event_dropout")
-    benchmark_rows.add_argument("--pair-path", help="paired intervention .npz path, for pilot artifacts outside a v1 layout")
-    benchmark_rows.add_argument("--output", required=True)
-    benchmark_rows.add_argument("--summary-output", help="optional compact benchmark summary path (.md or .json)")
-    benchmark_rows.add_argument("--suites", default="teacher-qc")
-    benchmark_rows.add_argument("--morphology-id", default="unknown")
-    benchmark_rows.add_argument("--teacher-id", default="teacher")
-    benchmark_rows.add_argument("--max-samples", type=int)
-    benchmark_rows.add_argument("--cache-shards", type=int, default=1)
-    benchmark_rows.add_argument("--ignore-start", type=int, default=500)
-    benchmark_rows.add_argument("--soma-scale", type=float, default=0.1)
-    benchmark_rows.add_argument("--soma-bias-mv", type=float, default=-67.7)
-    benchmark_rows.add_argument("--input-dim", type=int, default=1278)
-    benchmark_rows.add_argument("--memory-units", type=int, default=30)
-    benchmark_rows.add_argument("--branches", type=int, default=32)
-    benchmark_rows.add_argument("--model-kind", choices=MODEL_KIND_CHOICES, default="baseline")
-    benchmark_rows.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
-    benchmark_rows.add_argument("--checkpoint")
-    benchmark_rows.add_argument("--device", default="cpu")
-    benchmark_rows.add_argument("--batch-size", type=int, default=4)
-    benchmark_rows.add_argument("--model-id", default="model")
-    benchmark_rows.add_argument("--calibrated-spike-threshold", type=float)
-    benchmark_rows.add_argument("--compare-model", action="store_true", help="include model response rows for intervention mode")
-
-    benchmark_v1 = subparsers.add_parser(
-        "benchmark-v1",
-        help="run the promoted v1 benchmark bundle on val plus paired interventions",
-    )
-    benchmark_v1.add_argument("--dataset-root", required=True)
-    benchmark_v1.add_argument("--output-dir", required=True)
-    benchmark_v1.add_argument("--suite", choices=["teacher-qc", "paper-summary", "full"], default="paper-summary")
-    benchmark_v1.add_argument("--intervention-pair-glob", action="append", default=[])
-    benchmark_v1.add_argument("--morphology-id", default="unknown")
-    benchmark_v1.add_argument("--teacher-id", default="teacher")
-    benchmark_v1.add_argument("--max-val-samples", type=int)
-    benchmark_v1.add_argument("--max-intervention-samples", type=int)
-    benchmark_v1.add_argument("--cache-shards", type=int, default=1)
-    benchmark_v1.add_argument("--ignore-start", type=int, default=500)
-    benchmark_v1.add_argument("--soma-scale", type=float, default=0.1)
-    benchmark_v1.add_argument("--soma-bias-mv", type=float, default=-67.7)
-    benchmark_v1.add_argument("--checkpoint")
-    benchmark_v1.add_argument("--device", default="cpu")
-    benchmark_v1.add_argument("--batch-size", type=int, default=4)
-    benchmark_v1.add_argument("--model-id", default="model")
-    benchmark_v1.add_argument("--model-kind", choices=MODEL_KIND_CHOICES, default="baseline")
-    benchmark_v1.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
-    benchmark_v1.add_argument("--input-dim", type=int, default=1278)
-    benchmark_v1.add_argument("--memory-units", type=int, default=30)
-    benchmark_v1.add_argument("--branches", type=int, default=32)
-    benchmark_v1.add_argument("--calibrated-spike-threshold", type=float)
-    benchmark_v1.add_argument(
-        "--no-summaries",
-        action="store_false",
-        dest="write_summaries",
-        help="write only machine-readable benchmark rows/manifests, not Markdown summaries",
-    )
-    benchmark_v1.set_defaults(write_summaries=True)
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a model with the corrected full-trace metric path")
     evaluate.add_argument("--preset", choices=sorted(list_presets()["evaluate"]))
@@ -379,137 +244,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(list_presets(), indent=2, sort_keys=True))
         return 0
 
-    if args.command == "benchmark-profile":
-        if args.cost:
-            payload = estimate_profile_cost(args.name)
-        elif args.plan:
-            payload = build_axis_plan(args.name)
-        else:
-            payload = get_benchmark_profile(args.name).to_dict()
-        print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0
-
-    if args.command == "dataset-schema":
-        if args.kind == "manifest":
-            payload = build_v1_dataset_manifest_template()
-        else:
-            payload = build_diagnostic_suite_catalog()
-        print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0
-
-    if args.command == "benchmark-rows":
-        try:
-            layout = V1DatasetLayout(args.dataset_root)
-            selector = (
-                layout.default_validation()
-                if args.selector == "val"
-                else layout.intervention(args.intervention)
-            )
-            context = DiagnosticContext(
-                suites=tuple(item.strip() for item in args.suites.split(",") if item.strip()),
-                model_id="teacher" if args.mode == "teacher-qc" else args.model_id,
-                teacher_id=args.teacher_id,
-                morphology_id=args.morphology_id,
-                split=selector.split or "",
-                condition=selector.condition,
-                intervention=selector.intervention,
-                ignore_start=args.ignore_start,
-                soma_scale=args.soma_scale,
-                soma_bias_mv=args.soma_bias_mv,
-                calibrated_spike_threshold=args.calibrated_spike_threshold,
-            )
-            model_fn = None
-            if args.mode in {"model", "intervention"} and (
-                args.mode == "model" or args.compare_model or args.checkpoint
-            ):
-                if args.checkpoint:
-                    model = _load_checkpoint_for_evaluate(args)
-                else:
-                    model = _build_model_from_args(args)
-                model_fn = _numpy_model_predict_fn(model, device=args.device, batch_size=args.batch_size)
-
-            if args.mode == "teacher-qc":
-                rows = run_teacher_qc_on_selector(
-                    selector,
-                    context=context,
-                    max_samples=args.max_samples,
-                    output=args.output,
-                    cache_shards=args.cache_shards,
-                )
-            elif args.mode == "model":
-                from bnn_sim.benchmark.runner import run_model_diagnostics_on_selector
-
-                rows = run_model_diagnostics_on_selector(
-                    model_fn,
-                    selector,
-                    context=context,
-                    max_samples=args.max_samples,
-                    output=args.output,
-                    cache_shards=args.cache_shards,
-                )
-            else:
-                if args.pair_path:
-                    rows = run_paired_intervention_on_npz(
-                        args.pair_path,
-                        model_fn=model_fn,
-                        context=context,
-                        max_samples=args.max_samples,
-                        output=args.output,
-                    )
-                else:
-                    rows = run_paired_intervention_on_selector(
-                        selector,
-                        model_fn=model_fn,
-                        context=context,
-                        max_samples=args.max_samples,
-                        output=args.output,
-                    )
-        except (FileNotFoundError, ValueError) as error:
-            print(str(error))
-            return 2
-        if args.summary_output:
-            try:
-                write_diagnostic_summary(rows, args.summary_output)
-            except ValueError as error:
-                print(str(error))
-                return 2
-        print(json.dumps({"rows": len(rows), "output": args.output}, indent=2, sort_keys=True))
-        return 0
-
-    if args.command == "benchmark-v1":
-        try:
-            model_fn = None
-            if args.checkpoint:
-                model = _load_checkpoint_for_evaluate(args)
-                model_fn = _numpy_model_predict_fn(model, device=args.device, batch_size=args.batch_size)
-            pair_paths = _expand_globs(args.intervention_pair_glob)
-            manifest = run_v1_benchmark_bundle(
-                dataset_root=args.dataset_root,
-                output_dir=args.output_dir,
-                base_context=DiagnosticContext(
-                    model_id=args.model_id,
-                    teacher_id=args.teacher_id,
-                    morphology_id=args.morphology_id,
-                    ignore_start=args.ignore_start,
-                    soma_scale=args.soma_scale,
-                    soma_bias_mv=args.soma_bias_mv,
-                    calibrated_spike_threshold=args.calibrated_spike_threshold,
-                ),
-                model_fn=model_fn,
-                model_id=args.model_id if model_fn is not None else None,
-                intervention_pair_paths=pair_paths,
-                suite=args.suite,
-                max_val_samples=args.max_val_samples,
-                max_intervention_samples=args.max_intervention_samples,
-                cache_shards=args.cache_shards,
-                write_summaries=args.write_summaries,
-            )
-        except (FileNotFoundError, ValueError) as error:
-            print(str(error))
-            return 2
-        print(json.dumps(manifest, indent=2, sort_keys=True))
-        return 0
-
     if args.command == "make-demo-data":
         write_demo_shards(
             args.output,
@@ -519,56 +253,6 @@ def main(argv: list[str] | None = None) -> int:
             input_dim=args.input_dim,
             seed=args.seed,
         )
-        return 0
-
-    if args.command == "make-arbor-hetero-data":
-        try:
-            _apply_arbor_data_config(args, explicit_dests)
-            if not args.output:
-                raise ValueError("--output is required unless provided by --config")
-            config = ArborHeteroConfig(
-                input_dim=args.input_dim,
-                num_branch=args.branches,
-                time_steps=args.time_steps,
-                integration_dt_ms=args.integration_dt_ms,
-                input_protocol=args.input_protocol,
-                synapse_routing=args.synapse_routing,
-                distributed_sites_per_polarity=args.distributed_sites_per_polarity,
-                spike_label_mode=args.spike_label_mode,
-                spike_peak_threshold_mv=args.spike_peak_threshold_mv,
-                base_event_rate_hz=args.base_event_rate_hz,
-                burst_probability=args.burst_probability,
-                burst_event_rate_hz=args.burst_event_rate_hz,
-                arbor_threads=args.arbor_threads,
-                arbor_gpu_id=_resolve_arbor_gpu_id(args, explicit_dests),
-                sim_batch_size=args.sim_batch_size,
-            )
-            if args.splits:
-                report = write_arbor_hetero_splits(
-                    args.output,
-                    split_samples=parse_split_samples(args.splits),
-                    shards_per_split=args.shards_per_split,
-                    seed=args.seed,
-                    config=config,
-                    param_overrides=_parse_param_overrides(args.param_overrides),
-                )
-            else:
-                report = write_arbor_hetero_dataset(
-                    args.output,
-                    samples=args.samples,
-                    shards=args.shards,
-                    seed=args.seed,
-                    config=config,
-                    param_overrides=_parse_param_overrides(args.param_overrides),
-                )
-        except ValueError as error:
-            print(str(error))
-            return 2
-        if args.report:
-            report_path = Path(args.report)
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        print(json.dumps(report, indent=2, sort_keys=True))
         return 0
 
     if args.command == "convert-neuronio":
@@ -929,103 +613,6 @@ def _numpy_model_predict_fn(model, *, device: str, batch_size: int):
         return np.concatenate(outputs, axis=0).astype(np.float32, copy=False)
 
     return predict
-
-
-def _expand_globs(patterns: list[str]) -> list[Path]:
-    paths: list[Path] = []
-    for pattern in patterns:
-        matches = sorted(glob.glob(pattern))
-        if not matches:
-            raise FileNotFoundError(f"intervention pair glob matched no files: {pattern}")
-        paths.extend(Path(match) for match in matches)
-    return paths
-
-
-def _apply_arbor_data_config(args, explicit_dests: set[str]) -> None:
-    config_path = getattr(args, "config", None)
-    if not config_path:
-        return
-    path = Path(config_path)
-    try:
-        config = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as error:
-        raise ValueError(f"simulator config not found: {path}") from error
-    except json.JSONDecodeError as error:
-        raise ValueError(f"invalid simulator config JSON in {path}: {error}") from error
-    if not isinstance(config, dict):
-        raise ValueError("simulator config must be a JSON object")
-    allowed = {
-        "output",
-        "samples",
-        "shards",
-        "splits",
-        "shards_per_split",
-        "time_steps",
-        "input_dim",
-        "branches",
-        "integration_dt_ms",
-        "input_protocol",
-        "synapse_routing",
-        "distributed_sites_per_polarity",
-        "spike_label_mode",
-        "spike_peak_threshold_mv",
-        "base_event_rate_hz",
-        "burst_probability",
-        "burst_event_rate_hz",
-        "arbor_gpu_id",
-        "cpu_only",
-        "arbor_threads",
-        "sim_batch_size",
-        "seed",
-        "param_overrides",
-        "report",
-    }
-    unknown = sorted(set(config) - allowed)
-    if unknown:
-        raise ValueError(f"unknown simulator config keys: {', '.join(unknown)}")
-    for key, value in config.items():
-        if key not in explicit_dests:
-            setattr(args, key, value)
-
-
-def _parse_param_overrides(value: str | dict[str, object] | None) -> dict[str, float] | None:
-    if value is None:
-        return None
-    raw: object
-    if isinstance(value, dict):
-        raw = value
-    else:
-        text = str(value)
-        path = Path(text)
-        if path.exists():
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        else:
-            raw = json.loads(text)
-    if not isinstance(raw, dict):
-        raise ValueError("param_overrides must be a JSON object")
-    overrides: dict[str, float] = {}
-    for key, item in raw.items():
-        if not isinstance(key, str):
-            raise ValueError("param_overrides keys must be strings")
-        try:
-            overrides[key] = float(item)
-        except (TypeError, ValueError) as error:
-            raise ValueError(f"param_overrides value for {key!r} must be numeric") from error
-    return overrides or None
-
-
-def _resolve_arbor_gpu_id(args, explicit_dests: set[str]) -> int | None:
-    if args.cpu_only:
-        return None
-    if "arbor_gpu_id" in explicit_dests:
-        return args.arbor_gpu_id
-    try:
-        import arbor as A
-    except ModuleNotFoundError:
-        return args.arbor_gpu_id
-    if A.config().get("gpu") != "cuda":
-        return None
-    return args.arbor_gpu_id
 
 
 def _explicit_option_dests(parser: argparse.ArgumentParser, argv: list[str], command: str) -> set[str]:

@@ -1,7 +1,7 @@
 """NeuronIO training and evaluation utilities for ELM / Branch-ELM experiments.
 
-Keep the package import lightweight so data/benchmark utilities can run in
-environments that intentionally omit PyTorch, e.g. TensorFlow-only TCN checks.
+Keep the package import lightweight so data utilities can run in environments
+that intentionally omit PyTorch.
 """
 
 from __future__ import annotations
