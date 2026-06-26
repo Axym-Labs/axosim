@@ -11,10 +11,10 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from bnn_sim.checkpoint import save_checkpoint
-from bnn_sim.data import ShardedNeuronIODataset
-from bnn_sim.evaluate import evaluate_dataset, _tensor_from_numpy
-from bnn_sim.model import BranchELM
+from axosim.checkpoint import save_checkpoint
+from axosim.data import ShardedNeuronIODataset
+from axosim.evaluate import evaluate_dataset, _tensor_from_numpy
+from axosim.model import BranchELM
 
 
 def train_dataset(
@@ -49,6 +49,9 @@ def train_dataset(
     sparse_soma_input_event_quantile: float = 0.95,
     sparse_soma_spike_window: int = 5,
     sparse_soma_post_event_window: int = 5,
+    sera_soma_loss_weight: float = 0.0,
+    sera_soma_min_weight: float = 0.05,
+    sera_soma_relevance_power: float = 1.0,
     soma_slope_loss_weight: float = 0.0,
     grad_clip_norm: float = 0.0,
     update_log_interval: int = 0,
@@ -75,6 +78,12 @@ def train_dataset(
         raise ValueError("sparse_soma_spike_window must be non-negative")
     if sparse_soma_post_event_window < 0:
         raise ValueError("sparse_soma_post_event_window must be non-negative")
+    if sera_soma_loss_weight < 0:
+        raise ValueError("sera_soma_loss_weight must be non-negative")
+    if not 0 <= sera_soma_min_weight <= 1:
+        raise ValueError("sera_soma_min_weight must be in [0, 1]")
+    if sera_soma_relevance_power <= 0:
+        raise ValueError("sera_soma_relevance_power must be positive")
     if soma_slope_loss_weight < 0:
         raise ValueError("soma_slope_loss_weight must be non-negative")
     if update_log_interval < 0:
@@ -92,6 +101,8 @@ def train_dataset(
     last_loss = 0.0
     last_sparse_soma_loss: float | None = None
     last_sparse_soma_fraction: float | None = None
+    last_sera_soma_loss: float | None = None
+    last_sera_soma_relevance_mean: float | None = None
     last_soma_slope_loss: float | None = None
     history: list[dict[str, float | int]] = []
     best_validation_soma_rmse = float("inf")
@@ -131,6 +142,8 @@ def train_dataset(
                 loss = spike_loss_weight * spike_loss + soma_loss_weight * soma_loss
                 sparse_soma_loss_value: float | None = None
                 sparse_soma_fraction_value: float | None = None
+                sera_soma_loss_value: float | None = None
+                sera_soma_relevance_mean_value: float | None = None
                 soma_slope_loss_value: float | None = None
                 if sparse_soma_loss_weight:
                     sparse_mask = _sparse_soma_mask(
@@ -152,6 +165,18 @@ def train_dataset(
                     sparse_soma_fraction_value = float(sparse_fraction.detach().cpu())
                     last_sparse_soma_loss = sparse_soma_loss_value
                     last_sparse_soma_fraction = sparse_soma_fraction_value
+                if sera_soma_loss_weight:
+                    sera_soma_loss, sera_relevance_mean = _sera_soma_weighted_mse(
+                        pred_soma,
+                        target_trimmed,
+                        min_weight=sera_soma_min_weight,
+                        relevance_power=sera_soma_relevance_power,
+                    )
+                    loss = loss + sera_soma_loss_weight * sera_soma_loss
+                    sera_soma_loss_value = float(sera_soma_loss.detach().cpu())
+                    sera_soma_relevance_mean_value = float(sera_relevance_mean.detach().cpu())
+                    last_sera_soma_loss = sera_soma_loss_value
+                    last_sera_soma_relevance_mean = sera_soma_relevance_mean_value
                 if soma_slope_loss_weight and pred_soma.shape[1] > 1:
                     pred_slope = pred_soma[:, 1:] - pred_soma[:, :-1]
                     target_slope = target_soma[:, 1:] - target_soma[:, :-1]
@@ -193,6 +218,9 @@ def train_dataset(
                     if sparse_soma_loss_value is not None:
                         update_row["sparse_soma_loss"] = sparse_soma_loss_value
                         update_row["sparse_soma_fraction"] = sparse_soma_fraction_value or 0.0
+                    if sera_soma_loss_value is not None:
+                        update_row["sera_soma_loss"] = sera_soma_loss_value
+                        update_row["sera_soma_relevance_mean"] = sera_soma_relevance_mean_value or 0.0
                     if soma_slope_loss_value is not None:
                         update_row["soma_slope_loss"] = soma_slope_loss_value
                     if l1_loss_value is not None:
@@ -215,6 +243,9 @@ def train_dataset(
             if last_sparse_soma_loss is not None:
                 epoch_metrics["train_last_sparse_soma_loss"] = last_sparse_soma_loss
                 epoch_metrics["train_last_sparse_soma_fraction"] = last_sparse_soma_fraction or 0.0
+            if last_sera_soma_loss is not None:
+                epoch_metrics["train_last_sera_soma_loss"] = last_sera_soma_loss
+                epoch_metrics["train_last_sera_soma_relevance_mean"] = last_sera_soma_relevance_mean or 0.0
             if last_soma_slope_loss is not None:
                 epoch_metrics["train_last_soma_slope_loss"] = last_soma_slope_loss
             if validation_dataset is not None:
@@ -280,6 +311,9 @@ def train_dataset(
         "sparse_soma_input_event_quantile": sparse_soma_input_event_quantile,
         "sparse_soma_spike_window": sparse_soma_spike_window,
         "sparse_soma_post_event_window": sparse_soma_post_event_window,
+        "sera_soma_loss_weight": sera_soma_loss_weight,
+        "sera_soma_min_weight": sera_soma_min_weight,
+        "sera_soma_relevance_power": sera_soma_relevance_power,
         "soma_slope_loss_weight": soma_slope_loss_weight,
         "grad_clip_norm": grad_clip_norm,
         "update_log_interval": update_log_interval,
@@ -336,6 +370,9 @@ def train_and_save(
     sparse_soma_input_event_quantile: float = 0.95,
     sparse_soma_spike_window: int = 5,
     sparse_soma_post_event_window: int = 5,
+    sera_soma_loss_weight: float = 0.0,
+    sera_soma_min_weight: float = 0.05,
+    sera_soma_relevance_power: float = 1.0,
     soma_slope_loss_weight: float = 0.0,
     grad_clip_norm: float = 0.0,
     update_log_interval: int = 0,
@@ -378,6 +415,9 @@ def train_and_save(
         sparse_soma_input_event_quantile=sparse_soma_input_event_quantile,
         sparse_soma_spike_window=sparse_soma_spike_window,
         sparse_soma_post_event_window=sparse_soma_post_event_window,
+        sera_soma_loss_weight=sera_soma_loss_weight,
+        sera_soma_min_weight=sera_soma_min_weight,
+        sera_soma_relevance_power=sera_soma_relevance_power,
         soma_slope_loss_weight=soma_slope_loss_weight,
         grad_clip_norm=grad_clip_norm,
         update_log_interval=update_log_interval,
@@ -446,6 +486,63 @@ def _sparse_soma_weighted_mse(
     sparse_loss = (squared_error * sparse_weight).sum() / sparse_weight.sum().clamp_min(1.0)
     sparse_fraction = sparse_weight.mean()
     return sparse_loss, sparse_fraction
+
+
+def _sera_soma_weighted_mse(
+    prediction_soma: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    min_weight: float = 0.05,
+    relevance_power: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Continuous relevance-weighted soma MSE aligned with Voltage SERA.
+
+    SERA integrates squared error over teacher-defined relevance thresholds.
+    For training, the same idea becomes a stable weighted MSE: each timestep
+    contributes according to a continuous target-only relevance score instead
+    of being represented only by its empirical frequency.
+    """
+    if targets.ndim < 3 or targets.shape[-1] < 2:
+        raise ValueError(f"targets must have shape (..., time, channels>=2), got {targets.shape}")
+    target_soma = targets[..., 1]
+    if prediction_soma.shape != target_soma.shape:
+        raise ValueError(
+            "prediction_soma must match targets[..., 1], "
+            f"got {prediction_soma.shape} and {target_soma.shape}"
+        )
+    if not 0 <= min_weight <= 1:
+        raise ValueError("min_weight must be in [0, 1]")
+    if relevance_power <= 0:
+        raise ValueError("relevance_power must be positive")
+    relevance = _sera_soma_relevance(targets)
+    weights = min_weight + relevance.pow(relevance_power)
+    squared_error = (prediction_soma - target_soma).square()
+    loss = (squared_error * weights).sum() / weights.sum().clamp_min(torch.finfo(weights.dtype).eps)
+    return loss, relevance.mean()
+
+
+def _sera_soma_relevance(targets: torch.Tensor) -> torch.Tensor:
+    soma = targets[..., 1].detach()
+    spikes = targets[..., 0].detach() > 0.5
+    relevance = torch.zeros_like(soma, dtype=soma.dtype)
+    relevance = torch.maximum(relevance, _dilate_time_mask(spikes, 5, causal=False).to(dtype=soma.dtype))
+    relevance = torch.maximum(relevance, _tail_relevance_torch(soma, start_quantile=0.80, stop_quantile=0.995))
+    relevance = torch.maximum(relevance, _tail_relevance_torch(-soma, start_quantile=0.90, stop_quantile=0.995))
+    dvdt = torch.zeros_like(soma)
+    dvdt[..., 1:] = soma[..., 1:] - soma[..., :-1]
+    relevance = torch.maximum(relevance, _tail_relevance_torch(dvdt.abs(), start_quantile=0.85, stop_quantile=0.995))
+    return relevance.clamp(0.0, 1.0)
+
+
+def _tail_relevance_torch(values: torch.Tensor, *, start_quantile: float, stop_quantile: float) -> torch.Tensor:
+    flat = values.flatten()
+    if flat.numel() == 0:
+        return torch.zeros_like(values)
+    lo = torch.quantile(flat, start_quantile)
+    hi = torch.quantile(flat, stop_quantile)
+    if not torch.isfinite(hi) or hi <= lo:
+        return torch.zeros_like(values)
+    return ((values - lo) / (hi - lo)).clamp(0.0, 1.0)
 
 
 def _dilate_time_mask(mask: torch.Tensor, window: int, *, causal: bool) -> torch.Tensor:

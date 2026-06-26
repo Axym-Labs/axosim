@@ -2,7 +2,7 @@ import json
 import os
 import zipfile
 
-from bnn_sim.kaggle_download import (
+from axosim.kaggle_download import (
     KaggleCredentials,
     build_dataset_url,
     find_zip_prefix_bytes,

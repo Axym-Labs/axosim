@@ -1,7 +1,7 @@
 import torch
 
-from bnn_sim.model import BranchELM, BranchELMConfig
-from bnn_sim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
+from axosim.model import BranchELM, BranchELMConfig
+from axosim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
 
 
 def test_branch_elm_30_default_has_expected_shape_and_parameter_budget():

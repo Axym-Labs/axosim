@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from bnn_sim.official import create_official_elm, load_official_elm_config, load_official_state_dict
+from axosim.official import create_official_elm, load_official_elm_config, load_official_state_dict
 
 
 def test_official_num_memory_30_config_builds_paper_model() -> None:

@@ -1,7 +1,9 @@
-# bnn_sim
+# AxoSim
 
-Deterministic NeuronIO training and evaluation harness for the official ELM /
-Branch-ELM model family, with a small legacy BranchELM path still available for
+AxoSim is a deterministic NeuronIO training and evaluation harness for
+biologically inspired surrogate models, including the official ELM /
+Branch-ELM family, recurrent comparison cells, and the promoted `AxoMamba`
+sequence surrogate. The small legacy BranchELM path remains available for
 toy-data smoke tests.
 
 ## Install
@@ -39,13 +41,13 @@ when Kaggle's server honors byte ranges.
 List the named presets:
 
 ```bash
-python -m bnn_sim.cli list-presets
+axosim list-presets
 ```
 
 Train with the current recommended setup:
 
 ```bash
-python -m bnn_sim.cli train \
+axosim train \
   --preset paper-random-fulltrace \
   --data data/full-trace-shards/nmda-train \
   --val-data data/full-trace-shards/nmda-val \
@@ -56,10 +58,24 @@ python -m bnn_sim.cli train \
   --metrics runs/paper-like-metrics.json
 ```
 
+Train the promoted AxoMamba configuration:
+
+```bash
+axosim train \
+  --preset axomamba-probe \
+  --data data/full-trace-shards/nmda-train \
+  --val-data data/full-trace-shards/nmda-val \
+  --epochs 10 \
+  --epoch-samples 80000 \
+  --shard-reuse-batches 58 \
+  --checkpoint runs/axomamba.pt \
+  --metrics runs/axomamba-metrics.json
+```
+
 Evaluate with the corrected full-trace metric path:
 
 ```bash
-python -m bnn_sim.cli evaluate \
+axosim evaluate \
   --preset fulltrace-paper-metric \
   --data data/full-trace-shards/nmda-val \
   --checkpoint runs/paper-like.pt \
@@ -74,13 +90,13 @@ to the metrics file by default. Disable that with `--no-registry`.
 Create deterministic demo NeuronIO-style shards:
 
 ```bash
-python -m bnn_sim.cli make-demo-data --output runs/demo-data --samples 8 --time-steps 32 --input-dim 64
+axosim make-demo-data --output runs/demo-data --samples 8 --time-steps 32 --input-dim 64
 ```
 
 Train the small legacy smoke path on toy data:
 
 ```bash
-python -m bnn_sim.cli train \
+axosim train \
   --preset legacy-baseline-smoke \
   --data runs/demo-data \
   --input-dim 64 \
@@ -94,9 +110,9 @@ python -m bnn_sim.cli train \
 Train the official paper-repo ELM shape on toy data:
 
 ```bash
-python -m bnn_sim.cli make-demo-data --output runs/official-demo-data --samples 2 --time-steps 8 --input-dim 1278
+axosim make-demo-data --output runs/official-demo-data --samples 2 --time-steps 8 --input-dim 1278
 
-python -m bnn_sim.cli train \
+axosim train \
   --preset paper-random-fulltrace \
   --data runs/official-demo-data \
   --model-config configs/branch_elm_30_official.json \
@@ -112,7 +128,7 @@ python -m bnn_sim.cli train \
 Evaluate a checkpoint:
 
 ```bash
-python -m bnn_sim.cli evaluate \
+axosim evaluate \
   --preset legacy-baseline-smoke \
   --data runs/demo-data \
   --checkpoint runs/branch-elm.pt \
@@ -123,7 +139,7 @@ Evaluate a raw upstream official checkpoint state dict by pairing it with its
 model config:
 
 ```bash
-python -m bnn_sim.cli evaluate \
+axosim evaluate \
   --preset fulltrace-paper-metric \
   --data runs/neuronio-shards \
   --model-config configs/branch_elm_30_official.json \
@@ -134,7 +150,7 @@ python -m bnn_sim.cli evaluate \
 Benchmark recurrent forward latency:
 
 ```bash
-python -m bnn_sim.cli benchmark \
+axosim benchmark \
   --input-dim 1278 \
   --memory-units 30 \
   --branches 32 \
@@ -148,6 +164,7 @@ python -m bnn_sim.cli benchmark \
 
 - Deterministic pre-sharded loader for NeuronIO-style `(samples, time, channels)` inputs and two-output spike/soma targets.
 - Official paper-repo ELM / Branch-ELM runtime, routing, synaptic trace state, memory state, and spike/soma readout.
+- `AxoMamba`, the reusable promoted Mamba surrogate configuration.
 - Legacy simplified BranchELM path kept for smoke tests.
 - BCE + MSE training loop with burn-in support.
 - Checkpoint save/load with model config metadata.
@@ -165,14 +182,14 @@ Raw NeuronIO pickle files matching the upstream `*sim__*` naming pattern can be
 converted directly:
 
 ```bash
-python -m bnn_sim.cli convert-neuronio --input path/to/raw-neuronio-folder --output runs/neuronio-shards
+axosim convert-neuronio --input path/to/raw-neuronio-folder --output runs/neuronio-shards
 ```
 
 The recommended training path is the preset-based full-trace workflow above. If
 you need the older fixed-window path for a compatibility check:
 
 ```bash
-python -m bnn_sim.cli train \
+axosim train \
   --data runs/neuronio-shards \
   --model-kind official \
   --model-config configs/branch_elm_30_official.json \

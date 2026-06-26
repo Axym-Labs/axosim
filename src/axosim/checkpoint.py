@@ -6,10 +6,10 @@ from typing import Any
 
 import torch
 
-from bnn_sim.model import BranchELM, BranchELMConfig
-from bnn_sim.mamba_pytorch import SimpleMambaModel
-from bnn_sim.official import ELM, create_official_elm
-from bnn_sim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
+from axosim.model import BranchELM, BranchELMConfig
+from axosim.mamba_pytorch import SimpleMambaModel
+from axosim.official import ELM, create_official_elm
+from axosim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
 
 
 def save_checkpoint(model: torch.nn.Module, path: str | Path, *, metadata: dict[str, Any] | None = None) -> None:
@@ -35,13 +35,23 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
     elif model_kind == "branch-trace-rnn":
         config = BranchTraceRNNConfig(**payload["config"])
         model = BranchTraceRNN(config)
+    elif model_kind == "axomamba":
+        from axosim.axomamba import AxoMamba, AxoMambaConfig
+
+        config = AxoMambaConfig(**payload["config"])
+        model = AxoMamba(config)
+    elif model_kind == "axomamba-pytorch":
+        from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
+
+        config = AxoMambaConfig(**payload["config"])
+        model = AxoPyTorchMamba(config)
     elif model_kind == "mamba-official":
-        from bnn_sim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
+        from axosim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
 
         config = BranchOfficialMambaConfig(**payload["config"])
         model = BranchOfficialMamba(config)
     elif model_kind == "branch-mamba-pytorch":
-        from bnn_sim.mamba_official import BranchOfficialMambaConfig, BranchPyTorchMamba
+        from axosim.mamba_official import BranchOfficialMambaConfig, BranchPyTorchMamba
 
         config = BranchOfficialMambaConfig(**payload["config"])
         model = BranchPyTorchMamba(config)
@@ -85,6 +95,10 @@ def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]
             "soma_multiplicative_gate": bool(getattr(model, "soma_multiplicative_gate_enabled", False)),
             "branch_readout_skip": bool(getattr(model, "branch_readout_skip_enabled", False)),
         }
+    if model.__class__.__name__ == "AxoMamba" and hasattr(model, "config"):
+        return "axomamba", asdict(model.config)
+    if model.__class__.__name__ == "AxoPyTorchMamba" and hasattr(model, "config"):
+        return "axomamba-pytorch", asdict(model.config)
     if model.__class__.__name__ == "BranchOfficialMamba" and hasattr(model, "config"):
         return "mamba-official", asdict(model.config)
     if model.__class__.__name__ == "BranchPyTorchMamba" and hasattr(model, "config"):

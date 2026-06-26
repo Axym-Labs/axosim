@@ -11,8 +11,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from bnn_sim.mamba_pytorch import SimpleMambaModel
-from bnn_sim.data import ShardedNeuronIODataset
+from axosim.mamba_pytorch import SimpleMambaModel
+from axosim.data import ShardedNeuronIODataset
 
 
 def train_epoch(model, dataset, batch_size, optimizer, device):

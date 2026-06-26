@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from bnn_sim.official.modeling_utils import (
+from axosim.official.modeling_utils import (
     create_interlocking_indices,
     create_overlapping_window_indices,
 )
@@ -442,7 +442,7 @@ class BranchPyTorchMamba(BranchOfficialMamba):
     def __init__(self, config: BranchOfficialMambaConfig) -> None:
         if config.block_type != "mamba1":
             raise ValueError("BranchPyTorchMamba only supports block_type='mamba1'")
-        from bnn_sim.mamba_pytorch import MambaBlock
+        from axosim.mamba_pytorch import MambaBlock
 
         super().__init__(config, mamba_classes=(MambaBlock, None))
 

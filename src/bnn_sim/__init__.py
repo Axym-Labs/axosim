@@ -1,19 +1,17 @@
-"""NeuronIO training and evaluation utilities for ELM / Branch-ELM experiments.
+"""Compatibility package for the former ``bnn_sim`` import path.
 
-Keep the package import lightweight so data utilities can run in environments
-that intentionally omit PyTorch.
+New code should import ``axosim``. This shim keeps older scripts importable
+while the project transition settles.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from importlib import import_module
 
-__all__ = ["BranchELM", "BranchELMConfig"]
+_axosim = import_module("axosim")
+__path__ = _axosim.__path__
+__all__ = getattr(_axosim, "__all__", ())
 
 
-def __getattr__(name: str) -> Any:
-    if name in {"BranchELM", "BranchELMConfig"}:
-        from bnn_sim.model import BranchELM, BranchELMConfig
-
-        return {"BranchELM": BranchELM, "BranchELMConfig": BranchELMConfig}[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+def __getattr__(name: str):
+    return getattr(_axosim, name)

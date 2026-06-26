@@ -10,10 +10,10 @@ from typing import Any
 import numpy as np
 import torch
 
-from bnn_sim.data import ShardedNeuronIODataset
-from bnn_sim.evaluate import _first_window_starts, _metric_mask, _synchronize_device, _tensor_from_numpy
-from bnn_sim.metrics import binary_auc
-from bnn_sim.official.constants import DEFAULT_Y_TRAIN_SOMA_SCALE
+from axosim.data import ShardedNeuronIODataset
+from axosim.evaluate import _first_window_starts, _metric_mask, _synchronize_device, _tensor_from_numpy
+from axosim.metrics import binary_auc
+from axosim.official.constants import DEFAULT_Y_TRAIN_SOMA_SCALE
 
 
 def diagnose_dataset(

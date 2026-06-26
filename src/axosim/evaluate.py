@@ -8,10 +8,10 @@ import time
 import numpy as np
 import torch
 
-from bnn_sim.data import ShardedNeuronIODataset
-from bnn_sim.metrics import binary_auc
-from bnn_sim.model import BranchELM
-from bnn_sim.official.constants import DEFAULT_Y_TRAIN_SOMA_SCALE
+from axosim.data import ShardedNeuronIODataset
+from axosim.metrics import binary_auc
+from axosim.model import BranchELM
+from axosim.official.constants import DEFAULT_Y_TRAIN_SOMA_SCALE
 
 
 def evaluate_dataset(

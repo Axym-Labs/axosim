@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from bnn_sim.setup_workflow import DatasetSpec, SetupOptions, build_setup_plan
+from axosim.setup_workflow import DatasetSpec, SetupOptions, build_setup_plan
 
 
 def test_setup_plan_uses_safe_default_without_large_downloads():
@@ -26,7 +26,7 @@ def test_setup_plan_adds_kaggle_downloads_only_when_requested():
     command_text = "\n".join(step.command for step in plan.steps if step.command)
 
     assert "pip install requests" in command_text
-    assert "bnn_sim.kaggle_download" in command_text
+    assert "axosim.kaggle_download" in command_text
     assert "selfishgene/single-neurons-as-deep-nets-nmda-train-data" in command_text
     assert "selfishgene/single-neurons-as-deep-nets-nmda-test-data" in command_text
 

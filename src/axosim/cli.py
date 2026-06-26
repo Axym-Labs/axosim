@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from bnn_sim.checkpoint import load_checkpoint
-from bnn_sim.data import (
+from axosim.checkpoint import load_checkpoint
+from axosim.data import (
     DeterministicWindowDataset,
     OfficialStyleFullTraceWindowDataset,
     RandomFullTraceWindowDataset,
@@ -18,31 +18,33 @@ from bnn_sim.data import (
     repack_shards_as_npy,
     write_demo_shards,
 )
-from bnn_sim.diagnostics import diagnose_dataset
-from bnn_sim.experiments import (
+from axosim.diagnostics import diagnose_dataset
+from axosim.experiments import (
     append_registry_entry,
     apply_preset,
     build_registry_entry,
     list_presets,
     resolve_registry_path,
 )
-from bnn_sim.evaluate import evaluate_dataset, write_metrics
-from bnn_sim.inference_benchmark import (
+from axosim.evaluate import evaluate_dataset, write_metrics
+from axosim.inference_benchmark import (
     benchmark_inference_matrix,
     parse_int_list,
     write_inference_benchmark,
 )
-from bnn_sim.model import BranchELM, BranchELMConfig
-from bnn_sim.neuronio_raw import convert_neuronio_pickles
-from bnn_sim.official import create_official_elm, load_official_elm_config, load_official_state_dict
-from bnn_sim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
-from bnn_sim.train import train_and_save
+from axosim.model import BranchELM, BranchELMConfig
+from axosim.neuronio_raw import convert_neuronio_pickles
+from axosim.official import create_official_elm, load_official_elm_config, load_official_state_dict
+from axosim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
+from axosim.train import train_and_save
 
 DEFAULT_OFFICIAL_MODEL_CONFIG = "configs/branch_elm_30_official.json"
 DEFAULT_MAMBA_OFFICIAL_MODEL_CONFIG = "configs/branch_mamba_official_45x64.json"
+DEFAULT_AXOMAMBA_MODEL_CONFIG = "configs/axomamba_45x64.json"
 MODEL_KIND_CHOICES = [
     "baseline",
     "official",
+    "axomamba",
     "mamba-official",
     "mamba-pytorch",
     "branch-mamba-pytorch",
@@ -52,7 +54,7 @@ MODEL_KIND_CHOICES = [
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    parser = argparse.ArgumentParser(prog="bnn-sim")
+    parser = argparse.ArgumentParser(prog="axosim")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     demo = subparsers.add_parser("make-demo-data", help="write deterministic demo NPZ shards")
@@ -85,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument("--input-dim", type=int, default=1278)
     evaluate.add_argument("--memory-units", type=int, default=30)
     evaluate.add_argument("--branches", type=int, default=32)
-    evaluate.add_argument("--model-kind", choices=MODEL_KIND_CHOICES, default="baseline", help="use 'official' for the paper-style model, 'mamba-official' for the official mamba-ssm backend, or 'branch-trace-rnn' for the RNN comparison path; 'baseline' is legacy/debug")
+    evaluate.add_argument("--model-kind", choices=MODEL_KIND_CHOICES, default="baseline", help="use 'official' for the paper-style model, 'axomamba' for the promoted Mamba surrogate, 'mamba-official' for the generic official mamba-ssm backend, or 'branch-trace-rnn' for the RNN comparison path; 'baseline' is legacy/debug")
     evaluate.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     evaluate.add_argument("--batch-size", type=int, default=8)
     evaluate.add_argument("--seed", type=int, default=0)
@@ -140,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--input-dim", type=int, default=1278)
     train.add_argument("--memory-units", type=int, default=30)
     train.add_argument("--branches", type=int, default=32)
-    train.add_argument("--model-kind", choices=MODEL_KIND_CHOICES, default="baseline", help="use 'official' for the paper-style model, 'mamba-official' for the official mamba-ssm backend, or 'branch-trace-rnn' for the RNN comparison path; 'baseline' is legacy/debug")
+    train.add_argument("--model-kind", choices=MODEL_KIND_CHOICES, default="baseline", help="use 'official' for the paper-style model, 'axomamba' for the promoted Mamba surrogate, 'mamba-official' for the generic official mamba-ssm backend, or 'branch-trace-rnn' for the RNN comparison path; 'baseline' is legacy/debug")
     train.add_argument("--model-config", default=DEFAULT_OFFICIAL_MODEL_CONFIG)
     train.add_argument("--epochs", type=int, default=1)
     train.add_argument("--batch-size", type=int, default=8)
@@ -160,6 +162,11 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--shard-reuse-batches", type=int, default=1)
     train.add_argument("--file-load-fraction", type=float, default=0.3)
     train.add_argument("--full-trace-length", type=int)
+    train.add_argument(
+        "--sample-window-reads",
+        action="store_true",
+        help="read random/official windows by sample instead of caching full compressed shards",
+    )
     train.add_argument("--shuffle-mode", choices=["sample", "shard", "none"], default="shard")
     train.add_argument("--cache-shards", type=int, default=1)
     train.add_argument("--val-data")
@@ -189,6 +196,9 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--sparse-soma-input-event-quantile", type=float, default=0.95)
     train.add_argument("--sparse-soma-spike-window", type=int, default=5)
     train.add_argument("--sparse-soma-post-event-window", type=int, default=5)
+    train.add_argument("--sera-soma-loss-weight", type=float, default=0.0)
+    train.add_argument("--sera-soma-min-weight", type=float, default=0.05)
+    train.add_argument("--sera-soma-relevance-power", type=float, default=1.0)
     train.add_argument("--soma-slope-loss-weight", type=float, default=0.0)
     train.add_argument("--grad-clip-norm", type=float, default=0.0)
     train.add_argument("--train-update-log-interval", type=int, default=0)
@@ -369,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
             shard_reuse_batches=args.shard_reuse_batches,
             file_load_fraction=args.file_load_fraction,
             sequence_length=args.full_trace_length,
+            cache_full_shards=not args.sample_window_reads,
         )
         validation_dataset = None
         if args.val_data:
@@ -417,6 +428,9 @@ def main(argv: list[str] | None = None) -> int:
             sparse_soma_input_event_quantile=args.sparse_soma_input_event_quantile,
             sparse_soma_spike_window=args.sparse_soma_spike_window,
             sparse_soma_post_event_window=args.sparse_soma_post_event_window,
+            sera_soma_loss_weight=args.sera_soma_loss_weight,
+            sera_soma_min_weight=args.sera_soma_min_weight,
+            sera_soma_relevance_power=args.sera_soma_relevance_power,
             soma_slope_loss_weight=args.soma_slope_loss_weight,
             grad_clip_norm=args.grad_clip_norm,
             update_log_interval=args.train_update_log_interval,
@@ -518,6 +532,7 @@ def _build_dataset(
     shard_reuse_batches: int = 1,
     file_load_fraction: float = 0.3,
     sequence_length: int | None = None,
+    cache_full_shards: bool = True,
 ):
     dataset = ShardedNeuronIODataset(
         data_path,
@@ -538,6 +553,7 @@ def _build_dataset(
             shard_reuse_batches=shard_reuse_batches,
             sequence_length=sequence_length,
             seed=seed,
+            cache_full_shards=cache_full_shards,
         )
     if window_sampling == "official-full-trace":
         return OfficialStyleFullTraceWindowDataset(
@@ -549,6 +565,7 @@ def _build_dataset(
             file_load_fraction=file_load_fraction,
             sequence_length=sequence_length,
             seed=seed,
+            cache_full_shards=cache_full_shards,
         )
     if window_sampling != "deterministic":
         raise ValueError("window_sampling must be 'deterministic', 'random-full-trace', or 'official-full-trace'")
@@ -565,18 +582,23 @@ def _build_model_from_args(args):
         return create_official_elm(load_official_elm_config(args.model_config))
     if args.model_kind == "branch-trace-rnn":
         return BranchTraceRNN(BranchTraceRNNConfig(**load_official_elm_config(args.model_config)))
+    if args.model_kind == "axomamba":
+        from axosim.axomamba import AxoMamba, AxoMambaConfig
+
+        config_path = args.model_config if args.model_config != DEFAULT_OFFICIAL_MODEL_CONFIG else DEFAULT_AXOMAMBA_MODEL_CONFIG
+        return AxoMamba(AxoMambaConfig(**load_official_elm_config(config_path)))
     if args.model_kind == "mamba-official":
-        from bnn_sim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
+        from axosim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
 
         config_path = args.model_config if args.model_config != DEFAULT_OFFICIAL_MODEL_CONFIG else DEFAULT_MAMBA_OFFICIAL_MODEL_CONFIG
         return BranchOfficialMamba(BranchOfficialMambaConfig(**load_official_elm_config(config_path)))
     if args.model_kind == "branch-mamba-pytorch":
-        from bnn_sim.mamba_official import BranchOfficialMambaConfig, BranchPyTorchMamba
+        from axosim.mamba_official import BranchOfficialMambaConfig, BranchPyTorchMamba
 
         config_path = args.model_config if args.model_config != DEFAULT_OFFICIAL_MODEL_CONFIG else DEFAULT_MAMBA_OFFICIAL_MODEL_CONFIG
         return BranchPyTorchMamba(BranchOfficialMambaConfig(**load_official_elm_config(config_path)))
     if args.model_kind == "mamba-pytorch":
-        from bnn_sim.mamba_pytorch import SimpleMambaModel
+        from axosim.mamba_pytorch import SimpleMambaModel
 
         config_path = Path(args.model_config)
         if args.model_config != DEFAULT_OFFICIAL_MODEL_CONFIG and config_path.exists():

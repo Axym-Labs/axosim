@@ -12,7 +12,7 @@ def load_official_elm_config(path: str | Path) -> dict[str, Any]:
 
 
 def create_official_elm(config: Mapping[str, Any]):
-    from bnn_sim.official.expressive_leaky_memory_neuron import ELM
+    from axosim.official.expressive_leaky_memory_neuron import ELM
 
     return ELM(**dict(config))
 
@@ -42,7 +42,7 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     if name == "ELM":
-        from bnn_sim.official.expressive_leaky_memory_neuron import ELM
+        from axosim.official.expressive_leaky_memory_neuron import ELM
 
         return ELM
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

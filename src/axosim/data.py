@@ -257,6 +257,7 @@ class RandomFullTraceWindowDataset:
         shard_reuse_batches: int = 1,
         sequence_length: int | None = None,
         seed: int = 0,
+        cache_full_shards: bool = True,
     ) -> None:
         if window_size <= 0:
             raise ValueError("window_size must be positive")
@@ -277,6 +278,7 @@ class RandomFullTraceWindowDataset:
         self.batch_size = batch_size
         self.shard_reuse_batches = shard_reuse_batches
         self.sequence_length = sequence_length
+        self.cache_full_shards = cache_full_shards
         self.samples_per_epoch = samples_per_epoch or len(base)
         self._by_shard: dict[int, list[tuple[int, str]]] = {}
         self._sequence_lengths: dict[int, int] = {}
@@ -316,24 +318,31 @@ class RandomFullTraceWindowDataset:
 
     def __getitem__(self, index: int) -> NeuronIOSample:
         shard_idx, sample_idx, start, sample_id = self._index[index]
-        shard_inputs, shard_targets = self.base._load_cached_shard(shard_idx)
+        shard_inputs, shard_targets = self._load_window_source(shard_idx, sample_idx)
         end = start + self.window_size
         return NeuronIOSample(
             sample_id=sample_id,
-            inputs=np.asarray(shard_inputs[sample_idx, start:end], dtype=np.float32),
-            targets=np.asarray(shard_targets[sample_idx, start:end], dtype=np.float32),
+            inputs=np.asarray(shard_inputs[start:end], dtype=np.float32),
+            targets=np.asarray(shard_targets[start:end], dtype=np.float32),
         )
 
     def get_batch(self, indices: range | list[int]) -> tuple[np.ndarray, np.ndarray]:
         entries = [self._index[int(index)] for index in indices]
         inputs: list[np.ndarray] = []
         targets: list[np.ndarray] = []
-        for shard_idx, shard_entries in _group_full_trace_window_entries_by_shard(entries):
-            shard_inputs, shard_targets = self.base._load_cached_shard(shard_idx)
-            for sample_idx, start, _ in shard_entries:
+        if self.cache_full_shards:
+            for shard_idx, shard_entries in _group_full_trace_window_entries_by_shard(entries):
+                shard_inputs, shard_targets = self.base._load_cached_shard(shard_idx)
+                for sample_idx, start, _ in shard_entries:
+                    end = start + self.window_size
+                    inputs.append(np.asarray(shard_inputs[sample_idx, start:end], dtype=np.float32))
+                    targets.append(np.asarray(shard_targets[sample_idx, start:end], dtype=np.float32))
+        else:
+            for shard_idx, sample_idx, start, _ in entries:
+                sample_inputs, sample_targets = self.base._load_sample(shard_idx, sample_idx)
                 end = start + self.window_size
-                inputs.append(np.asarray(shard_inputs[sample_idx, start:end], dtype=np.float32))
-                targets.append(np.asarray(shard_targets[sample_idx, start:end], dtype=np.float32))
+                inputs.append(np.asarray(sample_inputs[start:end], dtype=np.float32))
+                targets.append(np.asarray(sample_targets[start:end], dtype=np.float32))
         return np.stack(inputs).astype(np.float32, copy=False), np.stack(targets).astype(np.float32, copy=False)
 
     def get_sample_ids(self, indices: range | list[int]) -> list[str]:
@@ -345,6 +354,12 @@ class RandomFullTraceWindowDataset:
                 self._sequence_lengths[shard_idx] = int(data["inputs"].shape[1])
         actual = self._sequence_lengths[shard_idx]
         return min(self.sequence_length, actual) if self.sequence_length is not None else actual
+
+    def _load_window_source(self, shard_idx: int, sample_idx: int) -> tuple[np.ndarray, np.ndarray]:
+        if self.cache_full_shards:
+            shard_inputs, shard_targets = self.base._load_cached_shard(shard_idx)
+            return shard_inputs[sample_idx], shard_targets[sample_idx]
+        return self.base._load_sample(shard_idx, sample_idx)
 
 
 class OfficialStyleFullTraceWindowDataset:
@@ -362,6 +377,7 @@ class OfficialStyleFullTraceWindowDataset:
         source_simulations: int = 128,
         sequence_length: int | None = None,
         seed: int = 0,
+        cache_full_shards: bool = True,
     ) -> None:
         if window_size <= 0:
             raise ValueError("window_size must be positive")
@@ -385,6 +401,7 @@ class OfficialStyleFullTraceWindowDataset:
         self.file_load_fraction = file_load_fraction
         self.source_simulations = source_simulations
         self.sequence_length = sequence_length
+        self.cache_full_shards = cache_full_shards
         self.samples_per_epoch = samples_per_epoch or len(base)
         self._by_source: dict[str, list[tuple[int, int, str]]] = {}
         self._sequence_lengths: dict[int, int] = {}
@@ -429,24 +446,31 @@ class OfficialStyleFullTraceWindowDataset:
 
     def __getitem__(self, index: int) -> NeuronIOSample:
         shard_idx, sample_idx, start, sample_id = self._index[index]
-        shard_inputs, shard_targets = self.base._load_cached_shard(shard_idx)
+        shard_inputs, shard_targets = self._load_window_source(shard_idx, sample_idx)
         end = start + self.window_size
         return NeuronIOSample(
             sample_id=sample_id,
-            inputs=np.asarray(shard_inputs[sample_idx, start:end], dtype=np.float32),
-            targets=np.asarray(shard_targets[sample_idx, start:end], dtype=np.float32),
+            inputs=np.asarray(shard_inputs[start:end], dtype=np.float32),
+            targets=np.asarray(shard_targets[start:end], dtype=np.float32),
         )
 
     def get_batch(self, indices: range | list[int]) -> tuple[np.ndarray, np.ndarray]:
         entries = [self._index[int(index)] for index in indices]
         inputs: list[np.ndarray] = []
         targets: list[np.ndarray] = []
-        for shard_idx, shard_entries in _group_full_trace_window_entries_by_shard(entries):
-            shard_inputs, shard_targets = self.base._load_cached_shard(shard_idx)
-            for sample_idx, start, _ in shard_entries:
+        if self.cache_full_shards:
+            for shard_idx, shard_entries in _group_full_trace_window_entries_by_shard(entries):
+                shard_inputs, shard_targets = self.base._load_cached_shard(shard_idx)
+                for sample_idx, start, _ in shard_entries:
+                    end = start + self.window_size
+                    inputs.append(np.asarray(shard_inputs[sample_idx, start:end], dtype=np.float32))
+                    targets.append(np.asarray(shard_targets[sample_idx, start:end], dtype=np.float32))
+        else:
+            for shard_idx, sample_idx, start, _ in entries:
+                sample_inputs, sample_targets = self.base._load_sample(shard_idx, sample_idx)
                 end = start + self.window_size
-                inputs.append(np.asarray(shard_inputs[sample_idx, start:end], dtype=np.float32))
-                targets.append(np.asarray(shard_targets[sample_idx, start:end], dtype=np.float32))
+                inputs.append(np.asarray(sample_inputs[start:end], dtype=np.float32))
+                targets.append(np.asarray(sample_targets[start:end], dtype=np.float32))
         return np.stack(inputs).astype(np.float32, copy=False), np.stack(targets).astype(np.float32, copy=False)
 
     def get_sample_ids(self, indices: range | list[int]) -> list[str]:
@@ -464,6 +488,12 @@ class OfficialStyleFullTraceWindowDataset:
                 self._sequence_lengths[shard_idx] = int(data["inputs"].shape[1])
         actual = self._sequence_lengths[shard_idx]
         return min(self.sequence_length, actual) if self.sequence_length is not None else actual
+
+    def _load_window_source(self, shard_idx: int, sample_idx: int) -> tuple[np.ndarray, np.ndarray]:
+        if self.cache_full_shards:
+            shard_inputs, shard_targets = self.base._load_cached_shard(shard_idx)
+            return shard_inputs[sample_idx], shard_targets[sample_idx]
+        return self.base._load_sample(shard_idx, sample_idx)
 
     def _max_start_exclusive(self) -> int:
         sequence_length = self._global_sequence_length()

@@ -1,7 +1,7 @@
 import numpy as np
 import json
 
-from bnn_sim.data import (
+from axosim.data import (
     DeterministicWindowDataset,
     OfficialStyleFullTraceWindowDataset,
     RandomFullTraceWindowDataset,
@@ -158,6 +158,41 @@ def test_random_full_trace_window_dataset_samples_cached_windows(tmp_path):
     assert y.shape == (2, 4, 2)
     assert windows_a.get_sample_ids(range(8)) == windows_b.get_sample_ids(range(8))
     assert all(int(sample_id.rsplit("@", 1)[1]) >= 2 for sample_id in windows_a.get_sample_ids(range(8)))
+
+
+def test_random_full_trace_window_dataset_can_read_windows_by_sample(tmp_path):
+    write_demo_shards(tmp_path, shard_count=2, samples_per_shard=4, time_steps=12, input_dim=3, seed=5)
+    base = ShardedNeuronIODataset(tmp_path, cache_shards=1)
+
+    cached = RandomFullTraceWindowDataset(
+        base,
+        window_size=4,
+        start_offset=2,
+        samples_per_epoch=8,
+        batch_size=2,
+        shard_reuse_batches=2,
+        sequence_length=12,
+        seed=7,
+        cache_full_shards=True,
+    )
+    sample_reads = RandomFullTraceWindowDataset(
+        base,
+        window_size=4,
+        start_offset=2,
+        samples_per_epoch=8,
+        batch_size=2,
+        shard_reuse_batches=2,
+        sequence_length=12,
+        seed=7,
+        cache_full_shards=False,
+    )
+
+    cached_x, cached_y = cached.get_batch(range(4))
+    sample_x, sample_y = sample_reads.get_batch(range(4))
+
+    assert cached.get_sample_ids(range(8)) == sample_reads.get_sample_ids(range(8))
+    assert np.array_equal(cached_x, sample_x)
+    assert np.array_equal(cached_y, sample_y)
 
 
 def test_official_style_full_trace_window_dataset_matches_source_group_sampling(tmp_path):

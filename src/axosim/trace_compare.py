@@ -7,10 +7,10 @@ from typing import Any
 import numpy as np
 import torch
 
-from bnn_sim.checkpoint import load_checkpoint
-from bnn_sim.data import ShardedNeuronIODataset
-from bnn_sim.evaluate import _synchronize_device, _tensor_from_numpy
-from bnn_sim.official.constants import DEFAULT_Y_TRAIN_SOMA_SCALE
+from axosim.checkpoint import load_checkpoint
+from axosim.data import ShardedNeuronIODataset
+from axosim.evaluate import _synchronize_device, _tensor_from_numpy
+from axosim.official.constants import DEFAULT_Y_TRAIN_SOMA_SCALE
 
 
 def compare_trace_predictions(

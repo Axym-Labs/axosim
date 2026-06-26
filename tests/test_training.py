@@ -2,9 +2,9 @@ import json
 
 import torch
 
-from bnn_sim.cli import main
-from bnn_sim.checkpoint import load_checkpoint
-from bnn_sim.train import _sparse_soma_weighted_mse
+from axosim.cli import main
+from axosim.checkpoint import load_checkpoint
+from axosim.train import _sera_soma_weighted_mse, _sparse_soma_weighted_mse
 
 
 def test_sparse_soma_weighted_mse_uses_only_selected_timesteps():
@@ -27,6 +27,43 @@ def test_sparse_soma_weighted_mse_requires_matching_shapes():
         _sparse_soma_weighted_mse(prediction, target, mask)
     except ValueError as error:
         assert "matching shapes" in str(error)
+    else:
+        raise AssertionError("expected shape mismatch to fail")
+
+
+def test_sera_soma_weighted_mse_weights_relevant_timesteps_more():
+    targets = torch.zeros(1, 20, 2)
+    targets[..., 0] = torch.tensor([[0.0] * 10 + [1.0] + [0.0] * 9])
+    background_prediction = torch.zeros(1, 20)
+    background_prediction[:, 0] = 10.0
+    spike_prediction = torch.zeros(1, 20)
+    spike_prediction[:, 10] = 10.0
+
+    background_loss, _ = _sera_soma_weighted_mse(
+        background_prediction,
+        targets,
+        min_weight=0.0,
+        relevance_power=1.0,
+    )
+    spike_loss, relevance_mean = _sera_soma_weighted_mse(
+        spike_prediction,
+        targets,
+        min_weight=0.0,
+        relevance_power=1.0,
+    )
+
+    assert spike_loss > background_loss
+    assert 0.0 < float(relevance_mean) <= 1.0
+
+
+def test_sera_soma_weighted_mse_requires_matching_shapes():
+    prediction = torch.zeros(1, 3)
+    targets = torch.zeros(1, 4, 2)
+
+    try:
+        _sera_soma_weighted_mse(prediction, targets)
+    except ValueError as error:
+        assert "prediction_soma" in str(error)
     else:
         raise AssertionError("expected shape mismatch to fail")
 
@@ -143,6 +180,12 @@ def test_cli_train_with_validation_writes_best_checkpoint(tmp_path):
             "1",
             "--sparse-soma-post-event-window",
             "1",
+            "--sera-soma-loss-weight",
+            "0.125",
+            "--sera-soma-min-weight",
+            "0.1",
+            "--sera-soma-relevance-power",
+            "1.5",
             "--prefetch-batches",
             "1",
             "--pin-memory",
@@ -171,6 +214,9 @@ def test_cli_train_with_validation_writes_best_checkpoint(tmp_path):
     assert metrics["sparse_soma_input_event_quantile"] == 0.8
     assert metrics["sparse_soma_spike_window"] == 1
     assert metrics["sparse_soma_post_event_window"] == 1
+    assert metrics["sera_soma_loss_weight"] == 0.125
+    assert metrics["sera_soma_min_weight"] == 0.1
+    assert metrics["sera_soma_relevance_power"] == 1.5
     assert metrics["prefetch_batches"] == 1
     assert metrics["pin_memory"] is True
     assert metrics["non_blocking"] is True
@@ -186,6 +232,8 @@ def test_cli_train_with_validation_writes_best_checkpoint(tmp_path):
     assert metrics["history"][0]["validation_soma_rmse_units"] == "millivolts"
     assert "train_last_sparse_soma_loss" in metrics["history"][0]
     assert 0.0 <= metrics["history"][0]["train_last_sparse_soma_fraction"] <= 1.0
+    assert "train_last_sera_soma_loss" in metrics["history"][0]
+    assert 0.0 <= metrics["history"][0]["train_last_sera_soma_relevance_mean"] <= 1.0
     assert "validation_soma_rmse" in metrics["history"][0]
     assert (metrics_path.parent / "experiment-registry.jsonl").exists()
 

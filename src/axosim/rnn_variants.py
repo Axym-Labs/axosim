@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch import jit
 
-from bnn_sim.official.modeling_utils import (
+from axosim.official.modeling_utils import (
     MLP,
     create_interlocking_indices,
     create_overlapping_window_indices,

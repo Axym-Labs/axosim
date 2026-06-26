@@ -88,7 +88,7 @@ def build_setup_plan(options: SetupOptions) -> SetupPlan:
                     (
                         options.python_executable,
                         "-m",
-                        "bnn_sim.kaggle_download",
+                        "axosim.kaggle_download",
                         dataset.slug,
                         str(target / f"{dataset.name}.zip"),
                         "--unzip-to",
@@ -107,7 +107,7 @@ def build_setup_plan(options: SetupOptions) -> SetupPlan:
                 (
                     options.python_executable,
                     "-m",
-                    "bnn_sim.cli",
+                    "axosim.cli",
                     "convert-neuronio",
                     "--input",
                     str(raw_dir),
@@ -122,7 +122,7 @@ def build_setup_plan(options: SetupOptions) -> SetupPlan:
     next_steps = (
         "Place kaggle.json under ~/.kaggle/ or set KAGGLE_USERNAME and KAGGLE_KEY before using --download-data.",
         "Convert downloaded raw files with --convert-raw if you did not convert during setup.",
-        "Run the recommended preset with: python -m bnn_sim.cli train --preset paper-random-fulltrace --data <train-shards> --val-data <val-shards> --epochs 10 --epoch-samples 80000 --shard-reuse-batches 58 --checkpoint runs/paper-like.pt --metrics runs/paper-like-metrics.json",
+        "Run the recommended preset with: python -m axosim.cli train --preset paper-random-fulltrace --data <train-shards> --val-data <val-shards> --epochs 10 --epoch-samples 80000 --shard-reuse-batches 58 --checkpoint runs/paper-like.pt --metrics runs/paper-like-metrics.json",
     )
     return SetupPlan(steps=tuple(steps), next_steps=next_steps)
 

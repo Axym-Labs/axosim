@@ -3,10 +3,10 @@ import json
 
 import torch
 
-from bnn_sim.cli import main
-from bnn_sim.checkpoint import load_checkpoint
-from bnn_sim.experiments import apply_preset
-from bnn_sim.official import create_official_elm, load_official_elm_config
+from axosim.cli import main
+from axosim.checkpoint import load_checkpoint
+from axosim.experiments import apply_preset
+from axosim.official import create_official_elm, load_official_elm_config
 
 
 def _write_small_official_config(path: Path) -> None:

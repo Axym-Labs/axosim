@@ -1,9 +1,9 @@
 import numpy as np
 import torch
 
-from bnn_sim.data import ShardedNeuronIODataset, write_demo_shards
-from bnn_sim.evaluate import evaluate_dataset
-from bnn_sim.metrics import binary_auc, soma_rmse, spike_auc
+from axosim.data import ShardedNeuronIODataset, write_demo_shards
+from axosim.evaluate import evaluate_dataset
+from axosim.metrics import binary_auc, soma_rmse, spike_auc
 
 
 def test_soma_rmse_uses_second_output_channel():

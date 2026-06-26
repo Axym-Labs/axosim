@@ -1,8 +1,9 @@
 import torch
 
-from bnn_sim.checkpoint import load_checkpoint, save_checkpoint
-from bnn_sim.mamba_official import BranchOfficialMambaConfig, BranchPyTorchMamba
-from bnn_sim.mamba_pytorch import SimpleMambaModel
+from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba, default_axomamba_config
+from axosim.checkpoint import load_checkpoint, save_checkpoint
+from axosim.mamba_official import BranchOfficialMambaConfig, BranchPyTorchMamba
+from axosim.mamba_pytorch import SimpleMambaModel
 
 
 def test_simple_mamba_trunk_parameters_receive_gradients():
@@ -109,3 +110,43 @@ def test_branch_pytorch_mamba_checkpoint_round_trips(tmp_path):
     assert loaded.config == model.config
     assert metadata["model_kind"] == "branch-mamba-pytorch"
     assert metadata["epoch"] == 2
+
+
+def test_axomamba_default_config_promotes_best_compact_stack():
+    config = default_axomamba_config(num_input=8, num_branch=2, num_synapse_per_branch=4, model_dim=4)
+
+    assert isinstance(config, AxoMambaConfig)
+    assert config.block_type == "mamba1"
+    assert config.branch_gain is True
+    assert config.branch_nonlinearity == "tanh"
+    assert config.integrative_mixer is True
+    assert config.integrative_mixer_position == "pre"
+    assert config.soma_multiplicative_gate is True
+
+
+def test_axomamba_pytorch_checkpoint_round_trips(tmp_path):
+    torch.manual_seed(0)
+    config = default_axomamba_config(
+        num_input=8,
+        num_branch=2,
+        num_synapse_per_branch=4,
+        model_dim=4,
+        num_layers=1,
+        state_dim=2,
+        conv_kernel=2,
+        integrative_mixer_short_kernel=2,
+        integrative_mixer_long_kernel=3,
+    )
+    model = AxoPyTorchMamba(config)
+    x = torch.randn(2, 5, 8)
+    output = model(x)
+    assert output.shape == (2, 5, 2)
+
+    path = tmp_path / "axomamba.pt"
+    save_checkpoint(model, path, metadata={"epoch": 3})
+    loaded, metadata = load_checkpoint(path)
+
+    assert loaded.__class__.__name__ == "AxoPyTorchMamba"
+    assert loaded.config == model.config
+    assert metadata["model_kind"] == "axomamba-pytorch"
+    assert metadata["epoch"] == 3

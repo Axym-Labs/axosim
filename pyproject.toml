@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bnn-sim"
+name = "axosim"
 version = "0.1.0"
-description = "Deterministic Branch-ELM surrogate baseline harness."
+description = "AxoSim surrogate-model harness for biologically inspired neural simulation."
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24",
@@ -19,7 +19,8 @@ dev = [
 ]
 
 [project.scripts]
-bnn-sim = "bnn_sim.cli:main"
+axosim = "axosim.cli:main"
+bnn-sim = "axosim.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

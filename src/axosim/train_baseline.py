@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train BSSM neuron surrogate."""
+"""Train Branch-ELM-30 baseline for benchmark evaluation."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from bnn_sim.bssm import BSSMNeuron
-from bnn_sim.data import ShardedNeuronIODataset
+from axosim.model import BranchELM, BranchELMConfig
+from axosim.data import ShardedNeuronIODataset
 
 
 def train_epoch(model, dataset, batch_size, optimizer, device):
@@ -82,16 +82,16 @@ def main():
     train_dir = f"{data_dir}/train"
     val_dir = f"{data_dir}/val"
     
-    checkpoint_path = "runs/bssm_trained.pt"
-    metrics_path = "runs/bssm_metrics.json"
+    checkpoint_path = "runs/branch_elm_30_trained.pt"
+    metrics_path = "runs/branch_elm_30_metrics.json"
     
     device = "cuda"
     epochs = 30
     batch_size = 8
-    lr = 1e-3
+    lr = 5e-4
     seed = 42
     
-    print(f"Training BSSM")
+    print(f"Training Branch-ELM-30 baseline")
     print(f"  Train: {train_dir}")
     print(f"  Val:   {val_dir}")
     print(f"  Epochs: {epochs}")
@@ -99,7 +99,8 @@ def main():
     print(f"  Device: {device}")
     
     # Create model
-    model = BSSMNeuron(input_dim=1278, n_branches=45).to(device)
+    config = BranchELMConfig.branch_elm_30(input_dim=1278, num_branches=45)
+    model = BranchELM(config).to(device)
     print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Load datasets
@@ -150,9 +151,17 @@ def main():
         if val_metrics['rmse_mv'] < best_val_rmse:
             best_val_rmse = val_metrics['rmse_mv']
             torch.save({
-                "model_kind": "bssm",
-                "epoch": epoch + 1,
+                "model_kind": "baseline",
+                "config": {
+                    "input_dim": config.input_dim,
+                    "memory_units": config.memory_units,
+                    "num_branches": config.num_branches,
+                    "hidden_units": config.hidden_units,
+                    "synapse_decay": config.synapse_decay,
+                    "memory_decay": config.memory_decay,
+                },
                 "state_dict": model.state_dict(),
+                "epoch": epoch + 1,
                 "val_rmse_mv": best_val_rmse,
             }, checkpoint_path)
             print(f"  >> Saved best checkpoint (RMSE: {best_val_rmse:.2f} mV)")
@@ -162,10 +171,18 @@ def main():
     
     # Save final
     torch.save({
-        "model_kind": "bssm",
+        "model_kind": "baseline",
+        "config": {
+            "input_dim": config.input_dim,
+            "memory_units": config.memory_units,
+            "num_branches": config.num_branches,
+            "hidden_units": config.hidden_units,
+            "synapse_decay": config.synapse_decay,
+            "memory_decay": config.memory_decay,
+        },
         "state_dict": model.state_dict(),
         "history": history,
-    }, "runs/bssm_final.pt")
+    }, "runs/branch_elm_30_final.pt")
     
     # Save metrics
     with open(metrics_path, "w") as f:
