@@ -9,7 +9,11 @@ import numpy as np
 import torch
 
 from axobench.metrics import compute_core_metric_set, soma_rmse, spike_auc
-from axobench.benchmark.plots import apply_paper_plot_style, plot_state_embedding_surface, plot_state_space_surface
+from axobench.benchmark.plots import (
+    apply_paper_plot_style,
+    plot_phase_plane_surface,
+    plot_state_embedding_surface,
+)
 from axosim.checkpoint import load_checkpoint
 from axosim.data import ShardedNeuronIODataset
 from axosim.evaluate import _tensor_from_numpy
@@ -72,7 +76,7 @@ def main() -> int:
     if any(row.get("presentations") is not None for row in rows):
         _plot_duration_curves(output / "fig04_branch_elm_duration_probe", rows)
     if not args.skip_state_plots:
-        plot_state_space_surface(
+        plot_phase_plane_surface(
             output=output / "fig02_branch_elm_phase_plane_voltage_error",
             targets=targets,
             predictions_by_model=prediction_cache,
@@ -80,7 +84,7 @@ def main() -> int:
             ignore_start=args.ignore_start,
             statistic="voltage_rmse",
         )
-        plot_state_space_surface(
+        plot_phase_plane_surface(
             output=output / "fig03_teacher_phase_plane_spike_rate",
             targets=targets,
             raw_soma_mv=raw_soma,
