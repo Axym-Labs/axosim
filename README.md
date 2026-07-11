@@ -91,9 +91,7 @@ attention panel directly in the terminal:
 ```bash
 axosim-evaluate-model runs/paper-like.pt \
   --dataset-root data/v1-neuronio-like-gpu-20260611 \
-  --device cuda \
-  --max-samples 64 \
-  --max-intervention-samples 8
+  --device cuda
 ```
 
 The command works with every checkpoint written by AxoSim's standard
@@ -101,6 +99,11 @@ checkpoint loader. AxoBench remains responsible for metric and diagnostic
 definitions; this repository supplies only checkpoint loading and GPU
 prediction. Install the current AxoBench package in the same environment
 before using the command.
+
+The measured default uses 240 ordinary traces, 60 paired traces per
+intervention, GPU batches of 32, and four concurrent CPU intervention loaders.
+It only prints to the terminal unless `--output report.json` or
+`--output report.csv` is supplied.
 
 ## Smoke Workflow
 

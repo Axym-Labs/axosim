@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -37,21 +36,25 @@ def make_checkpoint_predictor(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Print bounded AxoBench metrics and attention diagnostics for an AxoSim checkpoint."
+        description="Print bounded AxoBench metrics and attention diagnostics for an AxoSim checkpoint.",
+        allow_abbrev=False,
     )
     parser.add_argument("checkpoint")
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--model-id")
     parser.add_argument("--device", default="auto")
-    parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--max-samples", type=int, default=64)
-    parser.add_argument("--max-intervention-samples", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--max-samples", type=int, default=240)
+    parser.add_argument("--max-intervention-samples", type=int, default=60)
     parser.add_argument("--max-interventions", type=int, default=8)
+    parser.add_argument("--intervention-workers", type=int, default=4)
     parser.add_argument("--interventions", help="comma-separated intervention names; default discovers all")
     parser.add_argument("--ignore-start", type=int, default=500)
     parser.add_argument("--calibration-fraction", type=float, default=0.25)
     parser.add_argument("--default-spike-threshold", type=float, default=0.0)
-    parser.add_argument("--output-json")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--output", help="optional .json or .csv report path")
+    output.add_argument("--output-json", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     try:
@@ -59,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
             EvaluationConfig,
             evaluate_model,
             format_evaluation_report,
+            write_evaluation_report,
         )
     except ImportError as error:
         raise RuntimeError(
@@ -78,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
         batch_size=args.batch_size,
         max_intervention_samples=args.max_intervention_samples,
         max_interventions=args.max_interventions,
+        intervention_workers=args.intervention_workers,
         intervention_names=interventions,
         config=EvaluationConfig(
             ignore_start=args.ignore_start,
@@ -88,10 +93,9 @@ def main(argv: list[str] | None = None) -> int:
     report["checkpoint"] = str(Path(args.checkpoint).resolve())
     report["checkpoint_metadata"] = metadata
     print(format_evaluation_report(report))
-    if args.output_json:
-        output = Path(args.output_json)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_path = args.output or args.output_json
+    if output_path:
+        write_evaluation_report(report, output_path)
     return 0
 
 
@@ -105,4 +109,3 @@ def _resolve_device(device: str) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
