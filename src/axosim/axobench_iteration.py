@@ -44,11 +44,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-id")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--max-samples", type=int, default=240)
-    parser.add_argument("--max-intervention-samples", type=int, default=60)
+    parser.add_argument("--max-samples", type=int)
+    parser.add_argument("--max-intervention-samples", type=int)
     parser.add_argument("--max-interventions", type=int, default=8)
     parser.add_argument("--intervention-workers", type=int, default=4)
     parser.add_argument("--interventions", help="comma-separated intervention names; default discovers all")
+    parser.add_argument(
+        "--multiple-morphologies",
+        action="store_true",
+        help="balance the 120/40 evaluation profile across available morphologies",
+    )
+    parser.add_argument(
+        "--morphology-id",
+        help="specific morphology for the default single-morphology evaluation",
+    )
     parser.add_argument("--ignore-start", type=int, default=500)
     parser.add_argument("--calibration-fraction", type=float, default=0.25)
     parser.add_argument("--default-spike-threshold", type=float, default=0.0)
@@ -84,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
         max_interventions=args.max_interventions,
         intervention_workers=args.intervention_workers,
         intervention_names=interventions,
+        multiple_morphologies=args.multiple_morphologies,
+        morphology_id=args.morphology_id,
         config=EvaluationConfig(
             ignore_start=args.ignore_start,
             calibration_fraction=args.calibration_fraction,

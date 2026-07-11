@@ -100,9 +100,12 @@ definitions; this repository supplies only checkpoint loading and GPU
 prediction. Install the current AxoBench package in the same environment
 before using the command.
 
-The measured default uses 240 ordinary traces, 60 paired traces per
-intervention, GPU batches of 128, and four concurrent CPU intervention loaders.
-It only prints to the terminal unless `--output report.json` or
+The measured default evaluates one morphology with 120 ordinary traces, 40
+paired traces per intervention, GPU batches of 128, and four concurrent CPU
+intervention loaders. Add `--multiple-morphologies` to distribute the same
+120/40 profile across the five morphologies, or use
+`--morphology-id specimen_...` to select a specific morphology. The command
+only prints to the terminal unless `--output report.json` or
 `--output report.csv` is supplied.
 
 ## Smoke Workflow
