@@ -101,7 +101,7 @@ prediction. Install the current AxoBench package in the same environment
 before using the command.
 
 The measured default uses 240 ordinary traces, 60 paired traces per
-intervention, GPU batches of 32, and four concurrent CPU intervention loaders.
+intervention, GPU batches of 128, and four concurrent CPU intervention loaders.
 It only prints to the terminal unless `--output report.json` or
 `--output report.csv` is supplied.
 

@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--model-id")
     parser.add_argument("--device", default="auto")
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--max-samples", type=int, default=240)
     parser.add_argument("--max-intervention-samples", type=int, default=60)
     parser.add_argument("--max-interventions", type=int, default=8)
