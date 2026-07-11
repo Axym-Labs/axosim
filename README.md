@@ -85,6 +85,23 @@ axosim evaluate \
 Each `train` and `evaluate` run writes a tiny `experiment-registry.jsonl` next
 to the metrics file by default. Disable that with `--no-registry`.
 
+For model iteration, print the bounded AxoBench core metrics and 24-row
+attention panel directly in the terminal:
+
+```bash
+axosim-evaluate-model runs/paper-like.pt \
+  --dataset-root data/v1-neuronio-like-gpu-20260611 \
+  --device cuda \
+  --max-samples 64 \
+  --max-intervention-samples 8
+```
+
+The command works with every checkpoint written by AxoSim's standard
+checkpoint loader. AxoBench remains responsible for metric and diagnostic
+definitions; this repository supplies only checkpoint loading and GPU
+prediction. Install the current AxoBench package in the same environment
+before using the command.
+
 ## Smoke Workflow
 
 Create deterministic demo NeuronIO-style shards:
@@ -168,7 +185,9 @@ axosim benchmark \
 - Legacy simplified BranchELM path kept for smoke tests.
 - BCE + MSE training loop with burn-in support.
 - Checkpoint save/load with model config metadata.
-- Evaluation metrics: soma RMSE and spike AUC.
+- Iteration evaluation through AxoBench: Voltage SERA, exact and 5 ms spike F1,
+  F1 area over 0--5 ms, Response SERA, compatibility RMSE/AUC, and 24 bounded
+  attention diagnostics.
 - Benchmark command with optional `torch.compile`.
 - Named train/evaluate presets and tiny JSONL experiment registry.
 
