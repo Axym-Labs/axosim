@@ -16,11 +16,15 @@ def make_checkpoint_predictor(
     checkpoint: str | Path,
     *,
     device: str = "auto",
+    dtype: str | torch.dtype = "float32",
+    streaming: bool = False,
+    streaming_chunk_size: int | None = None,
 ) -> tuple[Callable[[np.ndarray], np.ndarray], dict[str, Any]]:
     """Load a standard AxoSim checkpoint as an AxoBench prediction callable."""
     resolved_device = _resolve_device(device)
+    resolved_dtype = _resolve_dtype(dtype)
     model, metadata = load_checkpoint(checkpoint, map_location=resolved_device)
-    model = model.to(resolved_device).eval()
+    model = model.to(device=resolved_device, dtype=resolved_dtype).eval()
     use_no_grad = bool(getattr(model, "learn_memory_tau", False) or hasattr(model, "branch_gain_enabled"))
     configured_morphologies = getattr(getattr(model, "config", None), "morphology_ids", None)
     morphology_mapping = (
@@ -35,7 +39,11 @@ def make_checkpoint_predictor(
         morphology_ids: list[str] | np.ndarray | None = None,
     ) -> np.ndarray:
         array = np.ascontiguousarray(inputs, dtype=np.float32)
-        tensor = torch.from_numpy(array).to(resolved_device, non_blocking=resolved_device.startswith("cuda"))
+        tensor = torch.from_numpy(array).to(
+            device=resolved_device,
+            dtype=resolved_dtype,
+            non_blocking=resolved_device.startswith("cuda"),
+        )
         morphology_indices = None
         if morphology_mapping is not None:
             if morphology_ids is None or len(morphology_ids) != tensor.shape[0]:
@@ -51,15 +59,46 @@ def make_checkpoint_predictor(
             )
         context = torch.no_grad() if use_no_grad else torch.inference_mode()
         with context:
-            output = (
-                model(tensor, morphology_indices=morphology_indices)
-                if morphology_indices is not None
-                else model(tensor)
-            )
-        return output.detach().cpu().numpy().astype(np.float32, copy=False)
+            if streaming:
+                if not hasattr(model, "allocate_streaming_state") or not hasattr(
+                    model,
+                    "streaming_step",
+                ):
+                    raise ValueError("checkpoint model does not support streaming inference")
+                state = model.allocate_streaming_state(
+                    tensor.shape[0],
+                    device=tensor.device,
+                    dtype=tensor.dtype,
+                )
+                output = torch.empty(
+                    tensor.shape[0],
+                    tensor.shape[1],
+                    int(getattr(model, "num_output", 2)),
+                    device=tensor.device,
+                    dtype=tensor.dtype,
+                )
+                for step in range(tensor.shape[1]):
+                    output[:, step : step + 1] = model.streaming_step(
+                        tensor[:, step],
+                        state,
+                        morphology_indices=morphology_indices,
+                        chunk_size=streaming_chunk_size,
+                    )
+            else:
+                output = (
+                    model(tensor, morphology_indices=morphology_indices)
+                    if morphology_indices is not None
+                    else model(tensor)
+                )
+        return output.detach().to(dtype=torch.float32).cpu().numpy()
 
     predict.supports_morphology_ids = morphology_mapping is not None
-    return predict, metadata
+    return predict, {
+        **metadata,
+        "inference_dtype": str(resolved_dtype).removeprefix("torch."),
+        "streaming_inference": streaming,
+        "streaming_chunk_size": streaming_chunk_size,
+    }
 
 
 def _morphology_id(value: object) -> str:
@@ -246,6 +285,25 @@ def _resolve_device(device: str) -> str:
     if device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError(f"CUDA device {device!r} requested but CUDA is unavailable")
     return device
+
+
+def _resolve_dtype(dtype: str | torch.dtype) -> torch.dtype:
+    if isinstance(dtype, torch.dtype):
+        resolved = dtype
+    else:
+        names = {
+            "float32": torch.float32,
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+        }
+        if dtype not in names:
+            raise ValueError(
+                "inference dtype must be 'float32', 'float16', or 'bfloat16'"
+            )
+        resolved = names[dtype]
+    if resolved not in {torch.float32, torch.float16, torch.bfloat16}:
+        raise ValueError("inference dtype must be float32, float16, or bfloat16")
+    return resolved
 
 
 if __name__ == "__main__":

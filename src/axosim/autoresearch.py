@@ -348,6 +348,20 @@ def practical_candidate_gate(
             efficiency_improvements[
                 "population_inference_speedup_fraction"
             ] = population_speedup
+    baseline_population_capacity = float(
+        baseline_training.get("maximum_population_size", 0)
+    )
+    candidate_population_capacity = float(
+        candidate_training.get("maximum_population_size", 0)
+    )
+    if baseline_population_capacity > 0 and candidate_population_capacity > 0:
+        population_capacity_increase = (
+            candidate_population_capacity / baseline_population_capacity - 1.0
+        )
+        if population_capacity_increase >= PRACTICAL_EFFICIENCY_FRACTION:
+            efficiency_improvements[
+                "population_capacity_increase_fraction"
+            ] = population_capacity_increase
 
     automatically_rejected = not material_improvements and not efficiency_improvements
     if automatically_rejected:

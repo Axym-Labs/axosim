@@ -1053,3 +1053,186 @@ def test_streaming_step_matches_full_sequence_for_population_model_path():
         )
 
     torch.testing.assert_close(streamed, full, atol=2e-5, rtol=2e-5)
+
+
+def test_chunked_streaming_matches_single_population_step_and_state(monkeypatch):
+    torch.manual_seed(137)
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=8,
+            num_output=2,
+            num_branch=4,
+            num_synapse_per_branch=2,
+            model_dim=6,
+            num_layers=2,
+            state_dim=2,
+            conv_kernel=2,
+            expansion=2,
+            morphology_ids=["morph-a", "morph-b"],
+            morphology_embedding_scale=0.15,
+            separate_heads=True,
+            local_tcn_scale=1.0,
+            local_tcn_mode="undilated",
+            local_tcn_position="post",
+        )
+    ).eval()
+    population = 5
+    inputs = torch.randn(population, 11, 8)
+    morphology_indices = torch.tensor([0, 1, 0, 1, 0])
+    direct_state = model.allocate_streaming_state(population)
+    chunked_state = model.allocate_streaming_state(population)
+    automatic_state = model.allocate_streaming_state(population)
+
+    with torch.no_grad():
+        direct = torch.cat(
+            [
+                model.streaming_step(
+                    inputs[:, step],
+                    direct_state,
+                    morphology_indices=morphology_indices,
+                )
+                for step in range(inputs.shape[1])
+            ],
+            dim=1,
+        )
+        chunked = torch.cat(
+            [
+                model.streaming_step(
+                    inputs[:, step],
+                    chunked_state,
+                    morphology_indices=morphology_indices,
+                    chunk_size=2,
+                )
+                for step in range(inputs.shape[1])
+            ],
+            dim=1,
+        )
+        monkeypatch.setattr(
+            "axosim.mamba_official.DEFAULT_STREAMING_CHUNK_SIZE",
+            2,
+        )
+        automatic = torch.cat(
+            [
+                model.streaming_step(
+                    inputs[:, step],
+                    automatic_state,
+                    morphology_indices=morphology_indices,
+                )
+                for step in range(inputs.shape[1])
+            ],
+            dim=1,
+        )
+
+    torch.testing.assert_close(chunked, direct)
+    torch.testing.assert_close(automatic, direct)
+    for direct_pair, chunked_pair in zip(
+        direct_state.mamba_states,
+        chunked_state.mamba_states,
+        strict=True,
+    ):
+        torch.testing.assert_close(chunked_pair[0], direct_pair[0])
+        torch.testing.assert_close(chunked_pair[1], direct_pair[1])
+    for direct_history, chunked_history in zip(
+        direct_state.local_tcn_histories,
+        chunked_state.local_tcn_histories,
+        strict=True,
+    ):
+        torch.testing.assert_close(chunked_history, direct_history)
+    with pytest.raises(ValueError, match="chunk_size"):
+        model.streaming_step(
+            inputs[:, 0],
+            chunked_state,
+            morphology_indices=morphology_indices,
+            chunk_size=0,
+        )
+
+
+def test_sparse_event_streaming_matches_dense_input_and_state():
+    torch.manual_seed(139)
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=8,
+            num_output=2,
+            num_branch=4,
+            num_synapse_per_branch=2,
+            model_dim=6,
+            num_layers=2,
+            state_dim=2,
+            conv_kernel=2,
+            expansion=2,
+            morphology_ids=["morph-a", "morph-b"],
+            morphology_embedding_scale=0.15,
+            separate_heads=True,
+            local_tcn_scale=1.0,
+            local_tcn_mode="undilated",
+            local_tcn_position="post",
+        )
+    ).eval()
+    population = 5
+    morphology_indices = torch.tensor([0, 1, 0, 1, 0])
+    dense_state = model.allocate_streaming_state(population)
+    sparse_state = model.allocate_streaming_state(population)
+    dense_outputs = []
+    sparse_outputs = []
+
+    with torch.no_grad():
+        for step in range(11):
+            event_indices = torch.tensor(
+                [
+                    [step % 8, (step + 1) % 8, -1],
+                    [(step + 2) % 8, -1, -1],
+                    [(step + 3) % 8, (step + 3) % 8, -1],
+                    [-1, -1, -1],
+                    [(step + 4) % 8, (step + 5) % 8, (step + 6) % 8],
+                ]
+            )
+            event_values = torch.tensor(
+                [
+                    [1.0, -1.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.5, 0.5, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [-1.0, 1.0, 1.0],
+                ]
+            )
+            dense = torch.zeros(population, 8)
+            valid = event_indices >= 0
+            dense.scatter_add_(
+                1,
+                event_indices.clamp_min(0),
+                event_values * valid,
+            )
+            dense_outputs.append(
+                model.streaming_step(
+                    dense,
+                    dense_state,
+                    morphology_indices=morphology_indices,
+                )
+            )
+            sparse_outputs.append(
+                model.streaming_step_events(
+                    event_indices,
+                    event_values,
+                    sparse_state,
+                    morphology_indices=morphology_indices,
+                    chunk_size=2,
+                )
+            )
+
+    torch.testing.assert_close(
+        torch.cat(sparse_outputs, dim=1),
+        torch.cat(dense_outputs, dim=1),
+    )
+    for dense_pair, sparse_pair in zip(
+        dense_state.mamba_states,
+        sparse_state.mamba_states,
+        strict=True,
+    ):
+        torch.testing.assert_close(sparse_pair[0], dense_pair[0])
+        torch.testing.assert_close(sparse_pair[1], dense_pair[1])
+    for dense_history, sparse_history in zip(
+        dense_state.local_tcn_histories,
+        sparse_state.local_tcn_histories,
+        strict=True,
+    ):
+        torch.testing.assert_close(sparse_history, dense_history)

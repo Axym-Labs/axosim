@@ -264,6 +264,21 @@ def test_practical_gate_counts_per_neuron_streaming_state_as_efficiency() -> Non
     }
 
 
+def test_practical_gate_counts_population_capacity_as_efficiency() -> None:
+    gate = practical_candidate_gate(
+        {"voltage_sera_mv": 0.0},
+        assessments={"voltage_sera_mv": "uncertain"},
+        baseline_training={"maximum_population_size": 32_768},
+        candidate_training={"maximum_population_size": 1_048_576},
+        metric_families=("sera",),
+    )
+
+    assert gate["automatically_rejected"] is False
+    assert gate["efficiency_improvements"] == {
+        "population_capacity_increase_fraction": 31.0
+    }
+
+
 def test_practical_gate_counts_robust_population_speed_and_peak_memory() -> None:
     gate = practical_candidate_gate(
         {"voltage_sera_mv": 0.0},

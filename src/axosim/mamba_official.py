@@ -13,6 +13,9 @@ from axosim.official.modeling_utils import (
 )
 
 
+DEFAULT_STREAMING_CHUNK_SIZE = 32_768
+
+
 @dataclass(frozen=True)
 class BranchOfficialMambaConfig:
     num_input: int = 1278
@@ -54,7 +57,6 @@ class BranchOfficialMambaConfig:
     morphology_synapse_feature_hidden: int = 0
     morphology_synapse_feature_scale: float | None = None
     morphology_synapse_feature_storage_dtype: str = "float32"
-    share_morphology_feature_compute: bool = True
     local_tcn_scale: float | None = None
     local_tcn_mode: str = "dilated"
     local_tcn_position: str = "parallel"
@@ -785,7 +787,7 @@ class BranchOfficialMamba(nn.Module):
             morphology_feature_gains=self._all_morphology_feature_gains(
                 dtype=resolved_dtype,
                 device=resolved_device,
-            ) if self.config.share_morphology_feature_compute else None,
+            ),
         )
 
     def streaming_step(
@@ -794,6 +796,7 @@ class BranchOfficialMamba(nn.Module):
         state: BranchMambaStreamingState,
         *,
         morphology_indices: torch.Tensor | None = None,
+        chunk_size: int | None = None,
     ) -> torch.Tensor:
         """Advance one timestep and return `(batch, 1, output)` predictions."""
         self._validate_streaming_configuration()
@@ -804,6 +807,59 @@ class BranchOfficialMamba(nn.Module):
                 "streaming input must have shape (batch, channels) or "
                 "(batch, 1, channels)"
             )
+        if chunk_size is None and x.shape[0] > DEFAULT_STREAMING_CHUNK_SIZE:
+            chunk_size = DEFAULT_STREAMING_CHUNK_SIZE
+        if chunk_size is not None:
+            if chunk_size <= 0:
+                raise ValueError("streaming chunk_size must be positive")
+            if x.shape[0] > chunk_size:
+                outputs = []
+                base_soma_predictions = []
+                for start in range(0, x.shape[0], chunk_size):
+                    stop = min(start + chunk_size, x.shape[0])
+                    chunk_state = BranchMambaStreamingState(
+                        mamba_states=[
+                            (conv_state[start:stop], ssm_state[start:stop])
+                            for conv_state, ssm_state in state.mamba_states
+                        ],
+                        local_tcn_histories=[
+                            history[start:stop]
+                            for history in state.local_tcn_histories
+                        ],
+                        morphology_feature_gains=state.morphology_feature_gains,
+                    )
+                    outputs.append(
+                        self.streaming_step(
+                            x[start:stop],
+                            chunk_state,
+                            morphology_indices=(
+                                None
+                                if morphology_indices is None
+                                else morphology_indices[start:stop]
+                            ),
+                        )
+                    )
+                    if self.base_soma_prediction is not None:
+                        base_soma_predictions.append(self.base_soma_prediction)
+                    for parent, updated in zip(
+                        state.mamba_states,
+                        chunk_state.mamba_states,
+                        strict=True,
+                    ):
+                        parent[0][start:stop].copy_(updated[0])
+                        parent[1][start:stop].copy_(updated[1])
+                    for parent, updated in zip(
+                        state.local_tcn_histories,
+                        chunk_state.local_tcn_histories,
+                        strict=True,
+                    ):
+                        parent[start:stop].copy_(updated)
+                if base_soma_predictions:
+                    self.base_soma_prediction = torch.cat(
+                        base_soma_predictions,
+                        dim=0,
+                    )
+                return torch.cat(outputs, dim=0)
         if len(state.mamba_states) != len(self.blocks):
             raise ValueError("streaming Mamba state does not match model layers")
         if len(state.local_tcn_histories) != len(self.local_tcn_blocks):
@@ -907,6 +963,105 @@ class BranchOfficialMamba(nn.Module):
         if self.config.spike_voltage_coupling_scale:
             spike = self._couple_spike_voltage(spike, soma)
         return torch.cat([spike, soma], dim=-1)
+
+    def streaming_step_events(
+        self,
+        event_indices: torch.Tensor,
+        event_values: torch.Tensor,
+        state: BranchMambaStreamingState,
+        *,
+        morphology_indices: torch.Tensor | None = None,
+        chunk_size: int | None = None,
+    ) -> torch.Tensor:
+        """Advance one timestep from padded sparse channel/value event rows.
+
+        ``event_indices`` and ``event_values`` have shape ``(batch, events)``.
+        Negative indices are padding; repeated channels are summed. Dense input
+        exists only for the current population chunk.
+        """
+        self._validate_streaming_configuration()
+        if event_indices.ndim != 2 or event_values.shape != event_indices.shape:
+            raise ValueError(
+                "streaming events must have matching (batch, events) indices and values"
+            )
+        if event_indices.shape[0] <= 0:
+            raise ValueError("streaming event batch must be positive")
+        if event_indices.is_floating_point() or event_indices.is_complex():
+            raise ValueError("streaming event indices must be integers")
+        resolved_chunk_size = (
+            DEFAULT_STREAMING_CHUNK_SIZE if chunk_size is None else chunk_size
+        )
+        if resolved_chunk_size <= 0:
+            raise ValueError("streaming chunk_size must be positive")
+        if len(state.mamba_states) != len(self.blocks):
+            raise ValueError("streaming Mamba state does not match model layers")
+        if len(state.local_tcn_histories) != len(self.local_tcn_blocks):
+            raise ValueError("streaming TCN state does not match model blocks")
+
+        parameter = next(self.parameters())
+        outputs = []
+        base_soma_predictions = []
+        for start in range(0, event_indices.shape[0], resolved_chunk_size):
+            stop = min(start + resolved_chunk_size, event_indices.shape[0])
+            chunk_indices = event_indices[start:stop].to(
+                device=parameter.device,
+                dtype=torch.long,
+            )
+            valid = chunk_indices >= 0
+            dense = torch.zeros(
+                stop - start,
+                self.num_input,
+                device=parameter.device,
+                dtype=parameter.dtype,
+            )
+            dense.scatter_add_(
+                1,
+                chunk_indices.clamp_min(0),
+                event_values[start:stop].to(
+                    device=parameter.device,
+                    dtype=parameter.dtype,
+                ) * valid.to(dtype=parameter.dtype),
+            )
+            chunk_state = BranchMambaStreamingState(
+                mamba_states=[
+                    (conv_state[start:stop], ssm_state[start:stop])
+                    for conv_state, ssm_state in state.mamba_states
+                ],
+                local_tcn_histories=[
+                    history[start:stop]
+                    for history in state.local_tcn_histories
+                ],
+                morphology_feature_gains=state.morphology_feature_gains,
+            )
+            outputs.append(
+                self.streaming_step(
+                    dense,
+                    chunk_state,
+                    morphology_indices=(
+                        None
+                        if morphology_indices is None
+                        else morphology_indices[start:stop]
+                    ),
+                )
+            )
+            if self.base_soma_prediction is not None:
+                base_soma_predictions.append(self.base_soma_prediction)
+            for parent, updated in zip(
+                state.mamba_states,
+                chunk_state.mamba_states,
+                strict=True,
+            ):
+                parent[0][start:stop].copy_(updated[0])
+                parent[1][start:stop].copy_(updated[1])
+            for parent, updated in zip(
+                state.local_tcn_histories,
+                chunk_state.local_tcn_histories,
+                strict=True,
+            ):
+                parent[start:stop].copy_(updated)
+        if base_soma_predictions:
+            self.base_soma_prediction = torch.cat(base_soma_predictions, dim=0)
+        return torch.cat(outputs, dim=0)
 
     def _stream_local_tcn_correction(
         self,
@@ -1174,26 +1329,19 @@ class BranchOfficialMamba(nn.Module):
             if morphology_indices is None:
                 raise ValueError("morphology_indices are required for morphology synapse features")
             feature_gains = morphology_feature_gains
-            if feature_gains is None and self.config.share_morphology_feature_compute:
+            if feature_gains is None:
                 feature_gains = self._all_morphology_feature_gains(
                     dtype=routed.dtype,
                     device=routed.device,
                 )
-            if feature_gains is None:
-                feature_gains = self._per_neuron_morphology_feature_gains(
-                    morphology_indices,
-                    dtype=routed.dtype,
-                    device=routed.device,
-                )
-                feature_gain = feature_gains
-            else:
-                feature_gain = feature_gains.index_select(
-                    0,
-                    morphology_indices.to(
-                        dtype=torch.long,
-                        device=feature_gains.device,
-                    ),
-                )
+            assert feature_gains is not None
+            feature_gain = feature_gains.index_select(
+                0,
+                morphology_indices.to(
+                    dtype=torch.long,
+                    device=feature_gains.device,
+                ),
+            )
             routed = routed * feature_gain.to(
                 dtype=routed.dtype,
                 device=routed.device,
@@ -1229,39 +1377,6 @@ class BranchOfficialMamba(nn.Module):
         return torch.exp(
             self.config.morphology_synapse_feature_scale * feature_delta
         )
-
-    def _per_neuron_morphology_feature_gains(
-        self,
-        morphology_indices: torch.Tensor,
-        *,
-        dtype: torch.dtype,
-        device: torch.device | str,
-    ) -> torch.Tensor:
-        assert self.morphology_synapse_feature_in is not None
-        assert self.morphology_synapse_feature_out is not None
-        assert self.config.morphology_synapse_feature_scale is not None
-        features = self.morphology_synapse_features.index_select(
-            0,
-            morphology_indices.to(
-                dtype=torch.long,
-                device=self.morphology_synapse_features.device,
-            ),
-        )
-        if self.input_to_synapse_routing is not None:
-            features = torch.index_select(
-                features,
-                1,
-                self.input_to_synapse_indices,
-            )
-        features = features.view(
-            morphology_indices.shape[0],
-            self.num_branch,
-            self.num_synapse_per_branch,
-            self.config.morphology_synapse_feature_dim,
-        ).to(dtype=dtype, device=device)
-        hidden = F.silu(self.morphology_synapse_feature_in(features))
-        delta = self.morphology_synapse_feature_out(hidden).squeeze(-1)
-        return torch.exp(self.config.morphology_synapse_feature_scale * delta)
 
     def _branch_subunit_features(self, routed_synapses: torch.Tensor) -> torch.Tensor:
         if self.branch_subunit_log_gain is None:

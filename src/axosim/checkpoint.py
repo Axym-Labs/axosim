@@ -53,6 +53,7 @@ _RETIRED_AXOMAMBA_CONFIG_KEYS = frozenset(
         "branch_forcing_residual_source",
         "branch_interaction_state_gate_scale",
         "branch_latent_tokens",
+        "share_morphology_feature_compute",
         "branch_latent_dim",
         "branch_latent_layers",
         "branch_latent_mode",
