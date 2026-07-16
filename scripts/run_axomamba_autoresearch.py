@@ -46,7 +46,10 @@ from axosim.axobench_iteration import make_checkpoint_predictor  # noqa: E402
 from axosim.axomamba import AxoMamba, AxoMambaConfig  # noqa: E402
 from axosim.data import ShardedNeuronIODataset  # noqa: E402
 from axosim.checkpoint import load_checkpoint  # noqa: E402
-from axosim.structured import initialize_factorized_linears_from_state  # noqa: E402
+from axosim.structured import (  # noqa: E402
+    balanced_proxy_compress_mamba_state,
+    initialize_factorized_linears_from_state,
+)
 
 
 DEFAULT_DATASET_ROOT = PROJECT_ROOT / "data" / "v1-neuronio-like-gpu-20260611"
@@ -238,6 +241,12 @@ def run_iteration(
             training_results[record.candidate_id]["factorized_source_weights"] = getattr(
                 record, "factorized_source_weights", []
             )
+            training_results[record.candidate_id]["state_transfer"] = getattr(
+                record, "state_transfer", None
+            )
+            training_results[record.candidate_id]["retained_state_indices"] = getattr(
+                record, "retained_state_indices", {}
+            )
             training_results[record.candidate_id]["distillation_teacher"] = (
                 distillation_teacher_record
             )
@@ -364,18 +373,35 @@ def _build_candidates(
         initialization = str(specification.get("initialization", "pretrained"))
         if initialization not in {"pretrained", "scratch"}:
             raise ValueError("candidate initialization must be 'pretrained' or 'scratch'")
+        state_transfer = specification.get("state_transfer")
+        retained_state_indices: dict[str, list[int]] = {}
+        candidate_reference_state = reference_state
+        if state_transfer is not None:
+            if state_transfer not in {"balanced_proxy", "random"}:
+                raise ValueError("state_transfer must be 'balanced_proxy' or 'random'")
+            if initialization != "pretrained":
+                raise ValueError("state transfer requires pretrained initialization")
+            if state_transfer == "balanced_proxy":
+                candidate_reference_state, retained_state_indices = (
+                    balanced_proxy_compress_mamba_state(
+                        reference_state,
+                        source_state_dim=int(base_config["state_dim"]),
+                        target_state_dim=int(config["state_dim"]),
+                    )
+                )
         candidate_state = model.state_dict()
         if initialization == "pretrained":
             shared = {
                 name: tensor
-                for name, tensor in reference_state.items()
+                for name, tensor in candidate_reference_state.items()
                 if name in candidate_state and candidate_state[name].shape == tensor.shape
             }
             candidate_state.update(shared)
             model.load_state_dict(candidate_state, strict=True)
             factorized_source_weights = initialize_factorized_linears_from_state(
                 model,
-                reference_state,
+                candidate_reference_state,
+                compatible_only=state_transfer == "random",
             )
         else:
             shared = {}
@@ -460,6 +486,8 @@ def _build_candidates(
         )
         setattr(record, "initialization", initialization)
         setattr(record, "factorized_source_weights", factorized_source_weights)
+        setattr(record, "state_transfer", state_transfer)
+        setattr(record, "retained_state_indices", retained_state_indices)
         records.append(record)
     return records
 

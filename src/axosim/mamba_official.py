@@ -57,12 +57,6 @@ class BranchOfficialMambaConfig:
     local_tcn_mode: str = "dilated"
     local_tcn_position: str = "parallel"
     mamba_projection_rank: int = 0
-    support_ode_mode: str = "none"
-    support_ode_scale: float | None = None
-    support_ode_input: str = "raw"
-    support_ode_normalization: str = "none"
-    support_ode_projection: str = "dense"
-    support_ode_route_weighting: str = "none"
     soma_tcn_scale: float | None = None
     soma_tcn_coupling_source: str = "corrected"
     branch_gain: bool = False
@@ -191,41 +185,6 @@ class BranchOfficialMamba(nn.Module):
             raise ValueError("soma_tcn_coupling_source must be 'corrected' or 'base'")
         if local_tcn_enabled and config.local_tcn_position == "interlayer" and config.num_layers < 2:
             raise ValueError("interlayer local TCN requires at least two Mamba layers")
-        support_ode_enabled = config.support_ode_mode != "none"
-        if support_ode_enabled != (config.support_ode_scale is not None):
-            raise ValueError(
-                "support_ode_mode and support_ode_scale must be enabled together"
-            )
-        if support_ode_enabled:
-            from axosim.support_ode import SUPPORT_ODE_MODES
-
-            if config.support_ode_mode not in SUPPORT_ODE_MODES:
-                raise ValueError(f"unsupported support ODE mode: {config.support_ode_mode}")
-            if config.support_ode_scale is None or config.support_ode_scale < 0:
-                raise ValueError("support_ode_scale must be non-negative")
-        if config.support_ode_input not in {"raw", "weighted"}:
-            raise ValueError("support_ode_input must be 'raw' or 'weighted'")
-        if config.support_ode_normalization not in {"none", "log1p", "rms"}:
-            raise ValueError(
-                "support_ode_normalization must be 'none', 'log1p', or 'rms'"
-            )
-        if config.support_ode_projection not in {"dense", "branch", "shared_branch"}:
-            raise ValueError(
-                "support_ode_projection must be 'dense', 'branch', or 'shared_branch'"
-            )
-        if config.support_ode_route_weighting not in {"none", "multiplicity"}:
-            raise ValueError(
-                "support_ode_route_weighting must be 'none' or 'multiplicity'"
-            )
-        if config.support_ode_route_weighting != "none":
-            if not support_ode_enabled or config.support_ode_input != "raw":
-                raise ValueError(
-                    "support ODE route weighting requires raw support ODE input"
-                )
-            if not config.morphology_ids:
-                raise ValueError(
-                    "support ODE route weighting requires morphology_ids"
-                )
         if config.branch_nonlinearity not in {"none", "tanh"}:
             raise ValueError("branch_nonlinearity must be 'none' or 'tanh'")
         if config.branch_nonlinearity_scale_init <= 0:
@@ -301,16 +260,6 @@ class BranchOfficialMamba(nn.Module):
             feature_values,
             persistent=feature_operator_enabled,
         )
-        support_route_weights = (
-            torch.ones(len(config.morphology_ids), config.num_input)
-            if config.support_ode_route_weighting != "none"
-            else torch.empty(0)
-        )
-        self.register_buffer(
-            "support_ode_route_weights",
-            support_route_weights,
-            persistent=config.support_ode_route_weighting != "none",
-        )
         self.branch_subunit_log_gain = (
             nn.Parameter(
                 torch.zeros(
@@ -347,35 +296,6 @@ class BranchOfficialMamba(nn.Module):
             self.branch_bilinear_out = None
         branch_projection_features = config.num_branch * (1 + len(self.branch_trace_taus))
         self.branch_projection = nn.Linear(branch_projection_features, config.model_dim)
-        if support_ode_enabled:
-            from axosim.support_ode import SynapticSupportODE
-
-            self.support_ode = SynapticSupportODE(
-                num_branches=config.num_branch,
-                mode=config.support_ode_mode,
-            )
-            if config.support_ode_projection == "dense":
-                self.support_ode_projection = nn.Linear(
-                    self.support_ode.output_dim,
-                    config.model_dim,
-                    bias=False,
-                )
-                nn.init.zeros_(self.support_ode_projection.weight)
-                self.support_ode_branch_weights = None
-            else:
-                self.support_ode_projection = None
-                weight_branches = (
-                    config.num_branch
-                    if config.support_ode_projection == "branch"
-                    else 1
-                )
-                self.support_ode_branch_weights = nn.Parameter(
-                    torch.zeros(weight_branches, 3)
-                )
-        else:
-            self.support_ode = None
-            self.support_ode_projection = None
-            self.support_ode_branch_weights = None
         self.integrative_pre = (
             _ShortLongTemporalMixer(
                 config.model_dim,
@@ -568,10 +488,15 @@ class BranchOfficialMamba(nn.Module):
                     raise ValueError(
                         "mamba_projection_rank requires linear in_proj/x_proj/out_proj"
                     )
-                if rank > min(projection.in_features, projection.out_features):
-                    raise ValueError(
-                        f"mamba_projection_rank={rank} exceeds {projection_name} dimensions"
-                    )
+                factor_parameters = rank * (
+                    projection.in_features + projection.out_features
+                )
+                dense_parameters = projection.in_features * projection.out_features
+                if (
+                    rank > min(projection.in_features, projection.out_features)
+                    or factor_parameters >= dense_parameters
+                ):
+                    continue
                 source_name = (
                     f"blocks.{block_index}.mamba.{projection_name}.weight"
                 )
@@ -604,13 +529,6 @@ class BranchOfficialMamba(nn.Module):
             routed_events,
             morphology_indices=morphology_indices,
         )
-        support_input = self._support_ode_routed_input(
-            x,
-            routed_events=routed_events,
-            routed_synapses=routed_synapses,
-            morphology_indices=morphology_indices,
-        )
-        support_features = self._support_ode_features(support_input)
         branch_inputs = routed_synapses.sum(dim=-1)
         if self.branch_gain is not None:
             gain = self.branch_gain.to(dtype=branch_inputs.dtype, device=branch_inputs.device)
@@ -629,13 +547,6 @@ class BranchOfficialMamba(nn.Module):
             branch_delta[:, 1:] = branch_inputs[:, 1:] - branch_inputs[:, :-1]
             highpass_features = branch_delta
         projection_inputs = branch_inputs
-        support_branch_residual = self._support_ode_branch_residual(support_features)
-        if support_branch_residual is not None:
-            assert self.config.support_ode_scale is not None
-            projection_inputs = (
-                projection_inputs
-                + self.config.support_ode_scale * support_branch_residual
-            )
         subunit_projection = None
         if self.branch_trace_taus:
             projection_inputs = torch.cat(
@@ -673,12 +584,6 @@ class BranchOfficialMamba(nn.Module):
                 subunit_inputs.flatten(start_dim=-2)
             )
         hidden = self.branch_projection(projection_inputs)
-        if self.support_ode_projection is not None:
-            assert self.config.support_ode_scale is not None
-            assert support_features is not None
-            hidden = hidden + self.config.support_ode_scale * self.support_ode_projection(
-                support_features
-            )
         if subunit_projection is not None:
             hidden = hidden + self.config.branch_subunit_scale * subunit_projection
         bilinear_projection = self._branch_bilinear_projection(bilinear_inputs)
@@ -988,72 +893,6 @@ class BranchOfficialMamba(nn.Module):
             )
             routed = routed * feature_gain.unsqueeze(1)
         return routed
-
-    def _support_ode_features(self, routed_synapses: torch.Tensor) -> torch.Tensor | None:
-        if self.support_ode is None:
-            return None
-        if routed_synapses.ndim == 3:
-            routed_synapses = routed_synapses.view(
-                routed_synapses.shape[0],
-                routed_synapses.shape[1],
-                self.num_branch,
-                self.num_synapse_per_branch,
-            )
-        if routed_synapses.ndim != 4:
-            raise ValueError("support ODE inputs must be routed synapse events")
-        excitatory = routed_synapses.clamp_min(0.0).sum(dim=-1)
-        inhibitory = -routed_synapses.clamp_max(0.0).sum(dim=-1)
-        features = self.support_ode(excitatory, inhibitory)
-        if self.config.support_ode_normalization == "log1p":
-            return torch.sign(features) * torch.log1p(features.abs())
-        if self.config.support_ode_normalization == "rms":
-            scale = features.square().mean(dim=-1, keepdim=True).sqrt()
-            return features / scale.clamp_min(torch.finfo(features.dtype).eps)
-        return features
-
-    def _support_ode_routed_input(
-        self,
-        x: torch.Tensor,
-        *,
-        routed_events: torch.Tensor,
-        routed_synapses: torch.Tensor,
-        morphology_indices: torch.Tensor | None,
-    ) -> torch.Tensor:
-        if self.config.support_ode_input == "weighted":
-            return routed_synapses
-        if self.config.support_ode_route_weighting == "none":
-            return routed_events
-        if morphology_indices is None:
-            raise ValueError(
-                "morphology_indices are required for support ODE route weighting"
-            )
-        if morphology_indices.ndim != 1 or morphology_indices.shape[0] != x.shape[0]:
-            raise ValueError("morphology_indices must have shape (batch,)")
-        route_weights = self.support_ode_route_weights.index_select(
-            0,
-            morphology_indices.to(
-                dtype=torch.long,
-                device=self.support_ode_route_weights.device,
-            ),
-        ).to(dtype=x.dtype, device=x.device)
-        return self._route_input_to_synapses(x * route_weights.unsqueeze(1))
-
-    def _support_ode_branch_residual(
-        self,
-        support_features: torch.Tensor | None,
-    ) -> torch.Tensor | None:
-        if self.support_ode_branch_weights is None:
-            return None
-        if support_features is None:
-            raise RuntimeError("support ODE branch weights require support features")
-        receptor_features = support_features.unflatten(
-            -1, (3, self.num_branch)
-        ).transpose(-1, -2)
-        weights = self.support_ode_branch_weights.to(
-            dtype=receptor_features.dtype,
-            device=receptor_features.device,
-        )
-        return (receptor_features * weights.view(1, 1, -1, 3)).sum(dim=-1)
 
     def _branch_subunit_features(self, routed_synapses: torch.Tensor) -> torch.Tensor:
         if self.branch_subunit_log_gain is None:

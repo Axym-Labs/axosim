@@ -2,7 +2,11 @@ import torch
 from torch import nn
 
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
-from axosim.structured import FactorizedLinear, initialize_factorized_linears_from_state
+from axosim.structured import (
+    FactorizedLinear,
+    balanced_proxy_compress_mamba_state,
+    initialize_factorized_linears_from_state,
+)
 
 
 def test_factorized_linear_reconstructs_full_rank_dense_map():
@@ -61,3 +65,99 @@ def test_axomamba_factorized_mamba_maps_reduce_parameters_and_train():
     ]
     assert factor_gradients
     assert all(gradient is not None for gradient in factor_gradients)
+
+
+def test_balanced_proxy_compression_retains_influential_mamba_states():
+    source = {
+        "blocks.0.mamba.A_log": torch.zeros(2, 4),
+        "blocks.0.mamba.x_proj.weight": torch.tensor(
+            [
+                [10.0, 10.0, 10.0],  # dt row
+                [1.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [3.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+            ]
+        ),
+        "unrelated": torch.tensor([7.0]),
+    }
+
+    compressed, selections = balanced_proxy_compress_mamba_state(
+        source,
+        source_state_dim=4,
+        target_state_dim=2,
+    )
+
+    assert selections == {"blocks.0.mamba": [2, 3]}
+    assert compressed["blocks.0.mamba.A_log"].shape == (2, 2)
+    torch.testing.assert_close(
+        compressed["blocks.0.mamba.x_proj.weight"],
+        source["blocks.0.mamba.x_proj.weight"][[0, 3, 4, 7, 8]],
+    )
+    assert compressed["unrelated"] is source["unrelated"]
+
+
+def test_balanced_proxy_favors_longer_memory_at_equal_io_strength():
+    source = {
+        "blocks.0.mamba.A_log": torch.tensor([[0.0, -2.0], [0.0, -2.0]]),
+        "blocks.0.mamba.x_proj.weight": torch.ones(5, 3),
+    }
+
+    _, selections = balanced_proxy_compress_mamba_state(
+        source,
+        source_state_dim=2,
+        target_state_dim=1,
+    )
+
+    assert selections == {"blocks.0.mamba": [1]}
+
+
+def test_projection_factorization_skips_maps_where_rank_is_not_compressive():
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=8,
+            num_output=2,
+            num_branch=2,
+            num_synapse_per_branch=4,
+            model_dim=8,
+            num_layers=2,
+            state_dim=1,
+            conv_kernel=2,
+            expansion=2,
+            mamba_projection_rank=4,
+        )
+    )
+
+    factorized_names = [
+        name for name, module in model.named_modules() if isinstance(module, FactorizedLinear)
+    ]
+    assert factorized_names == [
+        "blocks.0.mamba.in_proj",
+        "blocks.0.mamba.out_proj",
+        "blocks.1.mamba.in_proj",
+        "blocks.1.mamba.out_proj",
+    ]
+
+
+def test_factorized_initialization_can_skip_incompatible_state_projection():
+    model = FactorizedLinear(
+        4,
+        3,
+        2,
+        bias=False,
+        source_weight_name="x_proj.weight",
+    )
+    before = model.weight.detach().clone()
+
+    initialized = initialize_factorized_linears_from_state(
+        model,
+        {"x_proj.weight": torch.ones(5, 4)},
+        compatible_only=True,
+    )
+
+    assert initialized == []
+    torch.testing.assert_close(model.weight, before)

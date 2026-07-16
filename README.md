@@ -208,6 +208,11 @@ axosim benchmark \
   TCN; a practical-gate 300k ablation removed shared synaptic efficacy, the
   recoverable soma gate, and bilinear branch interaction, reducing repeated
   inference latency by 13% without a material core-metric regression.
+- `configs/axomamba-compact.json` and the local
+  `checkpoints/axomamba-compact.pt` preserve the 48,722-parameter compact
+  variant. Balanced state-order transfer reduces parameters by another 14.6%
+  over rank-16/state-23, with 13.2% faster training steps and 12.2% faster
+  inference while remaining below every practical task-regression gate.
 - The promoted AxoMamba training objective uses the raw soma-voltage trace
   scored by AxoBench; the legacy `targets[..., 1]` channel clips action
   potentials above -55 mV and is retained only for controlled comparisons.
