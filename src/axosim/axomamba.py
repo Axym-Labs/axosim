@@ -11,6 +11,7 @@ from axosim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
 AXOMAMBA_MODEL_KIND = "axomamba"
 AXOMAMBA_DEFAULT_CONFIG = "configs/axomamba.json"
 AXOMAMBA_STRUCTURED_COMPACT_CONFIG = "configs/axomamba-structured-compact.json"
+AXOMAMBA_REGRESSION_CONFIG = "configs/axomamba-regression.json"
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,17 @@ def structured_compact_axomamba_config(**overrides: Any) -> AxoMambaConfig:
     }
     values.update(overrides)
     return default_axomamba_config(**values)
+
+
+def regression_axomamba_config(**overrides: Any) -> AxoMambaConfig:
+    """Return the 300k-gated voltage-regression AxoMamba architecture."""
+
+    values: dict[str, Any] = {
+        "local_tcn_pointwise_rank": 4,
+        "local_tcn_output_rank": 4,
+    }
+    values.update(overrides)
+    return structured_compact_axomamba_config(**values)
 
 
 def load_axomamba_config(path: str | Path | None = None, **overrides: Any) -> AxoMambaConfig:

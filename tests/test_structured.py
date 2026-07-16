@@ -4,6 +4,7 @@ from torch import nn
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
 from axosim.structured import (
     FactorizedLinear,
+    FactorizedPointwiseConv1d,
     average_repeated_module_state,
     balanced_proxy_compress_mamba_state,
     initialize_factorized_linears_from_state,
@@ -20,6 +21,19 @@ def test_factorized_linear_reconstructs_full_rank_dense_map():
         source_weight_name="dense.weight",
     )
     x = torch.randn(3, 4)
+
+    torch.testing.assert_close(factorized(x), dense(x), atol=1e-5, rtol=1e-5)
+
+
+def test_factorized_pointwise_conv_reconstructs_full_rank_dense_map():
+    torch.manual_seed(93)
+    dense = nn.Conv1d(4, 6, kernel_size=1, bias=True)
+    factorized = FactorizedPointwiseConv1d.from_conv(
+        dense,
+        rank=4,
+        source_weight_name="pointwise.weight",
+    )
+    x = torch.randn(3, 4, 7)
 
     torch.testing.assert_close(factorized(x), dense(x), atol=1e-5, rtol=1e-5)
 
@@ -106,6 +120,61 @@ def test_full_rank_tcn_adapters_reconstruct_untied_pointwise_maps():
             reconstructed_bias,
             source_state[f"local_tcn_blocks.{index}.pointwise.bias"],
         )
+
+
+def test_axomamba_factorized_tcn_width_maps_transfer_and_train():
+    common = dict(
+        num_input=8,
+        num_output=2,
+        num_branch=2,
+        num_synapse_per_branch=4,
+        model_dim=8,
+        num_layers=1,
+        state_dim=2,
+        conv_kernel=2,
+        expansion=2,
+        local_tcn_scale=1.0,
+        share_local_tcn_pointwise=True,
+        local_tcn_pointwise_adapter_rank=2,
+    )
+    torch.manual_seed(94)
+    dense = AxoPyTorchMamba(AxoMambaConfig(**common))
+    torch.manual_seed(94)
+    factorized = AxoPyTorchMamba(
+        AxoMambaConfig(
+            **common,
+            local_tcn_pointwise_rank=3,
+            local_tcn_output_rank=3,
+        )
+    )
+    dense_state = dense.state_dict()
+    candidate_state = factorized.state_dict()
+    candidate_state.update(
+        {
+            name: value
+            for name, value in dense_state.items()
+            if name in candidate_state and candidate_state[name].shape == value.shape
+        }
+    )
+    factorized.load_state_dict(candidate_state)
+
+    initialized = initialize_factorized_linears_from_state(
+        factorized,
+        dense_state,
+    )
+
+    assert initialized == [
+        "local_tcn_blocks.0.pointwise.weight",
+        "local_tcn_out.weight",
+    ]
+    assert factorized.local_tcn_blocks[0].pointwise is factorized.local_tcn_blocks[2].pointwise
+    assert sum(parameter.numel() for parameter in factorized.parameters()) < sum(
+        parameter.numel() for parameter in dense.parameters()
+    )
+    x = torch.randn(2, 9, 8)
+    factorized(x).square().mean().backward()
+    assert factorized.local_tcn_out.left.grad is not None
+    assert factorized.local_tcn_blocks[0].pointwise.left.weight.grad is not None
 
 
 def test_axomamba_factorized_mamba_maps_reduce_parameters_and_train():

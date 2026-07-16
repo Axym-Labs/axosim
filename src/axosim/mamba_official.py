@@ -58,6 +58,8 @@ class BranchOfficialMambaConfig:
     local_tcn_position: str = "parallel"
     share_local_tcn_pointwise: bool = False
     local_tcn_pointwise_adapter_rank: int = 0
+    local_tcn_pointwise_rank: int = 0
+    local_tcn_output_rank: int = 0
     mamba_projection_rank: int = 0
     soma_tcn_scale: float | None = None
     soma_tcn_coupling_source: str = "corrected"
@@ -195,6 +197,18 @@ class BranchOfficialMamba(nn.Module):
             raise ValueError("local TCN pointwise adapter rank exceeds model dimension")
         if config.local_tcn_pointwise_adapter_rank and not config.share_local_tcn_pointwise:
             raise ValueError("local TCN pointwise adapters require shared pointwise maps")
+        if config.local_tcn_pointwise_rank < 0:
+            raise ValueError("local TCN pointwise rank must be non-negative")
+        if config.local_tcn_pointwise_rank > config.model_dim:
+            raise ValueError("local TCN pointwise rank exceeds model dimension")
+        if config.local_tcn_pointwise_rank and not config.share_local_tcn_pointwise:
+            raise ValueError("factorized local TCN pointwise map requires sharing")
+        if config.local_tcn_output_rank < 0:
+            raise ValueError("local TCN output rank must be non-negative")
+        if config.local_tcn_output_rank > config.model_dim:
+            raise ValueError("local TCN output rank exceeds model dimension")
+        if (config.local_tcn_pointwise_rank or config.local_tcn_output_rank) and not local_tcn_enabled:
+            raise ValueError("factorized local TCN maps require local TCN")
         if config.branch_nonlinearity not in {"none", "tanh"}:
             raise ValueError("branch_nonlinearity must be 'none' or 'tanh'")
         if config.branch_nonlinearity_scale_init <= 0:
@@ -342,12 +356,34 @@ class BranchOfficialMamba(nn.Module):
             shared_pointwise = self.local_tcn_blocks[0].pointwise
             for block in self.local_tcn_blocks[1:]:
                 block.pointwise = shared_pointwise
-        self.local_tcn_out = (
-            nn.Linear(config.model_dim, config.model_dim, bias=False)
-            if local_tcn_enabled
-            else None
-        )
-        if self.local_tcn_out is not None:
+        if config.local_tcn_pointwise_rank:
+            from axosim.structured import FactorizedPointwiseConv1d
+
+            dense_pointwise = self.local_tcn_blocks[0].pointwise
+            if not isinstance(dense_pointwise, nn.Conv1d):
+                raise ValueError("local TCN pointwise factorization requires a dense map")
+            shared_pointwise = FactorizedPointwiseConv1d.from_conv(
+                dense_pointwise,
+                rank=config.local_tcn_pointwise_rank,
+                source_weight_name="local_tcn_blocks.0.pointwise.weight",
+            )
+            for block in self.local_tcn_blocks:
+                block.pointwise = shared_pointwise
+        if not local_tcn_enabled:
+            self.local_tcn_out = None
+        elif config.local_tcn_output_rank:
+            from axosim.structured import FactorizedLinear
+
+            self.local_tcn_out = FactorizedLinear(
+                config.model_dim,
+                config.model_dim,
+                config.local_tcn_output_rank,
+                bias=False,
+                source_weight_name="local_tcn_out.weight",
+            )
+            nn.init.zeros_(self.local_tcn_out.left)
+        else:
+            self.local_tcn_out = nn.Linear(config.model_dim, config.model_dim, bias=False)
             nn.init.zeros_(self.local_tcn_out.weight)
         self.integrative_post = (
             _ShortLongTemporalMixer(

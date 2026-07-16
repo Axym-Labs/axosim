@@ -158,6 +158,86 @@ class FactorizedLinear(nn.Module):
         self.right.copy_((scale.unsqueeze(1) * vh[: self.rank]).to(dtype=self.right.dtype))
 
 
+class FactorizedPointwiseConv1d(nn.Module):
+    """A 1x1 convolution represented by two trainable width factors."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        rank: int,
+        *,
+        bias: bool,
+        source_weight_name: str,
+    ) -> None:
+        super().__init__()
+        if not 0 < rank <= min(in_channels, out_channels):
+            raise ValueError("factorization rank must fit the convolution channels")
+        self.in_channels = int(in_channels)
+        self.out_channels = int(out_channels)
+        self.rank = int(rank)
+        self.source_weight_name = source_weight_name
+        self.right = nn.Conv1d(in_channels, rank, kernel_size=1, bias=False)
+        self.left = nn.Conv1d(rank, out_channels, kernel_size=1, bias=bias)
+
+    @property
+    def weight(self) -> torch.Tensor:
+        matrix = self.left.weight.flatten(1) @ self.right.weight.flatten(1)
+        return matrix.unsqueeze(-1)
+
+    @property
+    def bias(self) -> torch.Tensor | None:
+        return self.left.bias
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.left(self.right(x))
+
+    @classmethod
+    def from_conv(
+        cls,
+        convolution: nn.Conv1d,
+        *,
+        rank: int,
+        source_weight_name: str,
+    ) -> FactorizedPointwiseConv1d:
+        if convolution.kernel_size != (1,) or convolution.groups != 1:
+            raise ValueError("pointwise factorization requires an ungrouped 1x1 convolution")
+        factorized = cls(
+            convolution.in_channels,
+            convolution.out_channels,
+            rank,
+            bias=convolution.bias is not None,
+            source_weight_name=source_weight_name,
+        ).to(device=convolution.weight.device, dtype=convolution.weight.dtype)
+        factorized.set_from_weight(convolution.weight.detach())
+        if convolution.bias is not None:
+            assert factorized.bias is not None
+            factorized.bias.data.copy_(convolution.bias.detach())
+        return factorized
+
+    @torch.no_grad()
+    def set_from_weight(self, weight: torch.Tensor) -> None:
+        expected = (self.out_channels, self.in_channels, 1)
+        if tuple(weight.shape) != expected:
+            raise ValueError("dense pointwise source weight has the wrong shape")
+        source = weight.flatten(1).to(
+            device=self.left.weight.device,
+            dtype=torch.float32,
+        )
+        u, singular, vh = torch.linalg.svd(source, full_matrices=False)
+        scale = singular[: self.rank].clamp_min(0.0).sqrt()
+        self.left.weight.copy_(
+            (u[:, : self.rank] * scale)
+            .to(dtype=self.left.weight.dtype)
+            .unsqueeze(-1)
+        )
+        self.right.weight.copy_(
+            (scale.unsqueeze(1) * vh[: self.rank])
+            .to(dtype=self.right.weight.dtype)
+            .unsqueeze(-1)
+        )
+
+
 def initialize_factorized_linears_from_state(
     model: nn.Module,
     dense_state: Mapping[str, torch.Tensor],
@@ -167,7 +247,7 @@ def initialize_factorized_linears_from_state(
     """Initialize every factorized map from its named dense checkpoint tensor."""
     initialized = []
     for module in model.modules():
-        if not isinstance(module, FactorizedLinear):
+        if not isinstance(module, (FactorizedLinear, FactorizedPointwiseConv1d)):
             continue
         if module.source_weight_name not in dense_state:
             if compatible_only:
@@ -176,7 +256,12 @@ def initialize_factorized_linears_from_state(
                 f"dense checkpoint has no {module.source_weight_name!r} for factorization"
             )
         source = dense_state[module.source_weight_name]
-        if tuple(source.shape) != (module.out_features, module.in_features):
+        expected_shape = (
+            (module.out_features, module.in_features)
+            if isinstance(module, FactorizedLinear)
+            else (module.out_channels, module.in_channels, 1)
+        )
+        if tuple(source.shape) != expected_shape:
             if compatible_only:
                 continue
             raise ValueError(
