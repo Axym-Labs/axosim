@@ -96,9 +96,10 @@ def structured_compact_axomamba_config(**overrides: Any) -> AxoMambaConfig:
 
 
 def regression_axomamba_config(**overrides: Any) -> AxoMambaConfig:
-    """Return the 300k-gated voltage-regression AxoMamba architecture."""
+    """Return the 300k-gated voltage-regression population lead."""
 
     values: dict[str, Any] = {
+        "share_morphology_synapse_gain": True,
         "local_tcn_pointwise_rank": 4,
         "local_tcn_output_rank": 4,
     }
@@ -107,11 +108,13 @@ def regression_axomamba_config(**overrides: Any) -> AxoMambaConfig:
 
 
 def spike_axomamba_config(**overrides: Any) -> AxoMambaConfig:
-    """Return the 300k-gated F1 deployment AxoMamba architecture."""
+    """Return the 300k-gated F1 population lead."""
 
     values: dict[str, Any] = {
         "mamba_projection_rank": 16,
         "state_dim": 2,
+        "share_local_tcn_pointwise": True,
+        "local_tcn_pointwise_adapter_rank": 4,
     }
     values.update(overrides)
     return default_axomamba_config(**values)

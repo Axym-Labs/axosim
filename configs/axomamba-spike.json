@@ -36,6 +36,8 @@
   "local_tcn_scale": 1.0,
   "local_tcn_mode": "undilated",
   "local_tcn_position": "post",
+  "share_local_tcn_pointwise": true,
+  "local_tcn_pointwise_adapter_rank": 4,
   "morphology_ids": [
     "specimen_479770916",
     "specimen_487664663",

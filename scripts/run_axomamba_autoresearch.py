@@ -51,6 +51,7 @@ from axosim.structured import (  # noqa: E402
     balanced_proxy_compress_mamba_state,
     initialize_factorized_linears_from_state,
     initialize_shared_tcn_adapters_from_pretrained_state,
+    share_morphology_synapse_gain_state,
 )
 
 
@@ -418,6 +419,12 @@ def _build_candidates(
             candidate_reference_state = average_repeated_module_state(
                 candidate_reference_state,
                 prefix_groups=shared_module_prefix_groups,
+            )
+        if bool(config.get("share_morphology_synapse_gain", False)) and not bool(
+            base_config.get("share_morphology_synapse_gain", False)
+        ):
+            candidate_reference_state = share_morphology_synapse_gain_state(
+                candidate_reference_state
             )
         candidate_state = model.state_dict()
         if initialization == "pretrained":

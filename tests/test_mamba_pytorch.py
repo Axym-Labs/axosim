@@ -153,7 +153,7 @@ def test_axomamba_structured_compact_config_preserves_dual_stack():
     assert config.synapse_gain_scale is None
 
 
-def test_axomamba_regression_config_uses_long_gated_tcn_factorization():
+def test_axomamba_regression_config_uses_long_gated_population_structure():
     config = regression_axomamba_config()
 
     assert config.state_dim == 2
@@ -162,15 +162,16 @@ def test_axomamba_regression_config_uses_long_gated_tcn_factorization():
     assert config.local_tcn_pointwise_adapter_rank == 2
     assert config.local_tcn_pointwise_rank == 4
     assert config.local_tcn_output_rank == 4
+    assert config.share_morphology_synapse_gain is True
 
 
-def test_axomamba_spike_config_uses_long_gated_state2_structure():
+def test_axomamba_spike_config_uses_long_gated_population_structure():
     config = spike_axomamba_config()
 
     assert config.state_dim == 2
     assert config.mamba_projection_rank == 16
-    assert config.share_local_tcn_pointwise is False
-    assert config.local_tcn_pointwise_adapter_rank == 0
+    assert config.share_local_tcn_pointwise is True
+    assert config.local_tcn_pointwise_adapter_rank == 4
     assert config.local_tcn_pointwise_rank == 0
     assert config.local_tcn_output_rank == 0
 
@@ -451,6 +452,87 @@ def test_morphology_synapse_gain_configuration_is_strict():
                 morphology_synapse_gain_scale=-1.0,
             )
         )
+    with pytest.raises(ValueError, match="share_morphology_synapse_gain"):
+        AxoPyTorchMamba(
+            AxoMambaConfig(
+                **common,
+                morphology_ids=["morph-a", "morph-b"],
+                morphology_embedding_scale=0.1,
+                share_morphology_synapse_gain=True,
+            )
+        )
+
+
+def test_shared_morphology_synapse_gain_matches_repeated_gain_dense_and_sparse():
+    common = dict(
+        num_input=8,
+        num_output=2,
+        num_branch=4,
+        num_synapse_per_branch=2,
+        model_dim=6,
+        num_layers=1,
+        state_dim=2,
+        conv_kernel=2,
+        expansion=2,
+        morphology_ids=["morph-a", "morph-b"],
+        morphology_embedding_scale=0.1,
+        morphology_synapse_gain_scale=1.0,
+    )
+    torch.manual_seed(105)
+    repeated = AxoPyTorchMamba(AxoMambaConfig(**common))
+    torch.manual_seed(105)
+    shared = AxoPyTorchMamba(
+        AxoMambaConfig(**common, share_morphology_synapse_gain=True)
+    )
+    shared_state = shared.state_dict()
+    shared_state.update(
+        {
+            name: value
+            for name, value in repeated.state_dict().items()
+            if name in shared_state and shared_state[name].shape == value.shape
+        }
+    )
+    shared.load_state_dict(shared_state)
+    gain = torch.randn(1, 4, 2) * 0.1
+    with torch.no_grad():
+        assert repeated.morphology_synapse_log_gain is not None
+        assert shared.morphology_synapse_log_gain is not None
+        repeated.morphology_synapse_log_gain.copy_(gain.expand(2, -1, -1))
+        shared.morphology_synapse_log_gain.copy_(gain)
+
+    assert repeated.morphology_synapse_log_gain.shape == (2, 4, 2)
+    assert shared.morphology_synapse_log_gain.shape == (1, 4, 2)
+    assert sum(parameter.numel() for parameter in repeated.parameters()) - sum(
+        parameter.numel() for parameter in shared.parameters()
+    ) == 8
+
+    morphology_indices = torch.tensor([0, 1])
+    inputs = torch.randn(2, 7, 8)
+    torch.testing.assert_close(
+        shared(inputs, morphology_indices=morphology_indices),
+        repeated(inputs, morphology_indices=morphology_indices),
+    )
+
+    event_indices = torch.tensor([[0, 3, -1], [2, 7, 5]])
+    event_values = torch.tensor([[1.0, -0.5, 0.0], [0.25, 0.75, -1.0]])
+    shared.eval()
+    repeated.eval()
+    shared_state = shared.allocate_streaming_state(2, device="cpu", dtype=torch.float32)
+    repeated_state = repeated.allocate_streaming_state(2, device="cpu", dtype=torch.float32)
+    torch.testing.assert_close(
+        shared.streaming_step_events(
+            event_indices,
+            event_values,
+            shared_state,
+            morphology_indices=morphology_indices,
+        ),
+        repeated.streaming_step_events(
+            event_indices,
+            event_values,
+            repeated_state,
+            morphology_indices=morphology_indices,
+        ),
+    )
 
 
 def test_morphology_coordinate_synapse_operator_is_exactly_controlled():
@@ -1236,3 +1318,34 @@ def test_sparse_event_streaming_matches_dense_input_and_state():
         strict=True,
     ):
         torch.testing.assert_close(sparse_history, dense_history)
+
+
+def test_sparse_event_streaming_bypasses_dense_input_routing(monkeypatch):
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=8,
+            num_output=2,
+            num_branch=4,
+            num_synapse_per_branch=2,
+            model_dim=6,
+            num_layers=1,
+            state_dim=2,
+            conv_kernel=2,
+            expansion=2,
+        )
+    ).eval()
+    state = model.allocate_streaming_state(3)
+
+    def fail_dense_routing(*_args, **_kwargs):
+        raise AssertionError("sparse events must not reconstruct dense routed inputs")
+
+    monkeypatch.setattr(model, "_route_input_to_synapses", fail_dense_routing)
+
+    with torch.no_grad():
+        output = model.streaming_step_events(
+            torch.tensor([[0, 3], [2, -1], [7, 7]]),
+            torch.tensor([[1.0, -1.0], [1.0, 0.0], [0.5, 0.5]]),
+            state,
+        )
+
+    assert output.shape == (3, 1, 2)

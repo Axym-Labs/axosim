@@ -8,6 +8,7 @@ from axosim.structured import (
     average_repeated_module_state,
     balanced_proxy_compress_mamba_state,
     initialize_factorized_linears_from_state,
+    share_morphology_synapse_gain_state,
     initialize_shared_tcn_adapters_from_pretrained_state,
     initialize_shared_tcn_adapters_from_state,
 )
@@ -58,6 +59,23 @@ def test_repeated_module_transfer_averages_every_shared_tensor():
     torch.testing.assert_close(averaged["blocks.0.bias"], torch.tensor([4.0]))
     torch.testing.assert_close(averaged["blocks.1.bias"], torch.tensor([4.0]))
     torch.testing.assert_close(averaged["readout.weight"], state["readout.weight"])
+
+
+def test_morphology_gain_transfer_averages_log_gains_across_morphologies():
+    gains = torch.arange(24, dtype=torch.float32).view(3, 4, 2)
+    state = {
+        "morphology_synapse_log_gain": gains,
+        "readout.weight": torch.tensor([11.0]),
+    }
+
+    shared = share_morphology_synapse_gain_state(state)
+
+    assert shared["morphology_synapse_log_gain"].shape == (1, 4, 2)
+    torch.testing.assert_close(
+        shared["morphology_synapse_log_gain"],
+        gains.mean(dim=0, keepdim=True),
+    )
+    torch.testing.assert_close(shared["readout.weight"], state["readout.weight"])
 
 
 def test_full_rank_tcn_adapters_reconstruct_untied_pointwise_maps():

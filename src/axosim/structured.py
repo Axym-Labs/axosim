@@ -42,6 +42,21 @@ def average_repeated_module_state(
     return averaged
 
 
+def share_morphology_synapse_gain_state(
+    state: Mapping[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Initialize one shared log-gain bank with the morphology-wise mean."""
+    name = "morphology_synapse_log_gain"
+    if name not in state:
+        raise ValueError(f"state contains no {name!r}")
+    gains = state[name]
+    if gains.ndim != 3 or gains.shape[0] < 2:
+        raise ValueError("morphology synapse gains must contain multiple banks")
+    shared = dict(state)
+    shared[name] = gains.mean(dim=0, keepdim=True)
+    return shared
+
+
 @torch.no_grad()
 def initialize_shared_tcn_adapters_from_state(
     model: nn.Module,

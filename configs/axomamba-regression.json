@@ -16,6 +16,7 @@
   "residual_scale_init": 0.1,
   "synapse_gain_scale": null,
   "morphology_synapse_gain_scale": 1.0,
+  "share_morphology_synapse_gain": true,
   "morphology_synapse_feature_dim": 9,
   "morphology_synapse_feature_hidden": 16,
   "morphology_synapse_feature_scale": 1.0,
