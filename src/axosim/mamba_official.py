@@ -56,6 +56,8 @@ class BranchOfficialMambaConfig:
     local_tcn_scale: float | None = None
     local_tcn_mode: str = "dilated"
     local_tcn_position: str = "parallel"
+    share_local_tcn_pointwise: bool = False
+    local_tcn_pointwise_adapter_rank: int = 0
     mamba_projection_rank: int = 0
     soma_tcn_scale: float | None = None
     soma_tcn_coupling_source: str = "corrected"
@@ -185,6 +187,14 @@ class BranchOfficialMamba(nn.Module):
             raise ValueError("soma_tcn_coupling_source must be 'corrected' or 'base'")
         if local_tcn_enabled and config.local_tcn_position == "interlayer" and config.num_layers < 2:
             raise ValueError("interlayer local TCN requires at least two Mamba layers")
+        if config.share_local_tcn_pointwise and not local_tcn_enabled:
+            raise ValueError("share_local_tcn_pointwise requires local TCN")
+        if config.local_tcn_pointwise_adapter_rank < 0:
+            raise ValueError("local_tcn_pointwise_adapter_rank must be non-negative")
+        if config.local_tcn_pointwise_adapter_rank > config.model_dim:
+            raise ValueError("local TCN pointwise adapter rank exceeds model dimension")
+        if config.local_tcn_pointwise_adapter_rank and not config.share_local_tcn_pointwise:
+            raise ValueError("local TCN pointwise adapters require shared pointwise maps")
         if config.branch_nonlinearity not in {"none", "tanh"}:
             raise ValueError("branch_nonlinearity must be 'none' or 'tanh'")
         if config.branch_nonlinearity_scale_init <= 0:
@@ -318,12 +328,20 @@ class BranchOfficialMamba(nn.Module):
         local_dilations = (1, 4, 16) if config.local_tcn_mode == "dilated" else (1, 1, 1)
         self.local_tcn_blocks = nn.ModuleList(
             [
-                _CausalDepthwiseTCNBlock(config.model_dim, dilation=dilation)
+                _CausalDepthwiseTCNBlock(
+                    config.model_dim,
+                    dilation=dilation,
+                    pointwise_adapter_rank=config.local_tcn_pointwise_adapter_rank,
+                )
                 for dilation in local_dilations
             ]
             if local_tcn_enabled
             else []
         )
+        if config.share_local_tcn_pointwise and len(self.local_tcn_blocks) > 1:
+            shared_pointwise = self.local_tcn_blocks[0].pointwise
+            for block in self.local_tcn_blocks[1:]:
+                block.pointwise = shared_pointwise
         self.local_tcn_out = (
             nn.Linear(config.model_dim, config.model_dim, bias=False)
             if local_tcn_enabled
@@ -1003,7 +1021,13 @@ class _ShortLongTemporalMixer(nn.Module):
 
 
 class _CausalDepthwiseTCNBlock(nn.Module):
-    def __init__(self, channels: int, *, dilation: int) -> None:
+    def __init__(
+        self,
+        channels: int,
+        *,
+        dilation: int,
+        pointwise_adapter_rank: int = 0,
+    ) -> None:
         super().__init__()
         self.right_padding = 2 * dilation
         self.depthwise = nn.Conv1d(
@@ -1015,10 +1039,30 @@ class _CausalDepthwiseTCNBlock(nn.Module):
             groups=channels,
         )
         self.pointwise = nn.Conv1d(channels, channels, kernel_size=1)
+        self.pointwise_adapter_in = (
+            nn.Conv1d(channels, pointwise_adapter_rank, kernel_size=1, bias=False)
+            if pointwise_adapter_rank
+            else None
+        )
+        self.pointwise_adapter_out = (
+            nn.Conv1d(pointwise_adapter_rank, channels, kernel_size=1)
+            if pointwise_adapter_rank
+            else None
+        )
+        if self.pointwise_adapter_out is not None:
+            nn.init.zeros_(self.pointwise_adapter_out.weight)
+            nn.init.zeros_(self.pointwise_adapter_out.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         local = self.depthwise(x.transpose(1, 2))[..., : x.shape[1]]
-        local = self.pointwise(F.silu(local)).transpose(1, 2)
+        activated = F.silu(local)
+        local = self.pointwise(activated)
+        if self.pointwise_adapter_in is not None:
+            assert self.pointwise_adapter_out is not None
+            local = local + self.pointwise_adapter_out(
+                self.pointwise_adapter_in(activated)
+            )
+        local = local.transpose(1, 2)
         return x + local
 
 

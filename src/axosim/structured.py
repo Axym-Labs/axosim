@@ -7,6 +7,91 @@ from torch import nn
 import torch.nn.functional as F
 
 
+def average_repeated_module_state(
+    state: Mapping[str, torch.Tensor],
+    *,
+    prefix_groups: list[list[str]],
+) -> dict[str, torch.Tensor]:
+    """Initialize tied modules with the mean of their untied source tensors."""
+    averaged = dict(state)
+    for prefixes in prefix_groups:
+        if len(prefixes) < 2:
+            raise ValueError("a repeated-module group requires at least two prefixes")
+        suffixes = [
+            name[len(prefixes[0]) :]
+            for name in state
+            if name == prefixes[0] or name.startswith(f"{prefixes[0]}.")
+        ]
+        if not suffixes:
+            raise ValueError(f"state contains no tensors below {prefixes[0]!r}")
+        for suffix in suffixes:
+            names = [f"{prefix}{suffix}" for prefix in prefixes]
+            if any(name not in state for name in names):
+                raise ValueError(f"repeated modules do not share tensor suffix {suffix!r}")
+            values = [state[name] for name in names]
+            if len({tuple(value.shape) for value in values}) != 1:
+                raise ValueError(f"repeated tensor shapes differ for suffix {suffix!r}")
+            if values[0].is_floating_point() or values[0].is_complex():
+                mean = torch.stack(values).mean(dim=0)
+            else:
+                if any(not torch.equal(values[0], value) for value in values[1:]):
+                    raise ValueError(f"non-floating repeated tensors differ for {suffix!r}")
+                mean = values[0]
+            for name in names:
+                averaged[name] = mean.clone()
+    return averaged
+
+
+@torch.no_grad()
+def initialize_shared_tcn_adapters_from_state(
+    model: nn.Module,
+    untied_state: Mapping[str, torch.Tensor],
+) -> list[str]:
+    """Factor each untied TCN pointwise residual around the shared base map."""
+    initialized = []
+    for index, block in enumerate(getattr(model, "local_tcn_blocks", ())):
+        adapter_in = getattr(block, "pointwise_adapter_in", None)
+        adapter_out = getattr(block, "pointwise_adapter_out", None)
+        if adapter_in is None and adapter_out is None:
+            continue
+        if not isinstance(adapter_in, nn.Conv1d) or not isinstance(adapter_out, nn.Conv1d):
+            raise ValueError("local TCN pointwise adapter modules are incomplete")
+        prefix = f"local_tcn_blocks.{index}.pointwise"
+        weight_name = f"{prefix}.weight"
+        bias_name = f"{prefix}.bias"
+        if weight_name not in untied_state or bias_name not in untied_state:
+            raise ValueError(f"untied state is missing {prefix!r}")
+        source_weight = untied_state[weight_name].flatten(1).float()
+        base_weight = block.pointwise.weight.detach().flatten(1).float()
+        residual = source_weight - base_weight
+        u, singular, vh = torch.linalg.svd(residual, full_matrices=False)
+        rank = adapter_in.out_channels
+        scale = singular[:rank].clamp_min(0.0).sqrt()
+        adapter_out.weight.copy_(
+            (u[:, :rank] * scale).to(
+                device=adapter_out.weight.device,
+                dtype=adapter_out.weight.dtype,
+            ).unsqueeze(-1)
+        )
+        adapter_in.weight.copy_(
+            (scale.unsqueeze(1) * vh[:rank]).to(
+                device=adapter_in.weight.device,
+                dtype=adapter_in.weight.dtype,
+            ).unsqueeze(-1)
+        )
+        assert adapter_out.bias is not None and block.pointwise.bias is not None
+        adapter_out.bias.copy_(
+            (
+                untied_state[bias_name].float()
+                - block.pointwise.bias.detach().float()
+            ).to(device=adapter_out.bias.device, dtype=adapter_out.bias.dtype)
+        )
+        initialized.append(prefix)
+    if not initialized:
+        raise ValueError("model contains no local TCN pointwise adapters")
+    return initialized
+
+
 class FactorizedLinear(nn.Module):
     """Linear map represented by a trainable truncated matrix factorization."""
 

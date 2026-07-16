@@ -47,8 +47,10 @@ from axosim.axomamba import AxoMamba, AxoMambaConfig  # noqa: E402
 from axosim.data import ShardedNeuronIODataset  # noqa: E402
 from axosim.checkpoint import load_checkpoint  # noqa: E402
 from axosim.structured import (  # noqa: E402
+    average_repeated_module_state,
     balanced_proxy_compress_mamba_state,
     initialize_factorized_linears_from_state,
+    initialize_shared_tcn_adapters_from_state,
 )
 
 
@@ -247,6 +249,12 @@ def run_iteration(
             training_results[record.candidate_id]["retained_state_indices"] = getattr(
                 record, "retained_state_indices", {}
             )
+            training_results[record.candidate_id]["shared_module_prefix_groups"] = getattr(
+                record, "shared_module_prefix_groups", []
+            )
+            training_results[record.candidate_id]["initialized_tcn_adapters"] = getattr(
+                record, "initialized_tcn_adapters", []
+            )
             training_results[record.candidate_id]["distillation_teacher"] = (
                 distillation_teacher_record
             )
@@ -389,6 +397,17 @@ def _build_candidates(
                         target_state_dim=int(config["state_dim"]),
                     )
                 )
+        untied_candidate_reference_state = candidate_reference_state
+        shared_module_prefix_groups: list[list[str]] = []
+        if bool(config.get("share_local_tcn_pointwise", False)):
+            shared_module_prefix_groups.append(
+                [f"local_tcn_blocks.{index}.pointwise" for index in range(3)]
+            )
+        if shared_module_prefix_groups:
+            candidate_reference_state = average_repeated_module_state(
+                candidate_reference_state,
+                prefix_groups=shared_module_prefix_groups,
+            )
         candidate_state = model.state_dict()
         if initialization == "pretrained":
             shared = {
@@ -401,11 +420,23 @@ def _build_candidates(
             factorized_source_weights = initialize_factorized_linears_from_state(
                 model,
                 candidate_reference_state,
-                compatible_only=state_transfer == "random",
+                compatible_only=(
+                    state_transfer == "random"
+                    or int(base_config.get("mamba_projection_rank", 0)) > 0
+                ),
+            )
+            initialized_tcn_adapters = (
+                initialize_shared_tcn_adapters_from_state(
+                    model,
+                    untied_candidate_reference_state,
+                )
+                if int(config.get("local_tcn_pointwise_adapter_rank", 0)) > 0
+                else []
             )
         else:
             shared = {}
             factorized_source_weights = []
+            initialized_tcn_adapters = []
         buffer_artifact = specification.get("buffer_artifact")
         buffer_artifacts = specification.get("buffer_artifacts")
         if buffer_artifact is not None and buffer_artifacts is not None:
@@ -488,6 +519,8 @@ def _build_candidates(
         setattr(record, "factorized_source_weights", factorized_source_weights)
         setattr(record, "state_transfer", state_transfer)
         setattr(record, "retained_state_indices", retained_state_indices)
+        setattr(record, "shared_module_prefix_groups", shared_module_prefix_groups)
+        setattr(record, "initialized_tcn_adapters", initialized_tcn_adapters)
         records.append(record)
     return records
 

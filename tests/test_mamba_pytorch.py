@@ -505,6 +505,39 @@ def test_morphology_coordinate_synapse_configuration_is_strict():
         )
 
 
+def test_axomamba_structural_sharing_reuses_modules_after_checkpoint_load(tmp_path):
+    common = dict(
+        num_input=8,
+        num_output=2,
+        num_branch=2,
+        num_synapse_per_branch=4,
+        model_dim=8,
+        num_layers=2,
+        state_dim=2,
+        conv_kernel=2,
+        expansion=2,
+        local_tcn_scale=1.0,
+    )
+    control = AxoPyTorchMamba(AxoMambaConfig(**common))
+    shared = AxoPyTorchMamba(
+        AxoMambaConfig(
+            **common,
+            share_local_tcn_pointwise=True,
+        )
+    )
+
+    assert shared.local_tcn_blocks[0].pointwise is shared.local_tcn_blocks[1].pointwise
+    assert shared.local_tcn_blocks[1].pointwise is shared.local_tcn_blocks[2].pointwise
+    assert sum(parameter.numel() for parameter in shared.parameters()) < sum(
+        parameter.numel() for parameter in control.parameters()
+    )
+
+    path = tmp_path / "shared.pt"
+    save_checkpoint(shared, path)
+    loaded, _ = load_checkpoint(path)
+    assert loaded.local_tcn_blocks[0].pointwise is loaded.local_tcn_blocks[2].pointwise
+
+
 def test_local_tcn_operator_is_controlled_multiscale_and_causal():
     common = dict(
         num_input=8,
