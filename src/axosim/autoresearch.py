@@ -28,6 +28,132 @@ from axosim.train import (
 STANDARD_PRESENTATIONS = 120_000
 LONG_PRESENTATIONS = 300_000
 AXOMAMBA_DEFAULT_BURN_IN = 50
+PRACTICAL_SERA_DELTA = 0.1
+PRACTICAL_F1_DELTA = 0.02
+PRACTICAL_EFFICIENCY_FRACTION = 0.10
+
+
+def practical_candidate_gate(
+    deltas: dict[str, float],
+    *,
+    assessments: dict[str, str],
+    baseline_training: dict[str, Any],
+    candidate_training: dict[str, Any],
+) -> dict[str, Any]:
+    """Require statistical and practical significance on at least one axis."""
+    sera_metrics = {
+        "voltage_sera_mv",
+        "dynamics_sera_mv_per_ms",
+        "response_sera_mv",
+    }
+    f1_metrics = {
+        "spike_f1_area_0_5ms",
+        "spike_f1_exact",
+        "spike_f1_5ms",
+    }
+    material_improvements = []
+    material_regressions = []
+    for metric, delta in deltas.items():
+        if metric in sera_metrics:
+            if (
+                delta <= -PRACTICAL_SERA_DELTA
+                and assessments.get(metric) == "improved"
+            ):
+                material_improvements.append(metric)
+            elif (
+                delta >= PRACTICAL_SERA_DELTA
+                and assessments.get(metric) == "regressed"
+            ):
+                material_regressions.append(metric)
+        elif metric in f1_metrics:
+            if (
+                delta >= PRACTICAL_F1_DELTA
+                and assessments.get(metric) == "improved"
+            ):
+                material_improvements.append(metric)
+            elif (
+                delta <= -PRACTICAL_F1_DELTA
+                and assessments.get(metric) == "regressed"
+            ):
+                material_regressions.append(metric)
+
+    efficiency_improvements: dict[str, float] = {}
+    baseline_parameters = float(baseline_training.get("parameter_count", 0))
+    candidate_parameters = float(candidate_training.get("parameter_count", 0))
+    if baseline_parameters > 0 and candidate_parameters > 0:
+        parameter_reduction = (baseline_parameters - candidate_parameters) / baseline_parameters
+        if parameter_reduction >= PRACTICAL_EFFICIENCY_FRACTION:
+            efficiency_improvements["parameter_reduction_fraction"] = parameter_reduction
+    baseline_rate = float(
+        baseline_training.get("training_step_presentations_per_second", 0)
+    )
+    candidate_rate = float(
+        candidate_training.get("training_step_presentations_per_second", 0)
+    )
+    if baseline_rate > 0 and candidate_rate > 0:
+        compute_speedup = candidate_rate / baseline_rate - 1.0
+        baseline_latency_p10 = float(
+            baseline_training.get("training_step_latency_p10_ms", 0)
+        )
+        candidate_latency_p90 = float(
+            candidate_training.get("training_step_latency_p90_ms", float("inf"))
+        )
+        robust_latency_separation = (
+            baseline_latency_p10 > 0
+            and candidate_latency_p90 < baseline_latency_p10
+        )
+        if (
+            compute_speedup >= PRACTICAL_EFFICIENCY_FRACTION
+            and robust_latency_separation
+        ):
+            efficiency_improvements["training_compute_speedup_fraction"] = compute_speedup
+    baseline_inference = float(
+        baseline_training.get("inference_presentations_per_second", 0)
+    )
+    candidate_inference = float(
+        candidate_training.get("inference_presentations_per_second", 0)
+    )
+    if baseline_inference > 0 and candidate_inference > 0:
+        inference_speedup = candidate_inference / baseline_inference - 1.0
+        baseline_latency_p10 = float(
+            baseline_training.get("inference_latency_p10_ms", 0)
+        )
+        candidate_latency_p90 = float(
+            candidate_training.get("inference_latency_p90_ms", float("inf"))
+        )
+        robust_latency_separation = (
+            baseline_latency_p10 > 0
+            and candidate_latency_p90 < baseline_latency_p10
+        )
+        if (
+            inference_speedup >= PRACTICAL_EFFICIENCY_FRACTION
+            and robust_latency_separation
+        ):
+            efficiency_improvements["inference_speedup_fraction"] = inference_speedup
+
+    automatically_rejected = not material_improvements and not efficiency_improvements
+    if automatically_rejected:
+        decision = "reject_tiny_metric_only"
+    elif material_improvements and material_regressions:
+        decision = "review_material_tradeoff"
+    elif material_improvements:
+        decision = "review_material_gain"
+    elif material_regressions:
+        decision = "review_efficiency_tradeoff"
+    else:
+        decision = "review_efficiency_gain"
+    return {
+        "decision": decision,
+        "automatically_rejected": automatically_rejected,
+        "thresholds": {
+            "sera_absolute": PRACTICAL_SERA_DELTA,
+            "f1_absolute": PRACTICAL_F1_DELTA,
+            "efficiency_fraction": PRACTICAL_EFFICIENCY_FRACTION,
+        },
+        "material_improvements": material_improvements,
+        "material_regressions": material_regressions,
+        "efficiency_improvements": efficiency_improvements,
+    }
 
 
 @dataclass(frozen=True)
@@ -89,6 +215,49 @@ def default_axomamba_training_objective() -> TrainingObjective:
     )
 
 
+def regression_axomamba_training_objective() -> TrainingObjective:
+    """Exploratory SERA-primary recipe; not a practical-gate model lead."""
+    return TrainingObjective(
+        spike_loss_weight=0.25,
+        soma_loss_weight=0.75,
+        direct_sera_loss_weight=0.03,
+        f1_curve_loss_weight=0.05,
+        near_spike_voltage_loss_weight=0.02,
+        near_spike_radius_steps=5,
+        raw_soma_target_mix=1.0,
+        sera_threshold_count=101,
+        f1_tolerances_steps=(0, 1, 2, 3, 4, 5, 5),
+    )
+
+
+def spike_axomamba_training_objective() -> TrainingObjective:
+    """Exploratory F1-primary recipe; not a practical-gate model lead."""
+    return TrainingObjective(
+        spike_loss_weight=0.25,
+        soma_loss_weight=0.1,
+        direct_sera_loss_weight=0.001,
+        f1_curve_loss_weight=0.05,
+        near_spike_voltage_loss_weight=0.0,
+        near_spike_radius_steps=5,
+        raw_soma_target_mix=1.0,
+        sera_threshold_count=101,
+        f1_tolerances_steps=(0, 1, 2, 3, 4, 5, 5),
+    )
+
+
+def axomamba_training_objective(task: str) -> TrainingObjective:
+    """Return the fixed dual, regression, or spike training recipe."""
+    factories = {
+        "dual": default_axomamba_training_objective,
+        "regression": regression_axomamba_training_objective,
+        "spike": spike_axomamba_training_objective,
+    }
+    try:
+        return factories[task]()
+    except KeyError as error:
+        raise ValueError(f"unsupported AxoMamba task: {task}") from error
+
+
 @dataclass
 class PanelCandidate:
     candidate_id: str
@@ -103,6 +272,7 @@ class PanelCandidate:
     grad_clip_norm: float = 0.0
     objective: TrainingObjective | None = None
     burn_in: int | None = None
+    output_distillation_weight: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.candidate_id:
@@ -111,6 +281,8 @@ class PanelCandidate:
             raise ValueError("candidate batch_size must be positive")
         if self.burn_in is not None and self.burn_in < 0:
             raise ValueError("candidate burn_in must be non-negative")
+        if self.output_distillation_weight < 0:
+            raise ValueError("output_distillation_weight must be non-negative")
 
 
 class FrozenWindowDataset:
@@ -394,6 +566,7 @@ def train_candidate_panel(
     pin_memory: bool = False,
     non_blocking: bool = True,
     warmup_cuda: bool = True,
+    distillation_teacher: nn.Module | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Train several candidates from one loader and one transferred super-batch."""
     candidates = list(candidates)
@@ -407,6 +580,15 @@ def train_candidate_panel(
     default_objective = objective or default_axomamba_training_objective()
     super_batch_size = max(candidate.batch_size for candidate in candidates)
     states: dict[str, dict[str, Any]] = {}
+    if distillation_teacher is None and any(
+        candidate.output_distillation_weight for candidate in candidates
+    ):
+        raise ValueError("output distillation requires a teacher")
+    teacher = (
+        distillation_teacher.to(device).eval()
+        if distillation_teacher is not None
+        else None
+    )
     for candidate in candidates:
         model = candidate.model.to(device).train()
         optimizer = _build_optimizer(
@@ -469,7 +651,8 @@ def train_candidate_panel(
     context_required = any(
         getattr(getattr(state["model"], "config", None), "morphology_ids", None)
         for state in states.values()
-    )
+    ) or bool(getattr(getattr(teacher, "config", None), "morphology_ids", None))
+    teacher_compute_timing: list[Any] = []
     for _, batch_indices, batch_arrays in _iter_shared_batches(
         dataset,
         super_batch_size,
@@ -497,6 +680,29 @@ def train_candidate_panel(
             else None
         )
         sample_ids = dataset.get_sample_ids(batch_indices) if context_required else None
+        teacher_prediction = None
+        if teacher is not None:
+            teacher_morphology = _morphology_index_tensor(
+                teacher, sample_ids, device=device
+            )
+            if device.startswith("cuda") and torch.cuda.is_available():
+                teacher_start = torch.cuda.Event(enable_timing=True)
+                teacher_stop = torch.cuda.Event(enable_timing=True)
+                teacher_start.record()
+            else:
+                teacher_start = time.perf_counter()
+                teacher_stop = None
+            with torch.no_grad():
+                teacher_prediction = _forward_model(
+                    teacher,
+                    x_super,
+                    teacher_morphology,
+                )
+            if teacher_stop is not None:
+                teacher_stop.record()
+                teacher_compute_timing.append((teacher_start, teacher_stop))
+            else:
+                teacher_compute_timing.append(time.perf_counter() - teacher_start)
         for state in states.values():
             candidate = state["candidate"]
             model = state["model"]
@@ -533,6 +739,16 @@ def train_candidate_panel(
                     raw_soma_mv=raw_soma,
                     base_soma_prediction=getattr(model, "base_soma_prediction", None),
                 )
+                if candidate.output_distillation_weight:
+                    assert teacher_prediction is not None
+                    distillation = output_distillation_loss(
+                        prediction,
+                        teacher_prediction[start : start + candidate.batch_size],
+                        burn_in=state["burn_in"],
+                    )
+                    loss = loss + candidate.output_distillation_weight * distillation
+                    components["output_distillation"] = distillation
+                    components["total"] = loss
                 loss.backward()
                 if candidate.grad_clip_norm:
                     nn.utils.clip_grad_norm_(model.parameters(), candidate.grad_clip_norm)
@@ -553,6 +769,12 @@ def train_candidate_panel(
                 state["compute_timing"].append(time.perf_counter() - timing_start)
     _synchronize(device)
     panel_seconds = time.perf_counter() - started_at
+    if device.startswith("cuda") and torch.cuda.is_available():
+        teacher_compute_seconds = sum(
+            start.elapsed_time(stop) for start, stop in teacher_compute_timing
+        ) / 1000.0
+    else:
+        teacher_compute_seconds = sum(teacher_compute_timing)
 
     results: dict[str, dict[str, Any]] = {}
     for candidate_id, state in states.items():
@@ -574,6 +796,7 @@ def train_candidate_panel(
             "weight_decay": candidate.weight_decay,
             "lr_schedule": candidate.lr_schedule,
             "burn_in": state["burn_in"],
+            "output_distillation_weight": candidate.output_distillation_weight,
             "seed": seed,
             "device": device,
             "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
@@ -586,6 +809,7 @@ def train_candidate_panel(
             "shared_super_batch_size": super_batch_size,
             "panel_wall_seconds": panel_seconds,
             "warmup_seconds": warmup_seconds,
+            "shared_teacher_compute_seconds": teacher_compute_seconds,
             "candidate_compute_seconds": compute_seconds,
             "candidate_compute_presentations_per_second": (
                 state["presentations"] / compute_seconds if compute_seconds > 0 else float("inf")
@@ -604,6 +828,145 @@ def train_candidate_panel(
         metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         results[candidate_id] = metrics
     return results
+
+
+def output_distillation_loss(
+    student: torch.Tensor,
+    teacher: torch.Tensor,
+    *,
+    burn_in: int,
+) -> torch.Tensor:
+    """Match a mature teacher's event probabilities and normalized voltage."""
+    if student.shape != teacher.shape or student.ndim != 3 or student.shape[-1] != 2:
+        raise ValueError("student and teacher outputs must have shape (batch, time, 2)")
+    student_trimmed = student[:, burn_in:]
+    teacher_trimmed = teacher[:, burn_in:].detach()
+    spike_loss = F.binary_cross_entropy_with_logits(
+        student_trimmed[..., 0],
+        teacher_trimmed[..., 0].sigmoid(),
+    )
+    soma_loss = F.mse_loss(
+        student_trimmed[..., 1],
+        teacher_trimmed[..., 1],
+    )
+    return 0.25 * spike_loss + 0.75 * soma_loss
+
+
+def benchmark_model_inference(
+    model: nn.Module,
+    *,
+    device: str,
+    batch_size: int = 32,
+    window_size: int = 500,
+    warmup_repeats: int = 20,
+    repeats: int = 100,
+) -> dict[str, float | int]:
+    """Measure repeated fixed-shape inference latency for practical gating."""
+    if batch_size <= 0 or window_size <= 0 or warmup_repeats < 0 or repeats <= 0:
+        raise ValueError("inference benchmark sizes and repeats must be positive")
+    model = model.to(device).eval()
+    input_dim = int(getattr(model, "num_input", getattr(model, "input_dim", 0)))
+    if input_dim <= 0:
+        raise ValueError("inference benchmark requires model.num_input or model.input_dim")
+    x = torch.zeros(batch_size, window_size, input_dim, device=device)
+    morphology_indices = (
+        torch.zeros(batch_size, dtype=torch.long, device=device)
+        if getattr(getattr(model, "config", None), "morphology_ids", None)
+        else None
+    )
+    timings: list[float] = []
+    with torch.inference_mode():
+        for _ in range(warmup_repeats):
+            _forward_model(model, x, morphology_indices)
+        _synchronize(device)
+        if device.startswith("cuda") and torch.cuda.is_available():
+            events = []
+            for _ in range(repeats):
+                start = torch.cuda.Event(enable_timing=True)
+                stop = torch.cuda.Event(enable_timing=True)
+                start.record()
+                _forward_model(model, x, morphology_indices)
+                stop.record()
+                events.append((start, stop))
+            _synchronize(device)
+            timings = [start.elapsed_time(stop) for start, stop in events]
+        else:
+            for _ in range(repeats):
+                started = time.perf_counter()
+                _forward_model(model, x, morphology_indices)
+                timings.append((time.perf_counter() - started) * 1000.0)
+    latency = np.asarray(timings, dtype=np.float64)
+    median_ms = float(np.median(latency))
+    return {
+        "inference_batch_size": batch_size,
+        "inference_window_size": window_size,
+        "inference_benchmark_repeats": repeats,
+        "inference_latency_median_ms": median_ms,
+        "inference_latency_p10_ms": float(np.quantile(latency, 0.1)),
+        "inference_latency_p90_ms": float(np.quantile(latency, 0.9)),
+        "inference_presentations_per_second": batch_size * 1000.0 / median_ms,
+    }
+
+
+def benchmark_model_training_step(
+    model: nn.Module,
+    *,
+    device: str,
+    batch_size: int = 32,
+    window_size: int = 500,
+    warmup_repeats: int = 20,
+    repeats: int = 100,
+) -> dict[str, float | int]:
+    """Measure repeated forward/backward latency without optimizer or loader noise."""
+    if batch_size <= 0 or window_size <= 0 or warmup_repeats < 0 or repeats <= 0:
+        raise ValueError("training benchmark sizes and repeats must be positive")
+    model = model.to(device).train()
+    input_dim = int(getattr(model, "num_input", getattr(model, "input_dim", 0)))
+    if input_dim <= 0:
+        raise ValueError("training benchmark requires model.num_input or model.input_dim")
+    x = torch.randn(batch_size, window_size, input_dim, device=device)
+    morphology_indices = (
+        torch.zeros(batch_size, dtype=torch.long, device=device)
+        if getattr(getattr(model, "config", None), "morphology_ids", None)
+        else None
+    )
+
+    def training_step() -> None:
+        model.zero_grad(set_to_none=True)
+        prediction = _forward_model(model, x, morphology_indices)
+        prediction.square().mean().backward()
+
+    timings: list[float] = []
+    for _ in range(warmup_repeats):
+        training_step()
+    _synchronize(device)
+    if device.startswith("cuda") and torch.cuda.is_available():
+        events = []
+        for _ in range(repeats):
+            start = torch.cuda.Event(enable_timing=True)
+            stop = torch.cuda.Event(enable_timing=True)
+            start.record()
+            training_step()
+            stop.record()
+            events.append((start, stop))
+        _synchronize(device)
+        timings = [start.elapsed_time(stop) for start, stop in events]
+    else:
+        for _ in range(repeats):
+            started = time.perf_counter()
+            training_step()
+            timings.append((time.perf_counter() - started) * 1000.0)
+    latency = np.asarray(timings, dtype=np.float64)
+    median_ms = float(np.median(latency))
+    return {
+        "training_step_batch_size": batch_size,
+        "training_step_window_size": window_size,
+        "training_step_benchmark_repeats": repeats,
+        "training_step_latency_median_ms": median_ms,
+        "training_step_latency_p10_ms": float(np.quantile(latency, 0.1)),
+        "training_step_latency_p90_ms": float(np.quantile(latency, 0.9)),
+        "training_step_presentations_per_second": batch_size * 1000.0 / median_ms,
+    }
 
 
 def training_objective_loss(

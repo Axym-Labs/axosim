@@ -118,7 +118,7 @@ def test_axomamba_default_config_promotes_ablation_retained_stack():
 
     assert isinstance(config, AxoMambaConfig)
     assert config.block_type == "mamba1"
-    assert config.synapse_gain_scale == 1.0
+    assert config.synapse_gain_scale is None
     assert config.branch_gain is False
     assert config.branch_nonlinearity == "tanh"
     assert config.integrative_mixer is False
@@ -132,7 +132,7 @@ def test_axomamba_default_config_promotes_ablation_retained_stack():
     assert (promoted.model_dim, promoted.state_dim) == (58, 23)
     assert promoted.branch_bilinear_rank == 0
     assert promoted.branch_bilinear_scale is None
-    assert promoted.synapse_gain_scale == 1.0
+    assert promoted.synapse_gain_scale is None
 
 
 def test_spike_voltage_coupling_uses_soma_without_adding_parameters():

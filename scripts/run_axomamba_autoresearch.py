@@ -28,6 +28,8 @@ from axobench.benchmark.iteration_evaluator import (  # noqa: E402
 )
 from axosim.autoresearch import (  # noqa: E402
     AXOMAMBA_DEFAULT_BURN_IN,
+    benchmark_model_inference,
+    benchmark_model_training_step,
     FrozenWindowDataset,
     PanelCandidate,
     TrainingObjective,
@@ -36,6 +38,7 @@ from axosim.autoresearch import (  # noqa: E402
     initialize_named_parameters,
     load_named_buffer_artifact,
     offset_named_parameters,
+    practical_candidate_gate,
     resolve_presentation_budget,
     train_candidate_panel,
 )
@@ -43,6 +46,7 @@ from axosim.axobench_iteration import make_checkpoint_predictor  # noqa: E402
 from axosim.axomamba import AxoMamba, AxoMambaConfig  # noqa: E402
 from axosim.data import ShardedNeuronIODataset  # noqa: E402
 from axosim.checkpoint import load_checkpoint  # noqa: E402
+from axosim.structured import initialize_factorized_linears_from_state  # noqa: E402
 
 
 DEFAULT_DATASET_ROOT = PROJECT_ROOT / "data" / "v1-neuronio-like-gpu-20260611"
@@ -164,6 +168,22 @@ def run_iteration(
         manifest_path=manifest_path,
         seed=seed,
     )
+    distillation_teacher = None
+    distillation_teacher_record = None
+    teacher_checkpoint_value = training.get("distillation_teacher_checkpoint")
+    if teacher_checkpoint_value is not None:
+        teacher_checkpoint = _resolve_path(teacher_checkpoint_value, manifest_path)
+        distillation_teacher, teacher_metadata = load_checkpoint(
+            teacher_checkpoint,
+            map_location="cpu",
+        )
+        if not isinstance(distillation_teacher, AxoMamba):
+            raise ValueError("distillation teacher must contain an AxoMamba model")
+        distillation_teacher_record = {
+            "path": str(teacher_checkpoint),
+            "sha256": hashlib.sha256(teacher_checkpoint.read_bytes()).hexdigest(),
+            "metadata": teacher_metadata,
+        }
     training_results: dict[str, dict[str, Any]] = {}
     if diagnostics_only:
         missing = [
@@ -192,6 +212,7 @@ def run_iteration(
             pin_memory=bool(training.get("pin_memory", False)),
             non_blocking=bool(training.get("non_blocking", True)),
             warmup_cuda=bool(training.get("warmup_cuda", True)),
+            distillation_teacher=distillation_teacher,
         )
         for metrics in training_results.values():
             metrics["schedule_path"] = str(schedule_path.resolve())
@@ -202,6 +223,9 @@ def run_iteration(
             training_results[record.candidate_id]["initial_parameter_offsets"] = getattr(
                 record, "initial_parameter_offsets", {}
             )
+            training_results[record.candidate_id]["initialization"] = getattr(
+                record, "initialization", "pretrained"
+            )
             training_results[record.candidate_id]["frozen_parameter_names"] = getattr(
                 record, "frozen_parameter_names", []
             )
@@ -210,6 +234,12 @@ def run_iteration(
             )
             training_results[record.candidate_id]["initial_checkpoint"] = getattr(
                 record, "initial_checkpoint", None
+            )
+            training_results[record.candidate_id]["factorized_source_weights"] = getattr(
+                record, "factorized_source_weights", []
+            )
+            training_results[record.candidate_id]["distillation_teacher"] = (
+                distillation_teacher_record
             )
             Path(record.metrics_path).write_text(
                 json.dumps(training_results[record.candidate_id], indent=2, sort_keys=True) + "\n",
@@ -224,6 +254,56 @@ def run_iteration(
         diagnostics_root=diagnostics_root,
         diagnostics=diagnostics,
     )
+    if bool(diagnostics.get("benchmark_inference", True)) or bool(
+        diagnostics.get("benchmark_training_step", True)
+    ):
+        for record in candidate_records:
+            benchmark_model, _ = load_checkpoint(record.checkpoint_path, map_location="cpu")
+            if bool(diagnostics.get("benchmark_training_step", True)):
+                training_results[record.candidate_id].update(
+                    benchmark_model_training_step(
+                        benchmark_model,
+                        device=str(diagnostics.get("device", "cuda")),
+                        batch_size=int(diagnostics.get("training_benchmark_batch_size", 32)),
+                        window_size=int(diagnostics.get("training_benchmark_window_size", 500)),
+                        warmup_repeats=int(
+                            diagnostics.get("training_benchmark_warmup_repeats", 20)
+                        ),
+                        repeats=int(diagnostics.get("training_benchmark_repeats", 100)),
+                    )
+                )
+            if bool(diagnostics.get("benchmark_inference", True)):
+                training_results[record.candidate_id].update(
+                    benchmark_model_inference(
+                        benchmark_model,
+                        device=str(diagnostics.get("device", "cuda")),
+                        batch_size=int(diagnostics.get("inference_batch_size", 32)),
+                        window_size=int(diagnostics.get("inference_window_size", 500)),
+                        warmup_repeats=int(
+                            diagnostics.get("inference_warmup_repeats", 20)
+                        ),
+                        repeats=int(diagnostics.get("inference_repeats", 100)),
+                    )
+                )
+            del benchmark_model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            Path(record.metrics_path).write_text(
+                json.dumps(training_results[record.candidate_id], indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+    baseline_id = diagnostic_results["baseline_id"]
+    if baseline_id in training_results:
+        baseline_training = training_results[baseline_id]
+        for candidate_id, candidate_diagnostics in diagnostic_results["candidates"].items():
+            if candidate_id == baseline_id or "deltas" not in candidate_diagnostics:
+                continue
+            candidate_diagnostics["practical_gate"] = practical_candidate_gate(
+                candidate_diagnostics["deltas"],
+                assessments=candidate_diagnostics["assessments"],
+                baseline_training=baseline_training,
+                candidate_training=training_results[candidate_id],
+            )
     result = {
         **plan,
         "manifest": str(manifest_path),
@@ -281,14 +361,25 @@ def _build_candidates(
         config.update(specification.get("config_overrides", {}))
         torch.manual_seed(seed)
         model = AxoMamba(AxoMambaConfig(**config))
+        initialization = str(specification.get("initialization", "pretrained"))
+        if initialization not in {"pretrained", "scratch"}:
+            raise ValueError("candidate initialization must be 'pretrained' or 'scratch'")
         candidate_state = model.state_dict()
-        shared = {
-            name: tensor
-            for name, tensor in reference_state.items()
-            if name in candidate_state and candidate_state[name].shape == tensor.shape
-        }
-        candidate_state.update(shared)
-        model.load_state_dict(candidate_state, strict=True)
+        if initialization == "pretrained":
+            shared = {
+                name: tensor
+                for name, tensor in reference_state.items()
+                if name in candidate_state and candidate_state[name].shape == tensor.shape
+            }
+            candidate_state.update(shared)
+            model.load_state_dict(candidate_state, strict=True)
+            factorized_source_weights = initialize_factorized_linears_from_state(
+                model,
+                reference_state,
+            )
+        else:
+            shared = {}
+            factorized_source_weights = []
         buffer_artifact = specification.get("buffer_artifact")
         buffer_artifacts = specification.get("buffer_artifacts")
         if buffer_artifact is not None and buffer_artifacts is not None:
@@ -352,6 +443,9 @@ def _build_candidates(
                     "burn_in", training.get("burn_in", AXOMAMBA_DEFAULT_BURN_IN)
                 )
             ),
+            output_distillation_weight=float(
+                specification.get("output_distillation_weight", 0.0)
+            ),
         )
         setattr(record, "model_config", config)
         setattr(record, "shared_initial_tensors", len(shared))
@@ -359,7 +453,13 @@ def _build_candidates(
         setattr(record, "initial_parameter_offsets", initial_parameter_offsets)
         setattr(record, "frozen_parameter_names", sorted(frozen_parameter_names))
         setattr(record, "buffer_artifacts", loaded_buffer_artifacts)
-        setattr(record, "initial_checkpoint", initial_checkpoint)
+        setattr(
+            record,
+            "initial_checkpoint",
+            initial_checkpoint if initialization == "pretrained" else None,
+        )
+        setattr(record, "initialization", initialization)
+        setattr(record, "factorized_source_weights", factorized_source_weights)
         records.append(record)
     return records
 
@@ -391,10 +491,25 @@ def _run_diagnostics(
         "config": eval_config,
     }
     record_by_id = {record.candidate_id: record for record in candidate_records}
+    reuse_cached = bool(diagnostics.get("reuse_cached_comparisons", False))
     baseline_cache_value = manifest.get("baseline_cache")
     baseline_id = None
     if baseline_cache_value:
         baseline_cache_path = _resolve_path(baseline_cache_value, Path.cwd() / "manifest.json")
+        baseline_cache = load_model_evaluation_cache(baseline_cache_path)
+        baseline_id = baseline_cache.model_id
+        if baseline_id in record_by_id:
+            cached_checkpoint = baseline_cache.report.get("checkpoint")
+            candidate_checkpoint = str(
+                Path(record_by_id[baseline_id].checkpoint_path).resolve()
+            )
+            if cached_checkpoint != candidate_checkpoint:
+                raise ValueError(
+                    "external baseline cache cannot replace a different "
+                    f"checkpoint with the same id {baseline_id!r}"
+                )
+    elif reuse_cached and (diagnostics_root / "baseline-cache.npz").exists():
+        baseline_cache_path = diagnostics_root / "baseline-cache.npz"
         baseline_cache = load_model_evaluation_cache(baseline_cache_path)
         baseline_id = baseline_cache.model_id
     else:
@@ -426,31 +541,39 @@ def _run_diagnostics(
         "candidates": {},
     }
     for record in candidate_records:
-        if record.candidate_id == baseline_id and manifest.get("baseline_cache") is None:
+        if record.candidate_id == baseline_id:
             summaries["candidates"][record.candidate_id] = {
                 "role": "baseline",
-                "report": str((diagnostics_root / f"{baseline_id}.json").resolve()),
+                "report": str(Path(baseline_cache_path).resolve()),
                 "metrics": _metric_values(baseline_cache.report),
             }
             continue
-        predictor, checkpoint_metadata = make_checkpoint_predictor(
-            record.checkpoint_path,
-            device=str(diagnostics.get("device", "cuda")),
-        )
-        comparison = evaluate_model_against_cache(
-            predictor,
-            baseline_cache=baseline_cache,
-            candidate_id=record.candidate_id,
-            bootstrap_replicates=int(diagnostics.get("bootstrap_replicates", 250)),
-            bootstrap_seed=int(diagnostics.get("bootstrap_seed", 20260711)),
-            **common,
-        )
-        comparison["candidate"]["checkpoint"] = str(Path(record.checkpoint_path).resolve())
-        comparison["candidate"]["checkpoint_metadata"] = checkpoint_metadata
-        comparison["candidate"]["training_metrics"] = training_results[record.candidate_id]
-        comparison["candidate"]["model_config"] = getattr(record, "model_config")
         output = diagnostics_root / f"{record.candidate_id}-vs-{baseline_id}.json"
-        write_model_comparison(comparison, output)
+        expected_checkpoint = str(Path(record.checkpoint_path).resolve())
+        if reuse_cached and output.exists():
+            comparison = json.loads(output.read_text(encoding="utf-8"))
+            if comparison["candidate"].get("checkpoint") != expected_checkpoint:
+                raise ValueError(
+                    f"cached comparison checkpoint mismatch for {record.candidate_id}"
+                )
+        else:
+            predictor, checkpoint_metadata = make_checkpoint_predictor(
+                record.checkpoint_path,
+                device=str(diagnostics.get("device", "cuda")),
+            )
+            comparison = evaluate_model_against_cache(
+                predictor,
+                baseline_cache=baseline_cache,
+                candidate_id=record.candidate_id,
+                bootstrap_replicates=int(diagnostics.get("bootstrap_replicates", 250)),
+                bootstrap_seed=int(diagnostics.get("bootstrap_seed", 20260711)),
+                **common,
+            )
+            comparison["candidate"]["checkpoint"] = expected_checkpoint
+            comparison["candidate"]["checkpoint_metadata"] = checkpoint_metadata
+            comparison["candidate"]["training_metrics"] = training_results[record.candidate_id]
+            comparison["candidate"]["model_config"] = getattr(record, "model_config")
+            write_model_comparison(comparison, output)
         summaries["candidates"][record.candidate_id] = {
             "role": "candidate",
             "comparison": str(output.resolve()),

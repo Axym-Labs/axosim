@@ -13,7 +13,7 @@
   "block_type": "mamba1",
   "dropout": 0.0,
   "residual_scale_init": 0.1,
-  "synapse_gain_scale": 1.0,
+  "synapse_gain_scale": null,
   "morphology_synapse_gain_scale": 1.0,
   "morphology_synapse_feature_dim": 9,
   "morphology_synapse_feature_hidden": 16,

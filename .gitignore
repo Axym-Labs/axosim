@@ -29,6 +29,9 @@ docs/**/artifacts/**/generation_report.json
 docs/**/artifacts/**/generation_summary.json
 docs/**/artifacts/**/manifest.json
 docs/**/artifacts/**/calibration_results.json
+docs/axomamba-autoresearch/artifacts/diagnostics/
+docs/axomamba-autoresearch/artifacts/routes/
+docs/axomamba-autoresearch/artifacts/promoted-voltage-progress.png
 docs/verify-arbor-simulator/artifacts/*.json
 docs/verify-arbor-simulator/artifacts/source_models/
 docs/verify-arbor-simulator/artifacts/*_2026*/

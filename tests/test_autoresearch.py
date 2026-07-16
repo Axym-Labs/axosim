@@ -13,13 +13,18 @@ from axosim.autoresearch import (
     STANDARD_PRESENTATIONS,
     FrozenWindowDataset,
     PanelCandidate,
+    practical_candidate_gate,
+    benchmark_model_inference,
+    benchmark_model_training_step,
     TrainingObjective,
+    axomamba_training_objective,
     create_frozen_window_schedule,
     default_axomamba_training_objective,
     freeze_named_parameters,
     initialize_named_parameters,
     load_named_buffer_artifact,
     offset_named_parameters,
+    output_distillation_loss,
     resolve_presentation_budget,
     train_candidate_panel,
     training_objective_loss,
@@ -46,6 +51,259 @@ def _write_morphology_dataset(root) -> None:
             soma_mv=soma_mv,
             sample_ids=sample_ids,
         )
+
+
+def test_task_objective_recipes_are_explicit_and_use_cross_task_auxiliaries() -> None:
+    dual = axomamba_training_objective("dual")
+    regression = axomamba_training_objective("regression")
+    spike = axomamba_training_objective("spike")
+
+    assert dual == default_axomamba_training_objective()
+    assert regression.direct_sera_loss_weight == 0.03
+    assert regression.spike_loss_weight > 0
+    assert regression.f1_curve_loss_weight > 0
+    assert spike.soma_loss_weight == 0.1
+    assert spike.direct_sera_loss_weight == 0.001
+    assert spike.f1_curve_loss_weight == 0.05
+    with np.testing.assert_raises_regex(ValueError, "unsupported AxoMamba task"):
+        axomamba_training_objective("other")
+
+
+def test_practical_gate_rejects_tiny_metric_only_changes() -> None:
+    gate = practical_candidate_gate(
+        {
+            "voltage_sera_mv": -0.099,
+            "dynamics_sera_mv_per_ms": -0.02,
+            "response_sera_mv": 0.01,
+            "spike_f1_area_0_5ms": 0.0199,
+            "spike_f1_exact": 0.0,
+            "spike_f1_5ms": 0.0,
+        },
+        assessments={
+            "voltage_sera_mv": "improved",
+            "dynamics_sera_mv_per_ms": "improved",
+            "response_sera_mv": "uncertain",
+            "spike_f1_area_0_5ms": "improved",
+            "spike_f1_exact": "uncertain",
+            "spike_f1_5ms": "uncertain",
+        },
+        baseline_training={
+            "parameter_count": 100_000,
+            "candidate_compute_presentations_per_second": 1_000,
+        },
+        candidate_training={
+            "parameter_count": 100_000,
+            "candidate_compute_presentations_per_second": 1_000,
+        },
+    )
+
+    assert gate["automatically_rejected"] is True
+    assert gate["decision"] == "reject_tiny_metric_only"
+
+
+def test_practical_gate_retains_material_or_efficiency_changes() -> None:
+    metric_gate = practical_candidate_gate(
+        {"voltage_sera_mv": -0.1, "spike_f1_area_0_5ms": 0.0},
+        assessments={
+            "voltage_sera_mv": "improved",
+            "spike_f1_area_0_5ms": "uncertain",
+        },
+        baseline_training={"parameter_count": 100_000},
+        candidate_training={"parameter_count": 100_000},
+    )
+    efficiency_gate = practical_candidate_gate(
+        {"voltage_sera_mv": -0.01, "spike_f1_area_0_5ms": 0.001},
+        assessments={
+            "voltage_sera_mv": "uncertain",
+            "spike_f1_area_0_5ms": "uncertain",
+        },
+        baseline_training={"parameter_count": 100_000},
+        candidate_training={"parameter_count": 89_000},
+    )
+
+    assert metric_gate["automatically_rejected"] is False
+    assert metric_gate["decision"] == "review_material_gain"
+    assert efficiency_gate["automatically_rejected"] is False
+    assert efficiency_gate["decision"] == "review_efficiency_gain"
+
+
+def test_practical_gate_requires_robust_training_speed_separation() -> None:
+    common = {
+        "voltage_sera_mv": 0.0,
+    }
+    assessments = {"voltage_sera_mv": "uncertain"}
+    noisy = practical_candidate_gate(
+        common,
+        assessments=assessments,
+        baseline_training={
+            "parameter_count": 100_000,
+            "training_step_presentations_per_second": 1_000,
+            "training_step_latency_p10_ms": 10.0,
+        },
+        candidate_training={
+            "parameter_count": 100_000,
+            "training_step_presentations_per_second": 1_200,
+            "training_step_latency_p90_ms": 10.5,
+        },
+    )
+    separated = practical_candidate_gate(
+        common,
+        assessments=assessments,
+        baseline_training={
+            "parameter_count": 100_000,
+            "training_step_presentations_per_second": 1_000,
+            "training_step_latency_p10_ms": 10.0,
+        },
+        candidate_training={
+            "parameter_count": 100_000,
+            "training_step_presentations_per_second": 1_200,
+            "training_step_latency_p90_ms": 8.8,
+        },
+    )
+
+    assert noisy["automatically_rejected"] is True
+    assert separated["automatically_rejected"] is False
+
+
+def test_practical_gate_rejects_large_but_uncertain_metric_delta() -> None:
+    gate = practical_candidate_gate(
+        {"spike_f1_5ms": 0.04},
+        assessments={"spike_f1_5ms": "uncertain"},
+        baseline_training={"parameter_count": 100_000},
+        candidate_training={"parameter_count": 100_000},
+    )
+
+    assert gate["automatically_rejected"] is True
+
+
+def test_practical_gate_labels_efficiency_with_material_regression_as_tradeoff() -> None:
+    gate = practical_candidate_gate(
+        {"voltage_sera_mv": 0.11},
+        assessments={"voltage_sera_mv": "regressed"},
+        baseline_training={
+            "parameter_count": 100_000,
+            "inference_presentations_per_second": 1_000,
+            "inference_latency_p10_ms": 10.0,
+        },
+        candidate_training={
+            "parameter_count": 80_000,
+            "inference_presentations_per_second": 1_200,
+            "inference_latency_p90_ms": 8.8,
+        },
+    )
+
+    assert gate["automatically_rejected"] is False
+    assert gate["decision"] == "review_efficiency_tradeoff"
+    assert gate["material_regressions"] == ["voltage_sera_mv"]
+
+
+def test_practical_gate_requires_robust_inference_speed_separation() -> None:
+    common_deltas = {"voltage_sera_mv": 0.0}
+    common_assessments = {"voltage_sera_mv": "uncertain"}
+    noisy = practical_candidate_gate(
+        common_deltas,
+        assessments=common_assessments,
+        baseline_training={
+            "parameter_count": 100_000,
+            "inference_presentations_per_second": 1_000,
+            "inference_latency_p10_ms": 10.0,
+        },
+        candidate_training={
+            "parameter_count": 100_000,
+            "inference_presentations_per_second": 1_200,
+            "inference_latency_p90_ms": 10.5,
+        },
+    )
+    separated = practical_candidate_gate(
+        common_deltas,
+        assessments=common_assessments,
+        baseline_training={
+            "parameter_count": 100_000,
+            "inference_presentations_per_second": 1_000,
+            "inference_latency_p10_ms": 10.0,
+        },
+        candidate_training={
+            "parameter_count": 100_000,
+            "inference_presentations_per_second": 1_200,
+            "inference_latency_p90_ms": 8.8,
+        },
+    )
+
+    assert noisy["automatically_rejected"] is True
+    assert separated["automatically_rejected"] is False
+
+
+def test_output_distillation_matches_teacher_probabilities_and_voltage() -> None:
+    teacher = torch.tensor(
+        [[[0.0, 0.5], [2.0, -0.25], [-2.0, 0.75]]],
+        dtype=torch.float32,
+    )
+    student = teacher.clone().requires_grad_(True)
+
+    loss = output_distillation_loss(student, teacher, burn_in=1)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert student.grad is not None
+    torch.testing.assert_close(student.grad[:, 1:, :], torch.zeros_like(student.grad[:, 1:, :]))
+
+
+def test_inference_benchmark_records_repeated_latency():
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=8,
+            num_output=2,
+            num_branch=2,
+            num_synapse_per_branch=4,
+            model_dim=4,
+            num_layers=1,
+            state_dim=2,
+            conv_kernel=2,
+            expansion=2,
+        )
+    )
+
+    result = benchmark_model_inference(
+        model,
+        device="cpu",
+        batch_size=2,
+        window_size=8,
+        warmup_repeats=1,
+        repeats=3,
+    )
+
+    assert result["inference_benchmark_repeats"] == 3
+    assert result["inference_latency_median_ms"] > 0
+    assert result["inference_presentations_per_second"] > 0
+
+
+def test_training_benchmark_records_repeated_latency():
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=8,
+            num_output=2,
+            num_branch=2,
+            num_synapse_per_branch=4,
+            model_dim=4,
+            num_layers=1,
+            state_dim=2,
+            conv_kernel=2,
+            expansion=2,
+        )
+    )
+
+    result = benchmark_model_training_step(
+        model,
+        device="cpu",
+        batch_size=2,
+        window_size=8,
+        warmup_repeats=1,
+        repeats=3,
+    )
+
+    assert result["training_step_benchmark_repeats"] == 3
+    assert result["training_step_latency_median_ms"] > 0
+    assert result["training_step_presentations_per_second"] > 0
 
 
 def test_frozen_window_schedule_is_deterministic_and_morphology_balanced(tmp_path) -> None:
@@ -260,6 +518,47 @@ def test_candidate_panel_defaults_to_promoted_axomamba_recipe(tmp_path) -> None:
         "soma_scale": 0.1,
         "spike_loss_weight": 0.25,
     }
+
+
+def test_candidate_panel_runs_one_shared_distillation_teacher(tmp_path) -> None:
+    dataset = _CountingDataset(samples=4)
+    config = BranchELMConfig(
+        input_dim=4,
+        memory_units=3,
+        num_branches=2,
+        hidden_units=4,
+    )
+    candidate = PanelCandidate(
+        candidate_id="student",
+        model=BranchELM(config),
+        batch_size=2,
+        checkpoint_path=tmp_path / "student.pt",
+        metrics_path=tmp_path / "student.json",
+        burn_in=1,
+        output_distillation_weight=0.5,
+    )
+    objective = TrainingObjective(spike_loss_weight=0.25, soma_loss_weight=0.75)
+
+    with np.testing.assert_raises_regex(ValueError, "requires a teacher"):
+        train_candidate_panel(
+            [candidate],
+            dataset,
+            objective=objective,
+            device="cpu",
+            seed=17,
+        )
+    result = train_candidate_panel(
+        [candidate],
+        dataset,
+        objective=objective,
+        device="cpu",
+        seed=17,
+        distillation_teacher=BranchELM(config),
+    )["student"]
+
+    assert result["output_distillation_weight"] == 0.5
+    assert "output_distillation" in result["last_components"]
+    assert result["shared_teacher_compute_seconds"] > 0
 
 
 def test_named_parameter_initialization_changes_only_requested_tensors() -> None:

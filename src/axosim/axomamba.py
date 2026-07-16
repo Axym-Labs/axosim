@@ -20,14 +20,13 @@ class AxoMambaConfig(BranchOfficialMambaConfig):
 def default_axomamba_config(**overrides: Any) -> AxoMambaConfig:
     """Return the promoted compact Mamba config.
 
-    This is the ablation-retained compact stack: 118 routed branches,
-    shared and morphology-conditioned synaptic efficacy, a learned route-
+    This is the practical-gate ablation-retained compact stack: 118 routed
+    branches, morphology-conditioned synaptic efficacy, a learned route-
     occupancy operator, branch-current saturation, separate task readouts,
-    and a post-Mamba causal TCN correction at dilations 1, 4, and 16. The local
-    correction passed the iteration-160 300k SERA-first gate; iteration 180
-    promoted raw-soma adaptation, and the post-I200 larger ablation removed
-    the recoverable soma gate and bilinear interaction after a matched 300k
-    continuation.
+    and a post-Mamba causal TCN correction at dilations 1, 4, and 16. The
+    post-I200 300k ablation removed shared efficacy, the soma gate, and
+    bilinear interaction for a robust inference-speed win without a material
+    task-metric regression.
     """
 
     values: dict[str, Any] = {
@@ -53,7 +52,7 @@ def default_axomamba_config(**overrides: Any) -> AxoMambaConfig:
         ],
         "morphology_embedding_scale": 0.15,
         "residual_scale_init": 0.1,
-        "synapse_gain_scale": 1.0,
+        "synapse_gain_scale": None,
         "morphology_synapse_gain_scale": 1.0,
         "morphology_synapse_feature_dim": 9,
         "morphology_synapse_feature_hidden": 16,

@@ -202,11 +202,12 @@ axosim benchmark \
 
 - Deterministic pre-sharded loader for NeuronIO-style `(samples, time, channels)` inputs and two-output spike/soma targets.
 - Official paper-repo ELM / Branch-ELM runtime, routing, synaptic trace state, memory state, and spike/soma readout.
-- `AxoMamba`, the reusable 90,156-parameter promoted Mamba surrogate
+- `AxoMamba`, the reusable 88,858-parameter promoted Mamba surrogate
   configuration. Its separate readouts retain route occupancy, morphology-
   conditioned synaptic efficacy, branch saturation, and the post-Mamba local
-  TCN; a matched 300k ablation removed the recoverable soma gate and bilinear
-  branch interaction.
+  TCN; a practical-gate 300k ablation removed shared synaptic efficacy, the
+  recoverable soma gate, and bilinear branch interaction, reducing repeated
+  inference latency by 13% without a material core-metric regression.
 - The promoted AxoMamba training objective uses the raw soma-voltage trace
   scored by AxoBench; the legacy `targets[..., 1]` channel clips action
   potentials above -55 mV and is retained only for controlled comparisons.
