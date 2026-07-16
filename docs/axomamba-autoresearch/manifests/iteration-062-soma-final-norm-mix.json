@@ -1,0 +1,42 @@
+{
+  "iteration": 62,
+  "name": "soma-final-norm-mix",
+  "candidates": [
+    {"id": "soma_norm_1_control", "baseline": true, "config_overrides": {"soma_final_norm_mix": 1.0}},
+    {"id": "soma_norm_0p75", "config_overrides": {"soma_final_norm_mix": 0.75}},
+    {"id": "soma_norm_0p5", "config_overrides": {"soma_final_norm_mix": 0.5}},
+    {"id": "soma_norm_0p25", "config_overrides": {"soma_final_norm_mix": 0.25}},
+    {"id": "soma_norm_0", "config_overrides": {"soma_final_norm_mix": 0.0}}
+  ],
+  "training": {
+    "batch_size": 32,
+    "schedule_batch_size": 64,
+    "shard_reuse_batches": 16,
+    "seed": 20260711,
+    "device": "cuda",
+    "burn_in": 50,
+    "learning_rate": 0.0006,
+    "optimizer": "adamw",
+    "weight_decay": 0.0001,
+    "lr_schedule": "cosine",
+    "objective": {
+      "spike_loss_weight": 0.25,
+      "soma_loss_weight": 0.75,
+      "direct_sera_loss_weight": 0.01,
+      "f1_curve_loss_weight": 0.05,
+      "sera_threshold_count": 101,
+      "f1_tolerances_steps": [0, 1, 2, 3, 4, 5, 5]
+    }
+  },
+  "diagnostics": {
+    "device": "cuda",
+    "max_samples": 120,
+    "batch_size": 16,
+    "max_intervention_samples": 40,
+    "max_interventions": 8,
+    "intervention_workers": 4,
+    "multiple_morphologies": true,
+    "bootstrap_replicates": 250,
+    "bootstrap_seed": 20260711
+  }
+}

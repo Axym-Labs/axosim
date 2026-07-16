@@ -1,0 +1,66 @@
+{
+  "iteration": 31,
+  "name": "paired-intervention-training",
+  "baseline_cache": "docs/axomamba-autoresearch/artifacts/diagnostics/iteration-031-paired-intervention-training/baseline-cache.npz",
+  "candidates": [
+    {
+      "id": "paired_standard",
+      "config_overrides": {}
+    },
+    {
+      "id": "response_sera_0p001",
+      "config_overrides": {},
+      "objective_overrides": {
+        "response_sera_loss_weight": 0.001
+      }
+    },
+    {
+      "id": "response_sera_0p0025",
+      "config_overrides": {},
+      "objective_overrides": {
+        "response_sera_loss_weight": 0.0025
+      }
+    },
+    {
+      "id": "response_sera_0p005",
+      "config_overrides": {},
+      "objective_overrides": {
+        "response_sera_loss_weight": 0.005
+      }
+    }
+  ],
+  "training": {
+    "dataset_kind": "intervention_pairs",
+    "intervention_file_split": "train",
+    "batch_size": 32,
+    "schedule_batch_size": 64,
+    "shard_reuse_batches": 64,
+    "seed": 20260711,
+    "device": "cuda",
+    "burn_in": 50,
+    "learning_rate": 0.0006,
+    "optimizer": "adamw",
+    "weight_decay": 0.0001,
+    "lr_schedule": "cosine",
+    "objective": {
+      "spike_loss_weight": 0.25,
+      "soma_loss_weight": 0.75,
+      "direct_sera_loss_weight": 0.0075,
+      "f1_curve_loss_weight": 0.05,
+      "response_sera_loss_weight": 0.0,
+      "sera_threshold_count": 101,
+      "f1_tolerances_steps": [0, 1, 2, 3, 4, 5, 5]
+    }
+  },
+  "diagnostics": {
+    "device": "cuda",
+    "intervention_file_split": "eval",
+    "max_samples": 120,
+    "batch_size": 16,
+    "max_intervention_samples": 40,
+    "max_interventions": 8,
+    "intervention_workers": 4,
+    "multiple_morphologies": true,
+    "bootstrap_replicates": 250
+  }
+}

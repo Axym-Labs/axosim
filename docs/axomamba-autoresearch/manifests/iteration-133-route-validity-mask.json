@@ -1,0 +1,105 @@
+{
+  "iteration": 133,
+  "name": "route-validity-mask",
+  "candidates": [
+    {
+      "id": "coordinate_only_replication",
+      "baseline": true,
+      "config_overrides": {
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 1.0,
+        "morphology_synapse_validity_scale": 0.0
+      },
+      "buffer_artifacts": [
+        {"buffer_name": "morphology_synapse_features", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-normalized-route-features.npz", "key": "features"},
+        {"buffer_name": "morphology_synapse_validity", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-route-validity-masks.npz", "key": "validity_mask"}
+      ]
+    },
+    {
+      "id": "real_validity_plus_coordinate",
+      "config_overrides": {
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 1.0,
+        "morphology_synapse_validity_scale": 1.0
+      },
+      "buffer_artifacts": [
+        {"buffer_name": "morphology_synapse_features", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-normalized-route-features.npz", "key": "features"},
+        {"buffer_name": "morphology_synapse_validity", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-route-validity-masks.npz", "key": "validity_mask"}
+      ]
+    },
+    {
+      "id": "shuffled_validity_plus_coordinate",
+      "config_overrides": {
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 1.0,
+        "morphology_synapse_validity_scale": 1.0
+      },
+      "buffer_artifacts": [
+        {"buffer_name": "morphology_synapse_features", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-normalized-route-features.npz", "key": "features"},
+        {"buffer_name": "morphology_synapse_validity", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-route-validity-masks.npz", "key": "validity_mask_shuffled"}
+      ]
+    },
+    {
+      "id": "real_validity_only",
+      "config_overrides": {
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 0.0,
+        "morphology_synapse_validity_scale": 1.0
+      },
+      "buffer_artifacts": [
+        {"buffer_name": "morphology_synapse_features", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-normalized-route-features.npz", "key": "features"},
+        {"buffer_name": "morphology_synapse_validity", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-route-validity-masks.npz", "key": "validity_mask"}
+      ]
+    },
+    {
+      "id": "all_off_control",
+      "config_overrides": {
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 0.0,
+        "morphology_synapse_validity_scale": 0.0
+      },
+      "buffer_artifacts": [
+        {"buffer_name": "morphology_synapse_features", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-normalized-route-features.npz", "key": "features"},
+        {"buffer_name": "morphology_synapse_validity", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-route-validity-masks.npz", "key": "validity_mask"}
+      ]
+    }
+  ],
+  "training": {
+    "batch_size": 32,
+    "schedule_batch_size": 64,
+    "shard_reuse_batches": 16,
+    "seed": 20260760,
+    "device": "cuda",
+    "burn_in": 50,
+    "learning_rate": 0.0006,
+    "optimizer": "adamw",
+    "weight_decay": 0.0001,
+    "lr_schedule": "cosine",
+    "objective": {
+      "spike_loss_weight": 0.25,
+      "soma_loss_weight": 0.75,
+      "direct_sera_loss_weight": 0.01,
+      "f1_curve_loss_weight": 0.05,
+      "near_spike_voltage_loss_weight": 0.002,
+      "near_spike_radius_steps": 5,
+      "sera_threshold_count": 101,
+      "f1_tolerances_steps": [0, 1, 2, 3, 4, 5, 5]
+    }
+  },
+  "diagnostics": {
+    "device": "cuda",
+    "max_samples": 120,
+    "batch_size": 16,
+    "max_intervention_samples": 40,
+    "max_interventions": 8,
+    "intervention_workers": 4,
+    "multiple_morphologies": true,
+    "bootstrap_replicates": 250,
+    "bootstrap_seed": 20260760
+  }
+}

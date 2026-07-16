@@ -1,0 +1,52 @@
+{
+  "iteration": 115,
+  "name": "interaction-state-gating",
+  "candidates": [
+    {
+      "id": "inactive_state_gate_control",
+      "baseline": true,
+      "config_overrides": {
+        "branch_interaction_state_gate_scale": 0.0
+      }
+    },
+    {
+      "id": "active_interaction_state_gate",
+      "config_overrides": {
+        "branch_interaction_state_gate_scale": 1.0
+      }
+    }
+  ],
+  "training": {
+    "batch_size": 32,
+    "schedule_batch_size": 64,
+    "shard_reuse_batches": 16,
+    "seed": 20260742,
+    "device": "cuda",
+    "burn_in": 50,
+    "learning_rate": 0.0006,
+    "optimizer": "adamw",
+    "weight_decay": 0.0001,
+    "lr_schedule": "cosine",
+    "objective": {
+      "spike_loss_weight": 0.25,
+      "soma_loss_weight": 0.75,
+      "direct_sera_loss_weight": 0.01,
+      "f1_curve_loss_weight": 0.05,
+      "near_spike_voltage_loss_weight": 0.002,
+      "near_spike_radius_steps": 5,
+      "sera_threshold_count": 101,
+      "f1_tolerances_steps": [0, 1, 2, 3, 4, 5, 5]
+    }
+  },
+  "diagnostics": {
+    "device": "cuda",
+    "max_samples": 120,
+    "batch_size": 16,
+    "max_intervention_samples": 40,
+    "max_interventions": 8,
+    "intervention_workers": 4,
+    "multiple_morphologies": true,
+    "bootstrap_replicates": 250,
+    "bootstrap_seed": 20260742
+  }
+}

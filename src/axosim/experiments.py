@@ -105,7 +105,7 @@ _PRESETS: dict[str, dict[str, dict[str, Any]]] = {
             "description": "Promoted AxoMamba path: best retained compact Mamba surrogate config with soma075 objective.",
             "options": {
                 "model_kind": "axomamba",
-                "model_config": "configs/axomamba_45x64.json",
+                "model_config": "configs/axomamba.json",
                 "window_size": 500,
                 "ignore_start": 500,
                 "window_sampling": "random-full-trace",

@@ -1,0 +1,489 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+from dataclasses import asdict
+import hashlib
+import json
+from pathlib import Path
+import sys
+from typing import Any
+
+import torch
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+AXOBENCH_ROOT = PROJECT_ROOT.parent / "AxoBench"
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(AXOBENCH_ROOT / "src"))
+
+from axobench.benchmark.iteration_evaluator import (  # noqa: E402
+    EvaluationConfig,
+    create_model_evaluation_cache,
+    evaluate_model_against_cache,
+    load_model_evaluation_cache,
+    write_evaluation_report,
+    write_model_comparison,
+    write_model_evaluation_cache,
+)
+from axosim.autoresearch import (  # noqa: E402
+    AXOMAMBA_DEFAULT_BURN_IN,
+    FrozenWindowDataset,
+    PanelCandidate,
+    TrainingObjective,
+    create_frozen_window_schedule,
+    freeze_named_parameters,
+    initialize_named_parameters,
+    load_named_buffer_artifact,
+    offset_named_parameters,
+    resolve_presentation_budget,
+    train_candidate_panel,
+)
+from axosim.axobench_iteration import make_checkpoint_predictor  # noqa: E402
+from axosim.axomamba import AxoMamba, AxoMambaConfig  # noqa: E402
+from axosim.data import ShardedNeuronIODataset  # noqa: E402
+from axosim.checkpoint import load_checkpoint  # noqa: E402
+
+
+DEFAULT_DATASET_ROOT = PROJECT_ROOT / "data" / "v1-neuronio-like-gpu-20260611"
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "axomamba.json"
+DEFAULT_RUN_ROOT = PROJECT_ROOT / "runs" / "axomamba-autoresearch"
+DEFAULT_DIAGNOSTICS_ROOT = (
+    PROJECT_ROOT / "docs" / "axomamba-autoresearch" / "artifacts" / "diagnostics"
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run one manifest-defined AxoMamba training and diagnostics iteration.",
+        allow_abbrev=False,
+    )
+    parser.add_argument("manifest", help="JSON iteration manifest")
+    parser.add_argument("--long", action="store_true", help="force the 300k presentation budget")
+    parser.add_argument("--diagnostics-only", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+
+    manifest_path = Path(args.manifest).resolve()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    plan = resolve_plan(manifest, force_long=args.long)
+    if args.dry_run:
+        print(json.dumps(plan, indent=2, sort_keys=True))
+        return 0
+
+    result = run_iteration(
+        manifest,
+        manifest_path=manifest_path,
+        force_long=args.long,
+        diagnostics_only=args.diagnostics_only,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def resolve_plan(manifest: dict[str, Any], *, force_long: bool) -> dict[str, Any]:
+    iteration = int(manifest["iteration"])
+    name = str(manifest["name"])
+    candidates = manifest.get("candidates", [])
+    if not candidates:
+        raise ValueError("manifest candidates must not be empty")
+    candidate_ids = [str(candidate["id"]) for candidate in candidates]
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise ValueError("manifest candidate ids must be unique")
+    if manifest.get("smoke"):
+        presentations = int(manifest.get("presentations", 0))
+        if presentations <= 0 or presentations >= 120_000:
+            raise ValueError("smoke presentations must be between 1 and 119999")
+    elif "presentations" in manifest:
+        raise ValueError("custom presentation budgets require smoke=true")
+    else:
+        presentations = resolve_presentation_budget(iteration=iteration, force_long=force_long)
+    slug = f"iteration-{iteration:03d}-{name}"
+    return {
+        "iteration": iteration,
+        "name": name,
+        "slug": slug,
+        "presentations": presentations,
+        "long_run": presentations > 120_000,
+        "smoke": bool(manifest.get("smoke", False)),
+        "candidate_ids": candidate_ids,
+        "prune_due": iteration > 0 and iteration % 10 == 0,
+    }
+
+
+def run_iteration(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path,
+    force_long: bool,
+    diagnostics_only: bool,
+) -> dict[str, Any]:
+    plan = resolve_plan(manifest, force_long=force_long)
+    training = dict(manifest.get("training", {}))
+    diagnostics = dict(manifest.get("diagnostics", {}))
+    dataset_root = _resolve_path(manifest.get("dataset_root", DEFAULT_DATASET_ROOT), manifest_path)
+    run_root = _resolve_path(manifest.get("run_root", DEFAULT_RUN_ROOT), manifest_path) / plan["slug"]
+    diagnostics_root = (
+        _resolve_path(manifest.get("diagnostics_root", DEFAULT_DIAGNOSTICS_ROOT), manifest_path)
+        / plan["slug"]
+    )
+    run_root.mkdir(parents=True, exist_ok=True)
+    diagnostics_root.mkdir(parents=True, exist_ok=True)
+    (run_root / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    seed = int(training.get("seed", 20260711))
+    schedule_batch_size = int(training.get("schedule_batch_size", 64))
+    shard_reuse_batches = int(training.get("shard_reuse_batches", 8))
+    schedule_root = DEFAULT_RUN_ROOT / "schedules"
+    schedule_path = schedule_root / (
+        f"balanced-{plan['presentations']}-seed{seed}-b{schedule_batch_size}"
+        f"-reuse{shard_reuse_batches}.npz"
+    )
+    base_dataset = ShardedNeuronIODataset(dataset_root / "train", cache_shards=1)
+    if not schedule_path.exists():
+        create_frozen_window_schedule(
+            base_dataset,
+            schedule_path,
+            presentations=plan["presentations"],
+            schedule_batch_size=schedule_batch_size,
+            shard_reuse_batches=shard_reuse_batches,
+            window_size=int(training.get("window_size", 500)),
+            start_offset=int(training.get("start_offset", 500)),
+            sequence_length=int(training.get("sequence_length", 6000)),
+            seed=seed,
+        )
+    base_schedule = FrozenWindowDataset(base_dataset, schedule_path)
+    schedule = base_schedule
+
+    candidate_records = _build_candidates(
+        manifest["candidates"],
+        training=training,
+        run_root=run_root,
+        manifest_path=manifest_path,
+        seed=seed,
+    )
+    training_results: dict[str, dict[str, Any]] = {}
+    if diagnostics_only:
+        missing = [
+            str(record.checkpoint_path)
+            for record in candidate_records
+            if not Path(record.checkpoint_path).exists()
+        ]
+        if missing:
+            raise FileNotFoundError(f"diagnostics-only checkpoints are missing: {missing}")
+        for record in candidate_records:
+            metrics_path = Path(record.metrics_path)
+            training_results[record.candidate_id] = (
+                json.loads(metrics_path.read_text(encoding="utf-8"))
+                if metrics_path.exists()
+                else {"candidate_id": record.candidate_id}
+            )
+    else:
+        training_results = train_candidate_panel(
+            candidate_records,
+            schedule,
+            objective=_objective_from_dict(training.get("objective", {})),
+            device=str(training.get("device", "cuda")),
+            burn_in=int(training.get("burn_in", AXOMAMBA_DEFAULT_BURN_IN)),
+            seed=seed,
+            prefetch_batches=int(training.get("prefetch_batches", 1)),
+            pin_memory=bool(training.get("pin_memory", False)),
+            non_blocking=bool(training.get("non_blocking", True)),
+            warmup_cuda=bool(training.get("warmup_cuda", True)),
+        )
+        for metrics in training_results.values():
+            metrics["schedule_path"] = str(schedule_path.resolve())
+        for record in candidate_records:
+            training_results[record.candidate_id]["initial_parameter_values"] = getattr(
+                record, "initial_parameter_values", {}
+            )
+            training_results[record.candidate_id]["initial_parameter_offsets"] = getattr(
+                record, "initial_parameter_offsets", {}
+            )
+            training_results[record.candidate_id]["frozen_parameter_names"] = getattr(
+                record, "frozen_parameter_names", []
+            )
+            training_results[record.candidate_id]["buffer_artifacts"] = getattr(
+                record, "buffer_artifacts", []
+            )
+            training_results[record.candidate_id]["initial_checkpoint"] = getattr(
+                record, "initial_checkpoint", None
+            )
+            Path(record.metrics_path).write_text(
+                json.dumps(training_results[record.candidate_id], indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+    diagnostic_results = _run_diagnostics(
+        manifest,
+        candidate_records=candidate_records,
+        training_results=training_results,
+        dataset_root=dataset_root,
+        diagnostics_root=diagnostics_root,
+        diagnostics=diagnostics,
+    )
+    result = {
+        **plan,
+        "manifest": str(manifest_path),
+        "dataset_root": str(dataset_root),
+        "schedule_path": str(schedule_path.resolve()),
+        "schedule_metadata": base_schedule.metadata,
+        "run_root": str(run_root.resolve()),
+        "diagnostics_root": str(diagnostics_root.resolve()),
+        "training": training_results,
+        "diagnostics": diagnostic_results,
+    }
+    (run_root / "iteration-summary.json").write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (diagnostics_root / "iteration-summary.json").write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return result
+
+
+def _build_candidates(
+    specifications: list[dict[str, Any]],
+    *,
+    training: dict[str, Any],
+    run_root: Path,
+    manifest_path: Path,
+    seed: int,
+) -> list[PanelCandidate]:
+    base_config_path = _resolve_path(training.get("model_config", DEFAULT_CONFIG_PATH), manifest_path)
+    base_config = json.loads(base_config_path.read_text(encoding="utf-8"))
+    initial_checkpoint = None
+    initial_checkpoint_value = training.get("initial_checkpoint")
+    if initial_checkpoint_value is not None:
+        initial_checkpoint_path = _resolve_path(initial_checkpoint_value, manifest_path)
+        reference, initial_metadata = load_checkpoint(initial_checkpoint_path, map_location="cpu")
+        if not isinstance(reference, AxoMamba):
+            raise ValueError("initial_checkpoint must contain an AxoMamba model")
+        if asdict(reference.config) != asdict(AxoMambaConfig(**base_config)):
+            raise ValueError("initial_checkpoint config does not match training model_config")
+        initial_checkpoint = {
+            "path": str(initial_checkpoint_path),
+            "sha256": hashlib.sha256(initial_checkpoint_path.read_bytes()).hexdigest(),
+            "metadata": initial_metadata,
+        }
+    else:
+        torch.manual_seed(seed)
+        reference = AxoMamba(AxoMambaConfig(**base_config))
+    reference_state = reference.state_dict()
+    del reference
+
+    records = []
+    for specification in specifications:
+        candidate_id = str(specification["id"])
+        config = dict(base_config)
+        config.update(specification.get("config_overrides", {}))
+        torch.manual_seed(seed)
+        model = AxoMamba(AxoMambaConfig(**config))
+        candidate_state = model.state_dict()
+        shared = {
+            name: tensor
+            for name, tensor in reference_state.items()
+            if name in candidate_state and candidate_state[name].shape == tensor.shape
+        }
+        candidate_state.update(shared)
+        model.load_state_dict(candidate_state, strict=True)
+        buffer_artifact = specification.get("buffer_artifact")
+        buffer_artifacts = specification.get("buffer_artifacts")
+        if buffer_artifact is not None and buffer_artifacts is not None:
+            raise ValueError("candidate may use buffer_artifact or buffer_artifacts, not both")
+        if buffer_artifacts is None:
+            artifact_specs = [] if buffer_artifact is None else [buffer_artifact]
+        elif isinstance(buffer_artifacts, list):
+            artifact_specs = buffer_artifacts
+        else:
+            raise ValueError("candidate buffer_artifacts must be a list")
+        loaded_buffer_artifacts = []
+        loaded_buffer_names: set[str] = set()
+        for artifact_spec in artifact_specs:
+            if not isinstance(artifact_spec, dict):
+                raise ValueError("candidate buffer artifact must be an object")
+            required = {"buffer_name", "path", "key"}
+            missing = sorted(required - set(artifact_spec))
+            if missing:
+                raise ValueError(f"candidate buffer_artifact is missing fields: {missing}")
+            buffer_name = str(artifact_spec["buffer_name"])
+            if buffer_name in loaded_buffer_names:
+                raise ValueError(f"candidate buffer artifact repeats {buffer_name!r}")
+            loaded_buffer_names.add(buffer_name)
+            loaded_buffer_artifacts.append(load_named_buffer_artifact(
+                model,
+                buffer_name=buffer_name,
+                artifact_path=_resolve_path(artifact_spec["path"], manifest_path),
+                key=str(artifact_spec["key"]),
+                expected_morphology_ids=config.get("morphology_ids"),
+            ))
+        initial_parameter_values = {
+            str(name): float(value)
+            for name, value in specification.get("initial_parameter_values", {}).items()
+        }
+        initialize_named_parameters(model, initial_parameter_values)
+        initial_parameter_offsets = {
+            str(name): float(value)
+            for name, value in specification.get("initial_parameter_offsets", {}).items()
+        }
+        offset_named_parameters(model, initial_parameter_offsets)
+        frozen_parameter_names = [
+            str(name) for name in specification.get("frozen_parameter_names", [])
+        ]
+        freeze_named_parameters(model, frozen_parameter_names)
+        objective_values = dict(training.get("objective", {}))
+        objective_values.update(specification.get("objective_overrides", {}))
+        record = PanelCandidate(
+            candidate_id=candidate_id,
+            model=model,
+            batch_size=int(specification.get("batch_size", training.get("batch_size", 64))),
+            checkpoint_path=run_root / candidate_id / "checkpoint.pt",
+            metrics_path=run_root / candidate_id / "training-metrics.json",
+            learning_rate=float(specification.get("learning_rate", training.get("learning_rate", 3e-4))),
+            optimizer_name=str(specification.get("optimizer", training.get("optimizer", "adamw"))),
+            weight_decay=float(specification.get("weight_decay", training.get("weight_decay", 1e-4))),
+            lr_schedule=str(specification.get("lr_schedule", training.get("lr_schedule", "constant"))),
+            grad_clip_norm=float(specification.get("grad_clip_norm", training.get("grad_clip_norm", 0.0))),
+            objective=_objective_from_dict(objective_values),
+            burn_in=int(
+                specification.get(
+                    "burn_in", training.get("burn_in", AXOMAMBA_DEFAULT_BURN_IN)
+                )
+            ),
+        )
+        setattr(record, "model_config", config)
+        setattr(record, "shared_initial_tensors", len(shared))
+        setattr(record, "initial_parameter_values", initial_parameter_values)
+        setattr(record, "initial_parameter_offsets", initial_parameter_offsets)
+        setattr(record, "frozen_parameter_names", sorted(frozen_parameter_names))
+        setattr(record, "buffer_artifacts", loaded_buffer_artifacts)
+        setattr(record, "initial_checkpoint", initial_checkpoint)
+        records.append(record)
+    return records
+
+
+def _run_diagnostics(
+    manifest: dict[str, Any],
+    *,
+    candidate_records: list[PanelCandidate],
+    training_results: dict[str, dict[str, Any]],
+    dataset_root: Path,
+    diagnostics_root: Path,
+    diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    eval_config = EvaluationConfig(
+        ignore_start=int(diagnostics.get("ignore_start", 500)),
+        calibration_fraction=float(diagnostics.get("calibration_fraction", 0.25)),
+        default_spike_threshold=float(diagnostics.get("default_spike_threshold", 0.0)),
+    )
+    common = {
+        "dataset_root": dataset_root,
+        "max_samples": int(diagnostics.get("max_samples", 120)),
+        "batch_size": int(diagnostics.get("batch_size", 128)),
+        "max_intervention_samples": int(diagnostics.get("max_intervention_samples", 40)),
+        "max_interventions": int(diagnostics.get("max_interventions", 8)),
+        "intervention_workers": int(diagnostics.get("intervention_workers", 4)),
+        "intervention_names": diagnostics.get("intervention_names"),
+        "multiple_morphologies": bool(diagnostics.get("multiple_morphologies", True)),
+        "morphology_id": diagnostics.get("morphology_id"),
+        "config": eval_config,
+    }
+    record_by_id = {record.candidate_id: record for record in candidate_records}
+    baseline_cache_value = manifest.get("baseline_cache")
+    baseline_id = None
+    if baseline_cache_value:
+        baseline_cache_path = _resolve_path(baseline_cache_value, Path.cwd() / "manifest.json")
+        baseline_cache = load_model_evaluation_cache(baseline_cache_path)
+        baseline_id = baseline_cache.model_id
+    else:
+        baseline_specs = [item for item in manifest["candidates"] if item.get("baseline")]
+        if len(baseline_specs) != 1:
+            raise ValueError("manifest needs one baseline candidate or baseline_cache")
+        baseline_id = str(baseline_specs[0]["id"])
+        record = record_by_id[baseline_id]
+        predictor, checkpoint_metadata = make_checkpoint_predictor(
+            record.checkpoint_path,
+            device=str(diagnostics.get("device", "cuda")),
+        )
+        baseline_cache = create_model_evaluation_cache(
+            predictor,
+            model_id=baseline_id,
+            **common,
+        )
+        baseline_cache.report["checkpoint"] = str(Path(record.checkpoint_path).resolve())
+        baseline_cache.report["checkpoint_metadata"] = checkpoint_metadata
+        baseline_cache.report["training_metrics"] = training_results[baseline_id]
+        baseline_cache_path = diagnostics_root / "baseline-cache.npz"
+        write_model_evaluation_cache(baseline_cache, baseline_cache_path)
+        write_evaluation_report(baseline_cache.report, diagnostics_root / f"{baseline_id}.json")
+        baseline_cache = load_model_evaluation_cache(baseline_cache_path)
+
+    summaries: dict[str, Any] = {
+        "baseline_id": baseline_id,
+        "baseline_cache": str(Path(baseline_cache_path).resolve()),
+        "candidates": {},
+    }
+    for record in candidate_records:
+        if record.candidate_id == baseline_id and manifest.get("baseline_cache") is None:
+            summaries["candidates"][record.candidate_id] = {
+                "role": "baseline",
+                "report": str((diagnostics_root / f"{baseline_id}.json").resolve()),
+                "metrics": _metric_values(baseline_cache.report),
+            }
+            continue
+        predictor, checkpoint_metadata = make_checkpoint_predictor(
+            record.checkpoint_path,
+            device=str(diagnostics.get("device", "cuda")),
+        )
+        comparison = evaluate_model_against_cache(
+            predictor,
+            baseline_cache=baseline_cache,
+            candidate_id=record.candidate_id,
+            bootstrap_replicates=int(diagnostics.get("bootstrap_replicates", 250)),
+            bootstrap_seed=int(diagnostics.get("bootstrap_seed", 20260711)),
+            **common,
+        )
+        comparison["candidate"]["checkpoint"] = str(Path(record.checkpoint_path).resolve())
+        comparison["candidate"]["checkpoint_metadata"] = checkpoint_metadata
+        comparison["candidate"]["training_metrics"] = training_results[record.candidate_id]
+        comparison["candidate"]["model_config"] = getattr(record, "model_config")
+        output = diagnostics_root / f"{record.candidate_id}-vs-{baseline_id}.json"
+        write_model_comparison(comparison, output)
+        summaries["candidates"][record.candidate_id] = {
+            "role": "candidate",
+            "comparison": str(output.resolve()),
+            "metrics": _metric_values(comparison["candidate"]),
+            "deltas": {row["id"]: row["delta"] for row in comparison["comparison"]},
+            "assessments": {row["id"]: row["assessment"] for row in comparison["comparison"]},
+            "attention_yes": [
+                row["id"] for row in comparison["candidate"]["diagnostics"] if row["attention"] == "YES"
+            ],
+        }
+    return summaries
+
+
+def _objective_from_dict(values: dict[str, Any]) -> TrainingObjective:
+    resolved = dict(values)
+    if "f1_tolerances_steps" in resolved:
+        resolved["f1_tolerances_steps"] = tuple(int(value) for value in resolved["f1_tolerances_steps"])
+    return TrainingObjective(**resolved)
+
+
+def _metric_values(report: dict[str, Any]) -> dict[str, float | None]:
+    return {row["id"]: row["value"] for row in report["metrics"]}
+
+
+def _resolve_path(value: str | Path, manifest_path: Path) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    project_candidate = (PROJECT_ROOT / path).resolve()
+    if project_candidate.exists() or str(path).startswith(("data/", "runs/", "docs/", "configs/")):
+        return project_candidate
+    return (manifest_path.parent / path).resolve()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

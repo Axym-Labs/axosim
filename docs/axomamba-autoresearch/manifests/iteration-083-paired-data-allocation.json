@@ -1,0 +1,20 @@
+{
+  "iteration": 83,
+  "name": "paired-data-allocation",
+  "candidates": [
+    {"id": "ordinary_control", "baseline": true, "config_overrides": {}, "paired_response_fraction": 0.0},
+    {"id": "paired_0p125", "config_overrides": {}, "paired_response_fraction": 0.125},
+    {"id": "paired_0p25", "config_overrides": {}, "paired_response_fraction": 0.25},
+    {"id": "paired_0p375", "config_overrides": {}, "paired_response_fraction": 0.375},
+    {"id": "paired_0p5", "config_overrides": {}, "paired_response_fraction": 0.5},
+    {"id": "paired_0p75", "config_overrides": {}, "paired_response_fraction": 0.75}
+  ],
+  "training": {
+    "batch_size": 32, "schedule_batch_size": 64, "shard_reuse_batches": 16,
+    "seed": 20260716, "device": "cuda", "burn_in": 50, "learning_rate": 0.0006,
+    "optimizer": "adamw", "weight_decay": 0.0001, "lr_schedule": "cosine",
+    "heldout_intervention_shards_per_group": 1,
+    "objective": {"spike_loss_weight": 0.25, "soma_loss_weight": 0.75, "direct_sera_loss_weight": 0.01, "f1_curve_loss_weight": 0.05, "response_sera_loss_weight": 0.0, "sera_threshold_count": 101, "f1_tolerances_steps": [0,1,2,3,4,5,5]}
+  },
+  "diagnostics": {"device": "cuda", "max_samples": 120, "batch_size": 16, "max_intervention_samples": 40, "max_interventions": 8, "intervention_workers": 4, "multiple_morphologies": true, "bootstrap_replicates": 250, "bootstrap_seed": 20260716}
+}

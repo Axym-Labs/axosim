@@ -7,6 +7,7 @@ import numpy as np
 from axosim.axobench_iteration import make_checkpoint_predictor
 from axosim.axobench_iteration import main as evaluate_main
 from axosim.checkpoint import save_checkpoint
+from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
 from axosim.model import BranchELM, BranchELMConfig
 
 
@@ -23,6 +24,34 @@ def test_checkpoint_predictor_is_batch_callable_and_returns_numpy(tmp_path) -> N
     assert output.shape == (2, 7, 2)
     assert output.dtype == np.float32
     assert metadata["model_kind"] == "baseline"
+
+
+def test_checkpoint_predictor_maps_morphology_ids_for_conditioned_model(tmp_path) -> None:
+    checkpoint = tmp_path / "conditioned.pt"
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=4,
+            num_branch=2,
+            num_synapse_per_branch=2,
+            model_dim=4,
+            num_layers=1,
+            state_dim=2,
+            conv_kernel=2,
+            expansion=2,
+            morphology_ids=["specimen_a", "specimen_b"],
+            morphology_embedding_scale=1.0,
+        )
+    )
+    save_checkpoint(model, checkpoint)
+    predictor, _ = make_checkpoint_predictor(checkpoint, device="cpu")
+
+    output = predictor(
+        np.zeros((2, 7, 4), dtype=np.int8),
+        morphology_ids=["specimen_a", "specimen_b"],
+    )
+
+    assert output.shape == (2, 7, 2)
+    assert predictor.supports_morphology_ids is True
 
 
 def test_cli_saves_only_when_output_path_is_given(tmp_path) -> None:
@@ -115,3 +144,103 @@ def test_cli_selects_requested_morphology(tmp_path) -> None:
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["morphology_mode"] == "single"
     assert report["morphology_ids"] == ["specimen_200"]
+
+
+def test_cli_compares_candidate_with_baseline_on_paired_sample(tmp_path) -> None:
+    checkpoint = tmp_path / "candidate.pt"
+    baseline = tmp_path / "baseline.pt"
+    model = BranchELM(BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4))
+    save_checkpoint(model, checkpoint)
+    save_checkpoint(model, baseline)
+    val = tmp_path / "dataset" / "val"
+    val.mkdir(parents=True)
+    inputs = np.zeros((8, 12, 4), dtype=np.float32)
+    targets = np.zeros((8, 12, 2), dtype=np.float32)
+    np.savez_compressed(val / "val.npz", inputs=inputs, targets=targets)
+    output = tmp_path / "comparison.json"
+
+    assert evaluate_main(
+        [
+            str(checkpoint),
+            "--baseline-checkpoint",
+            str(baseline),
+            "--dataset-root",
+            str(tmp_path / "dataset"),
+            "--device",
+            "cpu",
+            "--max-samples",
+            "8",
+            "--max-interventions",
+            "0",
+            "--ignore-start",
+            "0",
+            "--bootstrap-replicates",
+            "10",
+            "--output",
+            str(output),
+        ]
+    ) == 0
+
+    comparison = json.loads(output.read_text(encoding="utf-8"))
+    assert comparison["candidate"]["samples"] == comparison["baseline"]["samples"] == 8
+    assert {row["assessment"] for row in comparison["comparison"]} == {"uncertain"}
+
+
+def test_cli_saves_and_reuses_baseline_cache(tmp_path) -> None:
+    checkpoint = tmp_path / "candidate.pt"
+    baseline = tmp_path / "baseline.pt"
+    model = BranchELM(BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4))
+    save_checkpoint(model, checkpoint)
+    save_checkpoint(model, baseline)
+    val = tmp_path / "dataset" / "val"
+    val.mkdir(parents=True)
+    inputs = np.zeros((8, 12, 4), dtype=np.float32)
+    targets = np.zeros((8, 12, 2), dtype=np.float32)
+    np.savez_compressed(val / "val.npz", inputs=inputs, targets=targets)
+    cache = tmp_path / "baseline-cache.npz"
+
+    assert evaluate_main(
+        [
+            str(baseline),
+            "--dataset-root",
+            str(tmp_path / "dataset"),
+            "--device",
+            "cpu",
+            "--max-samples",
+            "8",
+            "--max-interventions",
+            "0",
+            "--ignore-start",
+            "0",
+            "--save-cache",
+            str(cache),
+        ]
+    ) == 0
+    assert cache.exists()
+
+    output = tmp_path / "comparison.json"
+    assert evaluate_main(
+        [
+            str(checkpoint),
+            "--baseline-cache",
+            str(cache),
+            "--dataset-root",
+            str(tmp_path / "dataset"),
+            "--device",
+            "cpu",
+            "--max-samples",
+            "8",
+            "--max-interventions",
+            "0",
+            "--ignore-start",
+            "0",
+            "--bootstrap-replicates",
+            "10",
+            "--output",
+            str(output),
+        ]
+    ) == 0
+
+    comparison = json.loads(output.read_text(encoding="utf-8"))
+    assert comparison["baseline_cache"] == str(cache.resolve())
+    assert {row["assessment"] for row in comparison["comparison"]} == {"uncertain"}

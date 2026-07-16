@@ -108,6 +108,21 @@ intervention loaders. Add `--multiple-morphologies` to distribute the same
 only prints to the terminal unless `--output report.json` or
 `--output report.csv` is supplied.
 
+Compare a candidate against a frozen baseline on exactly paired traces:
+
+```bash
+axosim-evaluate-model runs/candidate.pt \
+  --baseline-checkpoint runs/baseline.pt \
+  --dataset-root data/axobench-v1 \
+  --device cuda \
+  --output runs/candidate-vs-baseline.json
+```
+
+The command prints the candidate attention panel followed by six paired
+metric deltas, 95% bootstrap intervals, and per-metric statistical evidence.
+Use `--bootstrap-replicates` and `--bootstrap-seed` to change the default
+250-replicate deterministic comparison.
+
 ## Smoke Workflow
 
 Create deterministic demo NeuronIO-style shards:
@@ -187,7 +202,14 @@ axosim benchmark \
 
 - Deterministic pre-sharded loader for NeuronIO-style `(samples, time, channels)` inputs and two-output spike/soma targets.
 - Official paper-repo ELM / Branch-ELM runtime, routing, synaptic trace state, memory state, and spike/soma readout.
-- `AxoMamba`, the reusable promoted Mamba surrogate configuration.
+- `AxoMamba`, the reusable 90,156-parameter promoted Mamba surrogate
+  configuration. Its separate readouts retain route occupancy, morphology-
+  conditioned synaptic efficacy, branch saturation, and the post-Mamba local
+  TCN; a matched 300k ablation removed the recoverable soma gate and bilinear
+  branch interaction.
+- The promoted AxoMamba training objective uses the raw soma-voltage trace
+  scored by AxoBench; the legacy `targets[..., 1]` channel clips action
+  potentials above -55 mV and is retained only for controlled comparisons.
 - Legacy simplified BranchELM path kept for smoke tests.
 - BCE + MSE training loop with burn-in support.
 - Checkpoint save/load with model config metadata.

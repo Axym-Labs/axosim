@@ -12,6 +12,143 @@ from axosim.official import ELM, create_official_elm
 from axosim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
 
 
+_RETIRED_AXOMAMBA_CONFIG_KEYS = frozenset(
+    {
+        "auxiliary_voltage_horizons",
+        "branch_impulse_delay_max_steps",
+        "branch_impulse_delay_mode",
+        "branch_impulse_delay_scale",
+        "branch_readout_skip_mode",
+        "branch_readout_skip_scale",
+        "detach_spike_readout_features",
+        "detach_spike_voltage_coupling",
+        "hybrid_embedding_dim",
+        "hybrid_embedding_mode",
+        "hybrid_embedding_scale",
+        "local_tcn_gate_mode",
+        "local_tcn_gate_scale",
+        "nonlinear_bypass_hidden",
+        "nonlinear_bypass_mode",
+        "nonlinear_bypass_scale",
+        "spike_delay_count",
+        "spike_delay_max_steps",
+        "spike_delay_mode",
+        "spike_delay_scale",
+        "final_norm_mix",
+        "branch_local_mamba_scale",
+        "branch_local_model_dim",
+        "branch_local_state_dim",
+        "branch_memory_taus",
+        "branch_memory_kernel",
+        "branch_memory_scale",
+        "branch_dynamic_gate_rank",
+        "branch_dynamic_gate_scale",
+        "branch_bilinear_mode",
+        "branch_bilinear_temporal_taus",
+        "branch_bilinear_temporal_kernel",
+        "branch_bilinear_temporal_mode",
+        "branch_forcing_reinject_scale",
+        "branch_forcing_residual_hidden",
+        "branch_forcing_residual_scale",
+        "branch_forcing_residual_source",
+        "branch_interaction_state_gate_scale",
+        "branch_latent_tokens",
+        "branch_latent_dim",
+        "branch_latent_layers",
+        "branch_latent_mode",
+        "branch_latent_assignment",
+        "branch_latent_temperature",
+        "channel_groups",
+        "share_group_mamba",
+        "hybrid_current_kernel",
+        "hybrid_current_mode",
+        "input_load_conditioning_scale",
+        "liquid_soma_kernel",
+        "liquid_soma_mode",
+        "liquid_soma_taus",
+        "local_tcn_iteration_mode",
+        "local_tcn_iterations",
+        "local_tcn_coarse_mode",
+        "local_tcn_coarse_scale",
+        "membrane_branchwise_capacity",
+        "membrane_state_dim",
+        "membrane_state_kernel",
+        "membrane_state_mode",
+        "membrane_state_scale",
+        "latent_distillation_adapter",
+        "event_change_decoder_detach",
+        "event_change_decoder_hidden",
+        "event_change_decoder_scale",
+        "event_change_decoder_source",
+        "event_lift_kernel",
+        "event_lift_mode",
+        "event_lift_scale",
+        "morphology_branch_gain_scale",
+        "morphology_input_routing",
+        "morphology_adapter_mode",
+        "morphology_adapter_rank",
+        "morphology_adapter_scale",
+        "morphology_film_scale",
+        "morphology_reinject_scale",
+        "morphology_readout_expert_mode",
+        "morphology_readout_expert_scale",
+        "morphology_route_moment_dim",
+        "morphology_route_moment_hidden",
+        "morphology_route_moment_scale",
+        "morphology_route_moment_source",
+        "morphology_route_partition_hidden",
+        "morphology_route_partition_scale",
+        "morphology_route_partition_source",
+        "morphology_route_residual_hidden",
+        "morphology_route_residual_scale",
+        "morphology_soma_affine_scale",
+        "morphology_synapse_graph_degree",
+        "morphology_synapse_graph_scale",
+        "morphology_synapse_validity_scale",
+        "polarity_group_port",
+        "predictor_corrector_dim",
+        "predictor_corrector_scale",
+        "predictor_corrector_source",
+        "parameter_padding",
+        "recurrent_tail",
+        "regime_transition_hidden",
+        "regime_transition_mode",
+        "regime_transition_scale",
+        "soma_final_norm_mix",
+        "soma_basis_kernel",
+        "soma_basis_mode",
+        "soma_basis_scale",
+        "soma_basis_taus",
+        "soma_calibration_knots",
+        "soma_calibration_scale",
+        "soma_spike_waveform_detach",
+        "soma_spike_waveform_kernel",
+        "soma_spike_waveform_scale",
+        "detach_spike_waveform",
+        "spike_waveform_kernel",
+        "spike_waveform_scale",
+        "spike_coupling_soma_source",
+        "detach_spike_onset",
+        "detach_spike_refractory",
+        "spike_onset_scale",
+        "spike_onset_steps",
+        "spike_refractory_scale",
+        "spike_refractory_steps",
+        "synapse_trace_kernel",
+        "synapse_trace_mixture",
+        "synapse_trace_residual",
+        "synapse_trace_taus",
+        "task_head_mamba_mode",
+        "task_head_mamba_scale",
+        "voltage_state_decay_init",
+        "voltage_state_decoder_hidden",
+        "voltage_state_decoder_mode",
+        "voltage_state_decoder_scale",
+        "voltage_state_kernel",
+    }
+)
+
+
 def save_checkpoint(model: torch.nn.Module, path: str | Path, *, metadata: dict[str, Any] | None = None) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -38,12 +175,12 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
     elif model_kind == "axomamba":
         from axosim.axomamba import AxoMamba, AxoMambaConfig
 
-        config = AxoMambaConfig(**payload["config"])
+        config = AxoMambaConfig(**_active_axomamba_config(payload["config"]))
         model = AxoMamba(config)
     elif model_kind == "axomamba-pytorch":
         from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
 
-        config = AxoMambaConfig(**payload["config"])
+        config = AxoMambaConfig(**_active_axomamba_config(payload["config"]))
         model = AxoPyTorchMamba(config)
     elif model_kind == "mamba-official":
         from axosim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
@@ -62,8 +199,15 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
     else:
         raise ValueError(f"unknown model_kind in checkpoint: {model_kind}")
     strict = model_kind != "branch-trace-rnn"
-    model.load_state_dict(payload["state_dict"], strict=strict)
+    state_dict = dict(payload["state_dict"])
+    if "branch_subunit_mask" in model.state_dict() and "branch_subunit_mask" not in state_dict:
+        state_dict["branch_subunit_mask"] = model.state_dict()["branch_subunit_mask"]
+    model.load_state_dict(state_dict, strict=strict)
     return model, dict(payload.get("metadata", {}))
+
+
+def _active_axomamba_config(config: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in config.items() if key not in _RETIRED_AXOMAMBA_CONFIG_KEYS}
 
 
 def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]]:

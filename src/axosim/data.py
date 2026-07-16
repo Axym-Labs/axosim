@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Literal
+import zipfile
 
 import numpy as np
 
@@ -46,6 +47,7 @@ class ShardedNeuronIODataset:
         self.shuffle_mode = shuffle_mode
         self.shuffle_enabled = shuffle
         self._shard_cache: OrderedDict[int, tuple[np.ndarray, np.ndarray]] = OrderedDict()
+        self._optional_shard_cache: OrderedDict[tuple[int, str], np.ndarray] = OrderedDict()
         self.shards, self._index = self._load_manifest_shards_and_index()
 
         if not self.shards:
@@ -106,14 +108,26 @@ class ShardedNeuronIODataset:
         entries = [self._index[int(index)] for index in indices]
         arrays: list[np.ndarray] = []
         for shard_idx, sample_indices in _group_sample_indices_by_shard(entries):
-            shard = self.shards[shard_idx]
-            if shard.path is None:
+            values = self._load_cached_optional_array(shard_idx, name)
+            if values is None:
                 return None
-            with _open_shard(shard) as data:
-                if name not in data:
-                    return None
-                arrays.append(np.asarray(data[name][sample_indices]))
+            arrays.append(np.asarray(values[sample_indices]))
         return np.concatenate(arrays, axis=0) if arrays else None
+
+    def get_shard_sequence_length(self, shard_idx: int) -> int:
+        """Read the input time dimension without materializing a shard array."""
+        shard = self.shards[shard_idx]
+        if shard.inputs_path is not None:
+            inputs = np.load(shard.inputs_path, mmap_mode="r", allow_pickle=False)
+            shape = inputs.shape
+        elif shard.path is not None and shard.path.suffix.lower() == ".npz":
+            shape = _npz_array_shape(shard.path, "inputs")
+        else:
+            with _open_shard(shard) as data:
+                shape = data["inputs"].shape
+        if len(shape) < 2:
+            raise ValueError(f"shard inputs must have a time dimension, got {shape}")
+        return int(shape[1])
 
     def _load_sample(self, shard_idx: int, sample_idx: int) -> tuple[np.ndarray, np.ndarray]:
         if self.cache_shards <= 0:
@@ -136,10 +150,33 @@ class ShardedNeuronIODataset:
                 np.asarray(data["inputs"]),
                 np.asarray(data["targets"], dtype=np.float32),
             )
+            if "soma_mv" in data:
+                self._cache_optional_array(shard_idx, "soma_mv", np.asarray(data["soma_mv"]))
         self._shard_cache[shard_idx] = cached
         while len(self._shard_cache) > self.cache_shards:
             self._shard_cache.popitem(last=False)
         return cached
+
+    def _load_cached_optional_array(self, shard_idx: int, name: str) -> np.ndarray | None:
+        key = (shard_idx, name)
+        cached = self._optional_shard_cache.get(key)
+        if cached is not None:
+            self._optional_shard_cache.move_to_end(key)
+            return cached
+        shard = self.shards[shard_idx]
+        if shard.path is None:
+            return None
+        with _open_shard(shard) as data:
+            if name not in data:
+                return None
+            values = np.asarray(data[name])
+        self._cache_optional_array(shard_idx, name, values)
+        return values
+
+    def _cache_optional_array(self, shard_idx: int, name: str, values: np.ndarray) -> None:
+        self._optional_shard_cache[(shard_idx, name)] = values
+        while len(self._optional_shard_cache) > self.cache_shards:
+            self._optional_shard_cache.popitem(last=False)
 
     def _load_shard(self, shard_idx: int) -> tuple[np.ndarray, np.ndarray]:
         with _open_shard(self.shards[shard_idx]) as data:
@@ -613,6 +650,23 @@ class _NpyShard:
         if key == "sample_ids" and self.sample_ids is not None:
             return self.sample_ids
         raise KeyError(key)
+
+
+def _npz_array_shape(path: Path, name: str) -> tuple[int, ...]:
+    with zipfile.ZipFile(path) as archive:
+        member = f"{name}.npy"
+        try:
+            with archive.open(member) as handle:
+                version = np.lib.format.read_magic(handle)
+                if version == (1, 0):
+                    shape, _, _ = np.lib.format.read_array_header_1_0(handle)
+                elif version == (2, 0):
+                    shape, _, _ = np.lib.format.read_array_header_2_0(handle)
+                else:
+                    shape, _, _ = np.lib._format_impl._read_array_header(handle, version)
+        except KeyError as error:
+            raise KeyError(f"{name!r} is missing from {path}") from error
+    return tuple(int(size) for size in shape)
 
 
 def _open_shard(shard: _ShardFiles):

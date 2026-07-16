@@ -78,6 +78,14 @@ def test_sharded_dataset_can_read_optional_npz_array_batches(tmp_path):
     assert dataset.get_optional_array_batch("missing", [0]) is None
 
 
+def test_sharded_dataset_reads_npz_shape_without_loading_array_payload(tmp_path):
+    write_demo_shards(tmp_path, shard_count=1, samples_per_shard=2, time_steps=17, input_dim=3, seed=5)
+    dataset = ShardedNeuronIODataset(tmp_path, cache_shards=1)
+
+    assert dataset.get_shard_sequence_length(0) == 17
+    assert not dataset._shard_cache
+
+
 def test_window_dataset_enumerates_fixed_windows_deterministically(tmp_path):
     write_demo_shards(tmp_path, shard_count=1, samples_per_shard=2, time_steps=10, input_dim=3, seed=5)
 

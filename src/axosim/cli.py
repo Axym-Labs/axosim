@@ -40,7 +40,7 @@ from axosim.train import train_and_save
 
 DEFAULT_OFFICIAL_MODEL_CONFIG = "configs/branch_elm_30_official.json"
 DEFAULT_MAMBA_OFFICIAL_MODEL_CONFIG = "configs/branch_mamba_official_45x64.json"
-DEFAULT_AXOMAMBA_MODEL_CONFIG = "configs/axomamba_45x64.json"
+DEFAULT_AXOMAMBA_MODEL_CONFIG = "configs/axomamba.json"
 MODEL_KIND_CHOICES = [
     "baseline",
     "official",

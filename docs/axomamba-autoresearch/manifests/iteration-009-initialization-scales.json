@@ -1,0 +1,77 @@
+{
+  "iteration": 9,
+  "name": "initialization-scales",
+  "candidates": [
+    {
+      "id": "init_0p1_control",
+      "baseline": true,
+      "config_overrides": {}
+    },
+    {
+      "id": "residual_init_0p03",
+      "config_overrides": {},
+      "initial_parameter_values": {
+        "blocks.0.residual_scale": 0.03,
+        "blocks.1.residual_scale": 0.03
+      }
+    },
+    {
+      "id": "residual_init_0p3",
+      "config_overrides": {},
+      "initial_parameter_values": {
+        "blocks.0.residual_scale": 0.3,
+        "blocks.1.residual_scale": 0.3
+      }
+    },
+    {
+      "id": "branch_tanh_init_0p03",
+      "config_overrides": {},
+      "initial_parameter_values": {"branch_nonlinearity_log_scale": -3.5065578973}
+    },
+    {
+      "id": "branch_tanh_init_0p3",
+      "config_overrides": {},
+      "initial_parameter_values": {"branch_nonlinearity_log_scale": -1.2039728043}
+    },
+    {
+      "id": "soma_gate_init_0p03",
+      "config_overrides": {},
+      "initial_parameter_values": {"soma_multiplicative_scale": 0.03}
+    },
+    {
+      "id": "soma_gate_init_0p3",
+      "config_overrides": {},
+      "initial_parameter_values": {"soma_multiplicative_scale": 0.3}
+    }
+  ],
+  "training": {
+    "batch_size": 32,
+    "schedule_batch_size": 64,
+    "shard_reuse_batches": 16,
+    "seed": 20260711,
+    "device": "cuda",
+    "burn_in": 150,
+    "learning_rate": 0.0006,
+    "optimizer": "adamw",
+    "weight_decay": 0.0001,
+    "lr_schedule": "cosine",
+    "objective": {
+      "spike_loss_weight": 0.25,
+      "soma_loss_weight": 0.75,
+      "direct_sera_loss_weight": 0.005,
+      "f1_curve_loss_weight": 0.05,
+      "sera_threshold_count": 21,
+      "f1_tolerances_steps": [0, 1, 2, 3, 4, 5]
+    }
+  },
+  "diagnostics": {
+    "device": "cuda",
+    "max_samples": 120,
+    "batch_size": 16,
+    "max_intervention_samples": 40,
+    "max_interventions": 8,
+    "intervention_workers": 4,
+    "multiple_morphologies": true,
+    "bootstrap_replicates": 250
+  }
+}

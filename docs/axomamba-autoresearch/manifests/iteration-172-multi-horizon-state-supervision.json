@@ -1,0 +1,82 @@
+{
+  "iteration": 172,
+  "name": "multi-horizon-state-supervision",
+  "candidates": [
+    {
+      "id": "current_state_control",
+      "baseline": true,
+      "config_overrides": {"auxiliary_voltage_horizons": 3},
+      "objective_overrides": {
+        "multi_horizon_voltage_loss_weight": 0.01,
+        "multi_horizon_steps": [0, 0, 0],
+        "multi_horizon_crop_steps": 100
+      },
+      "buffer_artifact": {
+        "buffer_name": "morphology_synapse_features",
+        "path": "docs/axomamba-autoresearch/artifacts/routes/v1-i140-feature-gate.npz",
+        "key": "features_occupancy"
+      }
+    },
+    {
+      "id": "short_horizons_1_5_20",
+      "config_overrides": {"auxiliary_voltage_horizons": 3},
+      "objective_overrides": {
+        "multi_horizon_voltage_loss_weight": 0.01,
+        "multi_horizon_steps": [1, 5, 20],
+        "multi_horizon_crop_steps": 100
+      },
+      "buffer_artifact": {
+        "buffer_name": "morphology_synapse_features",
+        "path": "docs/axomamba-autoresearch/artifacts/routes/v1-i140-feature-gate.npz",
+        "key": "features_occupancy"
+      }
+    },
+    {
+      "id": "multiscale_horizons_5_25_100",
+      "config_overrides": {"auxiliary_voltage_horizons": 3},
+      "objective_overrides": {
+        "multi_horizon_voltage_loss_weight": 0.01,
+        "multi_horizon_steps": [5, 25, 100],
+        "multi_horizon_crop_steps": 100
+      },
+      "buffer_artifact": {
+        "buffer_name": "morphology_synapse_features",
+        "path": "docs/axomamba-autoresearch/artifacts/routes/v1-i140-feature-gate.npz",
+        "key": "features_occupancy"
+      }
+    }
+  ],
+  "training": {
+    "batch_size": 32,
+    "schedule_batch_size": 64,
+    "shard_reuse_batches": 16,
+    "seed": 20260797,
+    "device": "cuda",
+    "burn_in": 50,
+    "learning_rate": 0.0006,
+    "optimizer": "adamw",
+    "weight_decay": 0.0001,
+    "lr_schedule": "cosine",
+    "objective": {
+      "spike_loss_weight": 0.25,
+      "soma_loss_weight": 0.75,
+      "direct_sera_loss_weight": 0.01,
+      "f1_curve_loss_weight": 0.05,
+      "near_spike_voltage_loss_weight": 0.002,
+      "near_spike_radius_steps": 5,
+      "sera_threshold_count": 101,
+      "f1_tolerances_steps": [0, 1, 2, 3, 4, 5, 5]
+    }
+  },
+  "diagnostics": {
+    "device": "cuda",
+    "max_samples": 120,
+    "batch_size": 16,
+    "max_intervention_samples": 40,
+    "max_interventions": 8,
+    "intervention_workers": 4,
+    "multiple_morphologies": true,
+    "bootstrap_replicates": 250,
+    "bootstrap_seed": 20260797
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "active_branch_bin_fraction": 0.5983409722222223,
+  "both_ei_given_active": 0.25804452357270274,
+  "event_magnitude_cancelled_fraction": 0.3382730847048931,
+  "full_cancellation_given_active": 0.15224271742120285,
+  "mean_abs_ei_vs_signed_tanh_gap_all_bins_at_scale_0p1": 0.002060038980930452,
+  "schedule": "runs/axomamba-autoresearch/schedules/balanced-120000-seed20260711-b64-reuse16.npz",
+  "windows": 64
+}

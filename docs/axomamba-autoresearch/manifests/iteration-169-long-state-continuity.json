@@ -1,0 +1,59 @@
+{
+  "iteration": 169,
+  "name": "long-state-continuity",
+  "candidates": [
+    {
+      "id": "reset_500ms",
+      "baseline": true,
+      "reset_between_chunks": true,
+      "buffer_artifact": {
+        "buffer_name": "morphology_synapse_features",
+        "path": "docs/axomamba-autoresearch/artifacts/routes/v1-i140-feature-gate.npz",
+        "key": "features_occupancy"
+      }
+    },
+    {
+      "id": "continuous_2000ms",
+      "reset_between_chunks": false,
+      "buffer_artifact": {
+        "buffer_name": "morphology_synapse_features",
+        "path": "docs/axomamba-autoresearch/artifacts/routes/v1-i140-feature-gate.npz",
+        "key": "features_occupancy"
+      }
+    }
+  ],
+  "training": {
+    "sequence_chunks": 4,
+    "batch_size": 8,
+    "schedule_batch_size": 16,
+    "shard_reuse_batches": 16,
+    "seed": 20260794,
+    "device": "cuda",
+    "burn_in": 50,
+    "learning_rate": 0.0006,
+    "optimizer": "adamw",
+    "weight_decay": 0.0001,
+    "lr_schedule": "cosine",
+    "objective": {
+      "spike_loss_weight": 0.25,
+      "soma_loss_weight": 0.75,
+      "direct_sera_loss_weight": 0.01,
+      "f1_curve_loss_weight": 0.05,
+      "near_spike_voltage_loss_weight": 0.002,
+      "near_spike_radius_steps": 5,
+      "sera_threshold_count": 101,
+      "f1_tolerances_steps": [0, 1, 2, 3, 4, 5, 5]
+    }
+  },
+  "diagnostics": {
+    "device": "cuda",
+    "max_samples": 120,
+    "batch_size": 16,
+    "max_intervention_samples": 40,
+    "max_interventions": 8,
+    "intervention_workers": 4,
+    "multiple_morphologies": true,
+    "bootstrap_replicates": 250,
+    "bootstrap_seed": 20260794
+  }
+}

@@ -1,0 +1,125 @@
+{
+  "iteration": 135,
+  "name": "physical-segment-routing",
+  "candidates": [
+    {
+      "id": "generic_route_compute_control",
+      "baseline": true,
+      "config_overrides": {
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 1.0,
+        "morphology_input_routing": true,
+        "event_change_decoder_hidden": 32,
+        "event_change_decoder_scale": 0.0,
+        "event_change_decoder_source": "change"
+      },
+      "buffer_artifacts": [
+        {"buffer_name": "morphology_synapse_features", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-normalized-route-features.npz", "key": "features"},
+        {"buffer_name": "morphology_input_to_synapse_indices", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-morphology-physical-routing.npz", "key": "generic_indices"},
+        {"buffer_name": "morphology_input_to_synapse_weights", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-morphology-physical-routing.npz", "key": "generic_weights"}
+      ]
+    },
+    {
+      "id": "generic_route_change_replication",
+      "config_overrides": {
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 1.0,
+        "morphology_input_routing": true,
+        "event_change_decoder_hidden": 32,
+        "event_change_decoder_scale": 1.0,
+        "event_change_decoder_source": "change"
+      },
+      "buffer_artifacts": [
+        {"buffer_name": "morphology_synapse_features", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-normalized-route-features.npz", "key": "features"},
+        {"buffer_name": "morphology_input_to_synapse_indices", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-morphology-physical-routing.npz", "key": "generic_indices"},
+        {"buffer_name": "morphology_input_to_synapse_weights", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-morphology-physical-routing.npz", "key": "generic_weights"}
+      ]
+    },
+    {
+      "id": "physical_route_coordinate",
+      "config_overrides": {
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 1.0,
+        "morphology_input_routing": true,
+        "event_change_decoder_hidden": 32,
+        "event_change_decoder_scale": 0.0,
+        "event_change_decoder_source": "change"
+      },
+      "buffer_artifacts": [
+        {"buffer_name": "morphology_synapse_features", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-normalized-route-features.npz", "key": "features"},
+        {"buffer_name": "morphology_input_to_synapse_indices", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-morphology-physical-routing.npz", "key": "physical_indices"},
+        {"buffer_name": "morphology_input_to_synapse_weights", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-morphology-physical-routing.npz", "key": "physical_weights"}
+      ]
+    },
+    {
+      "id": "physical_route_change",
+      "config_overrides": {
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 1.0,
+        "morphology_input_routing": true,
+        "event_change_decoder_hidden": 32,
+        "event_change_decoder_scale": 1.0,
+        "event_change_decoder_source": "change"
+      },
+      "buffer_artifacts": [
+        {"buffer_name": "morphology_synapse_features", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-normalized-route-features.npz", "key": "features"},
+        {"buffer_name": "morphology_input_to_synapse_indices", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-morphology-physical-routing.npz", "key": "physical_indices"},
+        {"buffer_name": "morphology_input_to_synapse_weights", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-morphology-physical-routing.npz", "key": "physical_weights"}
+      ]
+    },
+    {
+      "id": "shuffled_physical_route_change",
+      "config_overrides": {
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 1.0,
+        "morphology_input_routing": true,
+        "event_change_decoder_hidden": 32,
+        "event_change_decoder_scale": 1.0,
+        "event_change_decoder_source": "change"
+      },
+      "buffer_artifacts": [
+        {"buffer_name": "morphology_synapse_features", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-normalized-route-features.npz", "key": "features"},
+        {"buffer_name": "morphology_input_to_synapse_indices", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-morphology-physical-routing.npz", "key": "physical_indices_shuffled"},
+        {"buffer_name": "morphology_input_to_synapse_weights", "path": "docs/axomamba-autoresearch/artifacts/routes/v1-morphology-physical-routing.npz", "key": "physical_weights_shuffled"}
+      ]
+    }
+  ],
+  "training": {
+    "batch_size": 32,
+    "schedule_batch_size": 64,
+    "shard_reuse_batches": 16,
+    "seed": 20260762,
+    "device": "cuda",
+    "burn_in": 50,
+    "learning_rate": 0.0006,
+    "optimizer": "adamw",
+    "weight_decay": 0.0001,
+    "lr_schedule": "cosine",
+    "objective": {
+      "spike_loss_weight": 0.25,
+      "soma_loss_weight": 0.75,
+      "direct_sera_loss_weight": 0.01,
+      "f1_curve_loss_weight": 0.05,
+      "near_spike_voltage_loss_weight": 0.002,
+      "near_spike_radius_steps": 5,
+      "sera_threshold_count": 101,
+      "f1_tolerances_steps": [0, 1, 2, 3, 4, 5, 5]
+    }
+  },
+  "diagnostics": {
+    "device": "cuda",
+    "max_samples": 120,
+    "batch_size": 16,
+    "max_intervention_samples": 40,
+    "max_interventions": 8,
+    "intervention_workers": 4,
+    "multiple_morphologies": true,
+    "bootstrap_replicates": 250,
+    "bootstrap_seed": 20260762
+  }
+}

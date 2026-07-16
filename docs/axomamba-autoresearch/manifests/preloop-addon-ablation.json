@@ -1,0 +1,61 @@
+{
+  "iteration": 0,
+  "name": "preloop-addon-ablation",
+  "candidates": [
+    {
+      "id": "full",
+      "baseline": true,
+      "config_overrides": {}
+    },
+    {
+      "id": "no_branch_gain",
+      "config_overrides": {
+        "branch_gain": false
+      }
+    },
+    {
+      "id": "no_branch_tanh",
+      "config_overrides": {
+        "branch_nonlinearity": "none"
+      }
+    },
+    {
+      "id": "no_integrative_mixer",
+      "config_overrides": {
+        "integrative_mixer": false
+      }
+    },
+    {
+      "id": "no_soma_gate",
+      "config_overrides": {
+        "soma_multiplicative_gate": false
+      }
+    }
+  ],
+  "training": {
+    "batch_size": 32,
+    "schedule_batch_size": 64,
+    "shard_reuse_batches": 16,
+    "seed": 20260711,
+    "device": "cuda",
+    "burn_in": 150,
+    "learning_rate": 0.0003,
+    "optimizer": "adamw",
+    "weight_decay": 0.0001,
+    "lr_schedule": "constant",
+    "objective": {
+      "spike_loss_weight": 0.25,
+      "soma_loss_weight": 0.75
+    }
+  },
+  "diagnostics": {
+    "device": "cuda",
+    "max_samples": 120,
+    "batch_size": 16,
+    "max_intervention_samples": 40,
+    "max_interventions": 8,
+    "intervention_workers": 4,
+    "multiple_morphologies": true,
+    "bootstrap_replicates": 250
+  }
+}
