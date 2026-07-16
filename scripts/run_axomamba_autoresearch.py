@@ -50,7 +50,7 @@ from axosim.structured import (  # noqa: E402
     average_repeated_module_state,
     balanced_proxy_compress_mamba_state,
     initialize_factorized_linears_from_state,
-    initialize_shared_tcn_adapters_from_state,
+    initialize_shared_tcn_adapters_from_pretrained_state,
 )
 
 
@@ -435,7 +435,7 @@ def _build_candidates(
                 ),
             )
             initialized_tcn_adapters = (
-                initialize_shared_tcn_adapters_from_state(
+                initialize_shared_tcn_adapters_from_pretrained_state(
                     model,
                     untied_candidate_reference_state,
                 )

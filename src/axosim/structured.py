@@ -92,6 +92,43 @@ def initialize_shared_tcn_adapters_from_state(
     return initialized
 
 
+def initialize_shared_tcn_adapters_from_pretrained_state(
+    model: nn.Module,
+    pretrained_state: Mapping[str, torch.Tensor],
+) -> list[str]:
+    """Preserve compatible adapters, or derive them from untied dense maps."""
+    model_state = model.state_dict()
+    adapter_names = sorted(
+        name for name in model_state if "pointwise_adapter" in name
+    )
+    if not adapter_names:
+        return []
+    if all(
+        name in pretrained_state
+        and pretrained_state[name].shape == model_state[name].shape
+        for name in adapter_names
+    ):
+        return []
+
+    dense_names = [
+        f"local_tcn_blocks.{index}.pointwise.{suffix}"
+        for index, block in enumerate(getattr(model, "local_tcn_blocks", ()))
+        if getattr(block, "pointwise_adapter_in", None) is not None
+        for suffix in ("weight", "bias")
+    ]
+    if dense_names and all(name in pretrained_state for name in dense_names):
+        return initialize_shared_tcn_adapters_from_state(model, pretrained_state)
+    missing = sorted(
+        name
+        for name in (*adapter_names, *dense_names)
+        if name not in pretrained_state
+    )
+    raise ValueError(
+        "pretrained state has neither compatible TCN adapters nor complete "
+        f"untied pointwise maps; missing {missing}"
+    )
+
+
 class FactorizedLinear(nn.Module):
     """Linear map represented by a trainable truncated matrix factorization."""
 

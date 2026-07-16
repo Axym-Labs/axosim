@@ -33,6 +33,25 @@ PRACTICAL_F1_DELTA = 0.02
 PRACTICAL_EFFICIENCY_FRACTION = 0.10
 
 
+def model_resident_state_metrics(model: nn.Module) -> dict[str, int]:
+    """Count unique parameters and buffers that reside with a loaded model."""
+    parameters = list(model.parameters())
+    buffers = list(model.buffers())
+    parameter_count = sum(tensor.numel() for tensor in parameters)
+    parameter_bytes = sum(
+        tensor.numel() * tensor.element_size() for tensor in parameters
+    )
+    buffer_count = sum(tensor.numel() for tensor in buffers)
+    buffer_bytes = sum(tensor.numel() * tensor.element_size() for tensor in buffers)
+    return {
+        "resident_parameter_count": parameter_count,
+        "resident_parameter_bytes": parameter_bytes,
+        "resident_buffer_count": buffer_count,
+        "resident_buffer_bytes": buffer_bytes,
+        "resident_state_bytes": parameter_bytes + buffer_bytes,
+    }
+
+
 def practical_candidate_gate(
     deltas: dict[str, float],
     *,
@@ -85,12 +104,32 @@ def practical_candidate_gate(
                 material_regressions.append(metric)
 
     efficiency_improvements: dict[str, float] = {}
-    baseline_parameters = float(baseline_training.get("parameter_count", 0))
-    candidate_parameters = float(candidate_training.get("parameter_count", 0))
+    baseline_parameters = float(
+        baseline_training.get(
+            "resident_parameter_count",
+            baseline_training.get("parameter_count", 0),
+        )
+    )
+    candidate_parameters = float(
+        candidate_training.get(
+            "resident_parameter_count",
+            candidate_training.get("parameter_count", 0),
+        )
+    )
     if baseline_parameters > 0 and candidate_parameters > 0:
         parameter_reduction = (baseline_parameters - candidate_parameters) / baseline_parameters
         if parameter_reduction >= PRACTICAL_EFFICIENCY_FRACTION:
             efficiency_improvements["parameter_reduction_fraction"] = parameter_reduction
+    baseline_state_bytes = float(baseline_training.get("resident_state_bytes", 0))
+    candidate_state_bytes = float(candidate_training.get("resident_state_bytes", 0))
+    if baseline_state_bytes > 0 and candidate_state_bytes > 0:
+        state_memory_reduction = (
+            baseline_state_bytes - candidate_state_bytes
+        ) / baseline_state_bytes
+        if state_memory_reduction >= PRACTICAL_EFFICIENCY_FRACTION:
+            efficiency_improvements[
+                "resident_state_memory_reduction_fraction"
+            ] = state_memory_reduction
     baseline_rate = float(
         baseline_training.get("training_step_presentations_per_second", 0)
     )
@@ -794,6 +833,7 @@ def train_candidate_panel(
             ) / 1000.0
         else:
             compute_seconds = sum(state["compute_timing"])
+        resident_state = model_resident_state_metrics(model)
         metrics = {
             "candidate_id": candidate_id,
             "train_presentations": state["presentations"],
@@ -807,10 +847,11 @@ def train_candidate_panel(
             "output_distillation_weight": candidate.output_distillation_weight,
             "seed": seed,
             "device": device,
-            "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
+            "parameter_count": resident_state["resident_parameter_count"],
             "trainable_parameter_count": sum(
                 parameter.numel() for parameter in model.parameters() if parameter.requires_grad
             ),
+            **resident_state,
             "mean_training_loss": state["loss_sum"] / max(state["steps"], 1),
             "last_components": state["last_components"],
             "panel_candidates": [item.candidate_id for item in candidates],

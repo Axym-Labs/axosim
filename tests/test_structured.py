@@ -8,6 +8,7 @@ from axosim.structured import (
     average_repeated_module_state,
     balanced_proxy_compress_mamba_state,
     initialize_factorized_linears_from_state,
+    initialize_shared_tcn_adapters_from_pretrained_state,
     initialize_shared_tcn_adapters_from_state,
 )
 
@@ -120,6 +121,43 @@ def test_full_rank_tcn_adapters_reconstruct_untied_pointwise_maps():
             reconstructed_bias,
             source_state[f"local_tcn_blocks.{index}.pointwise.bias"],
         )
+
+
+def test_pretrained_shared_tcn_adapters_are_preserved_without_reconstruction():
+    config = AxoMambaConfig(
+        num_input=8,
+        num_output=2,
+        num_branch=2,
+        num_synapse_per_branch=4,
+        model_dim=8,
+        num_layers=1,
+        state_dim=2,
+        conv_kernel=2,
+        expansion=2,
+        local_tcn_scale=1.0,
+        share_local_tcn_pointwise=True,
+        local_tcn_pointwise_adapter_rank=2,
+        local_tcn_pointwise_rank=3,
+        local_tcn_output_rank=3,
+    )
+    source = AxoPyTorchMamba(config)
+    candidate = AxoPyTorchMamba(config)
+    source_state = source.state_dict()
+    candidate.load_state_dict(source_state)
+    before = {
+        name: value.clone()
+        for name, value in candidate.state_dict().items()
+        if "pointwise_adapter" in name
+    }
+
+    initialized = initialize_shared_tcn_adapters_from_pretrained_state(
+        candidate,
+        source_state,
+    )
+
+    assert initialized == []
+    for name, value in before.items():
+        torch.testing.assert_close(candidate.state_dict()[name], value)
 
 
 def test_axomamba_factorized_tcn_width_maps_transfer_and_train():

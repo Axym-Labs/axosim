@@ -23,6 +23,7 @@ from axosim.autoresearch import (
     freeze_named_parameters,
     initialize_named_parameters,
     load_named_buffer_artifact,
+    model_resident_state_metrics,
     offset_named_parameters,
     output_distillation_loss,
     resolve_presentation_budget,
@@ -33,6 +34,23 @@ from axosim.autoresearch import (
 from axosim.data import ShardedNeuronIODataset
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
 from axosim.model import BranchELM, BranchELMConfig
+
+
+def test_resident_state_metrics_count_all_parameters_and_buffers_once() -> None:
+    model = torch.nn.Module()
+    model.projection = torch.nn.Linear(3, 2, bias=True)
+    model.shared_projection = model.projection
+    model.register_buffer("fixed_basis", torch.zeros(4, dtype=torch.float16))
+
+    metrics = model_resident_state_metrics(model)
+
+    assert metrics == {
+        "resident_parameter_count": 8,
+        "resident_parameter_bytes": 32,
+        "resident_buffer_count": 4,
+        "resident_buffer_bytes": 8,
+        "resident_state_bytes": 40,
+    }
 
 
 def _write_morphology_dataset(root) -> None:
@@ -127,6 +145,27 @@ def test_practical_gate_retains_material_or_efficiency_changes() -> None:
     assert metric_gate["decision"] == "review_material_gain"
     assert efficiency_gate["automatically_rejected"] is False
     assert efficiency_gate["decision"] == "review_efficiency_gain"
+
+
+def test_practical_gate_counts_resident_state_memory_as_efficiency() -> None:
+    gate = practical_candidate_gate(
+        {"voltage_sera_mv": 0.0},
+        assessments={"voltage_sera_mv": "uncertain"},
+        baseline_training={
+            "resident_parameter_count": 100,
+            "resident_state_bytes": 1_000,
+        },
+        candidate_training={
+            "resident_parameter_count": 100,
+            "resident_state_bytes": 800,
+        },
+        metric_families=("sera",),
+    )
+
+    assert gate["automatically_rejected"] is False
+    assert gate["efficiency_improvements"] == {
+        "resident_state_memory_reduction_fraction": 0.2
+    }
 
 
 def test_practical_gate_requires_robust_training_speed_separation() -> None:
