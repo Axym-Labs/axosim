@@ -57,6 +57,45 @@ def share_morphology_synapse_gain_state(
     return shared
 
 
+def factorize_morphology_synapse_gain_state(
+    state: Mapping[str, torch.Tensor],
+    *,
+    rank: int,
+    morphology_count: int,
+) -> dict[str, torch.Tensor]:
+    """Initialize a low-rank morphology-by-synapse log-gain map."""
+    name = "morphology_synapse_log_gain"
+    if name not in state:
+        raise ValueError(f"state contains no {name!r}")
+    gains = state[name]
+    if gains.ndim != 3:
+        raise ValueError("morphology synapse gains must have three dimensions")
+    if rank <= 0 or rank > morphology_count:
+        raise ValueError("rank must be within the morphology count")
+
+    factorized = dict(state)
+    if gains.shape[0] == 1:
+        basis = gains.new_zeros(rank, *gains.shape[1:])
+        context = gains.new_zeros(morphology_count, rank)
+        basis[0] = gains[0]
+        context[:, 0] = 1.0
+    elif gains.shape[0] == morphology_count:
+        flattened = gains.float().flatten(1)
+        left, singular, right = torch.linalg.svd(flattened, full_matrices=False)
+        scale = singular[:rank].clamp_min(0.0).sqrt()
+        context = (left[:, :rank] * scale).to(dtype=gains.dtype)
+        basis = (scale.unsqueeze(1) * right[:rank]).reshape(
+            rank, *gains.shape[1:]
+        ).to(dtype=gains.dtype)
+    else:
+        raise ValueError(
+            "morphology synapse gains must be shared or have one bank per morphology"
+        )
+    factorized[name] = basis
+    factorized["morphology_synapse_gain_context"] = context
+    return factorized
+
+
 @torch.no_grad()
 def initialize_shared_tcn_adapters_from_state(
     model: nn.Module,

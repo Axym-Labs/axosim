@@ -16,6 +16,7 @@
   "mamba_projection_rank": 16,
   "synapse_gain_scale": null,
   "morphology_synapse_gain_scale": 1.0,
+  "morphology_synapse_gain_rank": 1,
   "morphology_synapse_feature_dim": 9,
   "morphology_synapse_feature_hidden": 16,
   "morphology_synapse_feature_scale": 1.0,

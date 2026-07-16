@@ -115,6 +115,7 @@ def spike_axomamba_config(**overrides: Any) -> AxoMambaConfig:
         "state_dim": 2,
         "share_local_tcn_pointwise": True,
         "local_tcn_pointwise_adapter_rank": 4,
+        "morphology_synapse_gain_rank": 1,
     }
     values.update(overrides)
     return default_axomamba_config(**values)

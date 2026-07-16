@@ -35,11 +35,13 @@ from axosim.autoresearch import (  # noqa: E402
     TrainingObjective,
     create_frozen_window_schedule,
     freeze_named_parameters,
+    initialize_morphology_parameter_rows_from_mean,
     initialize_named_parameters,
     load_named_buffer_artifact,
     offset_named_parameters,
     practical_candidate_gate,
     resolve_presentation_budget,
+    set_trainable_parameter_names,
     train_candidate_panel,
 )
 from axosim.axobench_iteration import make_checkpoint_predictor  # noqa: E402
@@ -49,6 +51,7 @@ from axosim.checkpoint import load_checkpoint  # noqa: E402
 from axosim.structured import (  # noqa: E402
     average_repeated_module_state,
     balanced_proxy_compress_mamba_state,
+    factorize_morphology_synapse_gain_state,
     initialize_factorized_linears_from_state,
     initialize_shared_tcn_adapters_from_pretrained_state,
     share_morphology_synapse_gain_state,
@@ -146,10 +149,26 @@ def run_iteration(
     seed = int(training.get("seed", 20260711))
     schedule_batch_size = int(training.get("schedule_batch_size", 64))
     shard_reuse_batches = int(training.get("shard_reuse_batches", 8))
+    schedule_morphology_ids_value = training.get("schedule_morphology_ids")
+    if schedule_morphology_ids_value is None:
+        schedule_morphology_ids = None
+        morphology_schedule_suffix = ""
+    else:
+        if not isinstance(schedule_morphology_ids_value, list):
+            raise ValueError("schedule_morphology_ids must be a list")
+        schedule_morphology_ids = [
+            str(value) for value in schedule_morphology_ids_value
+        ]
+        if not schedule_morphology_ids:
+            raise ValueError("schedule_morphology_ids must not be empty")
+        morphology_schedule_hash = hashlib.sha256(
+            json.dumps(sorted(schedule_morphology_ids)).encode("utf-8")
+        ).hexdigest()[:10]
+        morphology_schedule_suffix = f"-m{morphology_schedule_hash}"
     schedule_root = DEFAULT_RUN_ROOT / "schedules"
     schedule_path = schedule_root / (
         f"balanced-{plan['presentations']}-seed{seed}-b{schedule_batch_size}"
-        f"-reuse{shard_reuse_batches}.npz"
+        f"-reuse{shard_reuse_batches}{morphology_schedule_suffix}.npz"
     )
     base_dataset = ShardedNeuronIODataset(dataset_root / "train", cache_shards=1)
     if not schedule_path.exists():
@@ -163,6 +182,7 @@ def run_iteration(
             start_offset=int(training.get("start_offset", 500)),
             sequence_length=int(training.get("sequence_length", 6000)),
             seed=seed,
+            morphology_ids=schedule_morphology_ids,
         )
     base_schedule = FrozenWindowDataset(base_dataset, schedule_path)
     schedule = base_schedule
@@ -231,11 +251,17 @@ def run_iteration(
             training_results[record.candidate_id]["initial_parameter_offsets"] = getattr(
                 record, "initial_parameter_offsets", {}
             )
+            training_results[record.candidate_id]["mean_initialized_morphology_rows"] = getattr(
+                record, "mean_initialized_morphology_rows", None
+            )
             training_results[record.candidate_id]["initialization"] = getattr(
                 record, "initialization", "pretrained"
             )
             training_results[record.candidate_id]["frozen_parameter_names"] = getattr(
                 record, "frozen_parameter_names", []
+            )
+            training_results[record.candidate_id]["trainable_parameter_names"] = getattr(
+                record, "trainable_parameter_names", None
             )
             training_results[record.candidate_id]["buffer_artifacts"] = getattr(
                 record, "buffer_artifacts", []
@@ -313,8 +339,11 @@ def run_iteration(
                 encoding="utf-8",
             )
     baseline_id = diagnostic_results["baseline_id"]
-    if baseline_id in training_results:
-        baseline_training = training_results[baseline_id]
+    baseline_training = training_results.get(
+        baseline_id,
+        diagnostic_results.get("baseline_training_metrics"),
+    )
+    if baseline_training is not None:
         for candidate_id, candidate_diagnostics in diagnostic_results["candidates"].items():
             if candidate_id == baseline_id or "deltas" not in candidate_diagnostics:
                 continue
@@ -426,6 +455,14 @@ def _build_candidates(
             candidate_reference_state = share_morphology_synapse_gain_state(
                 candidate_reference_state
             )
+        if int(config.get("morphology_synapse_gain_rank", 0)) and not int(
+            base_config.get("morphology_synapse_gain_rank", 0)
+        ):
+            candidate_reference_state = factorize_morphology_synapse_gain_state(
+                candidate_reference_state,
+                rank=int(config["morphology_synapse_gain_rank"]),
+                morphology_count=len(config["morphology_ids"]),
+            )
         candidate_state = model.state_dict()
         if initialization == "pretrained":
             shared = {
@@ -485,6 +522,36 @@ def _build_candidates(
                 key=str(artifact_spec["key"]),
                 expected_morphology_ids=config.get("morphology_ids"),
             ))
+        mean_initialization_spec = specification.get(
+            "mean_initialize_morphology_rows"
+        )
+        if mean_initialization_spec is None:
+            mean_initialized_morphology_rows = None
+        else:
+            if not isinstance(mean_initialization_spec, dict):
+                raise ValueError("mean_initialize_morphology_rows must be an object")
+            required = {
+                "target_morphology_id",
+                "source_morphology_ids",
+                "parameter_names",
+            }
+            missing = sorted(required - set(mean_initialization_spec))
+            if missing:
+                raise ValueError(
+                    f"mean_initialize_morphology_rows is missing fields: {missing}"
+                )
+            mean_initialized_morphology_rows = (
+                initialize_morphology_parameter_rows_from_mean(
+                    model,
+                    target_morphology_id=str(
+                        mean_initialization_spec["target_morphology_id"]
+                    ),
+                    source_morphology_ids=mean_initialization_spec[
+                        "source_morphology_ids"
+                    ],
+                    parameter_names=mean_initialization_spec["parameter_names"],
+                )
+            )
         initial_parameter_values = {
             str(name): float(value)
             for name, value in specification.get("initial_parameter_values", {}).items()
@@ -498,7 +565,23 @@ def _build_candidates(
         frozen_parameter_names = [
             str(name) for name in specification.get("frozen_parameter_names", [])
         ]
-        freeze_named_parameters(model, frozen_parameter_names)
+        trainable_parameter_names_value = specification.get("trainable_parameter_names")
+        if trainable_parameter_names_value is not None and frozen_parameter_names:
+            raise ValueError(
+                "candidate may use frozen_parameter_names or trainable_parameter_names, not both"
+            )
+        if trainable_parameter_names_value is None:
+            trainable_parameter_names = None
+            freeze_named_parameters(model, frozen_parameter_names)
+        else:
+            if not isinstance(trainable_parameter_names_value, list):
+                raise ValueError("trainable_parameter_names must be a list")
+            trainable_parameter_names = [
+                str(name) for name in trainable_parameter_names_value
+            ]
+            frozen_parameter_names = set_trainable_parameter_names(
+                model, trainable_parameter_names
+            )
         objective_values = dict(training.get("objective", {}))
         objective_values.update(specification.get("objective_overrides", {}))
         record = PanelCandidate(
@@ -527,7 +610,17 @@ def _build_candidates(
         setattr(record, "initial_parameter_values", initial_parameter_values)
         setattr(record, "initial_parameter_offsets", initial_parameter_offsets)
         setattr(record, "frozen_parameter_names", sorted(frozen_parameter_names))
+        setattr(
+            record,
+            "trainable_parameter_names",
+            None if trainable_parameter_names is None else sorted(trainable_parameter_names),
+        )
         setattr(record, "buffer_artifacts", loaded_buffer_artifacts)
+        setattr(
+            record,
+            "mean_initialized_morphology_rows",
+            mean_initialized_morphology_rows,
+        )
         setattr(
             record,
             "initial_checkpoint",
@@ -628,6 +721,7 @@ def _run_diagnostics(
     summaries: dict[str, Any] = {
         "baseline_id": baseline_id,
         "baseline_cache": str(Path(baseline_cache_path).resolve()),
+        "baseline_training_metrics": baseline_cache.report.get("training_metrics"),
         "candidates": {},
     }
     for record in candidate_records:

@@ -51,9 +51,11 @@ class BranchOfficialMambaConfig:
     spike_voltage_coupling_scale: float = 0.0
     morphology_ids: list[str] | None = None
     morphology_embedding_scale: float | None = None
+    population_adapter_morphology_id: str | None = None
     synapse_gain_scale: float | None = None
     morphology_synapse_gain_scale: float | None = None
     share_morphology_synapse_gain: bool = False
+    morphology_synapse_gain_rank: int = 0
     morphology_synapse_feature_dim: int = 0
     morphology_synapse_feature_hidden: int = 0
     morphology_synapse_feature_scale: float | None = None
@@ -155,6 +157,20 @@ class BranchOfficialMamba(nn.Module):
                 raise ValueError("morphology_ids must be unique")
             if config.morphology_embedding_scale is not None and config.morphology_embedding_scale < 0:
                 raise ValueError("morphology_embedding_scale must be non-negative")
+        if config.population_adapter_morphology_id is not None:
+            if (
+                config.morphology_ids is None
+                or config.population_adapter_morphology_id not in config.morphology_ids
+            ):
+                raise ValueError(
+                    "population_adapter_morphology_id must name a configured morphology"
+                )
+            if (
+                config.morphology_embedding_scale is None
+            ):
+                raise ValueError(
+                    "population_adapter_morphology_id requires a morphology embedding"
+                )
         if config.soma_filter_tau <= 0:
             raise ValueError("soma_filter_tau must be positive")
         if config.soma_filter_kernel <= 0:
@@ -179,6 +195,23 @@ class BranchOfficialMamba(nn.Module):
             raise ValueError(
                 "share_morphology_synapse_gain requires morphology_synapse_gain_scale"
             )
+        if config.morphology_synapse_gain_rank < 0:
+            raise ValueError("morphology_synapse_gain_rank must be non-negative")
+        if config.morphology_synapse_gain_rank:
+            if config.morphology_synapse_gain_scale is None:
+                raise ValueError(
+                    "morphology_synapse_gain_rank requires morphology_synapse_gain_scale"
+                )
+            if config.share_morphology_synapse_gain:
+                raise ValueError(
+                    "morphology_synapse_gain_rank is incompatible with "
+                    "share_morphology_synapse_gain"
+                )
+            assert config.morphology_ids is not None
+            if config.morphology_synapse_gain_rank > len(config.morphology_ids):
+                raise ValueError(
+                    "morphology_synapse_gain_rank exceeds morphology count"
+                )
         feature_operator_enabled = (
             config.morphology_synapse_feature_dim > 0
             or config.morphology_synapse_feature_hidden > 0
@@ -296,12 +329,27 @@ class BranchOfficialMamba(nn.Module):
         self.morphology_synapse_log_gain = (
             nn.Parameter(
                 torch.zeros(
-                    1 if config.share_morphology_synapse_gain else len(config.morphology_ids),
+                    config.morphology_synapse_gain_rank
+                    or (
+                        1
+                        if config.share_morphology_synapse_gain
+                        else len(config.morphology_ids)
+                    ),
                     config.num_branch,
                     config.num_synapse_per_branch,
                 )
             )
             if config.morphology_synapse_gain_scale is not None
+            else None
+        )
+        self.morphology_synapse_gain_context = (
+            nn.Parameter(
+                torch.ones(
+                    len(config.morphology_ids),
+                    config.morphology_synapse_gain_rank,
+                )
+            )
+            if config.morphology_synapse_gain_rank
             else None
         )
         feature_values = (
@@ -510,6 +558,17 @@ class BranchOfficialMamba(nn.Module):
             if config.morphology_embedding_scale is not None
             else None
         )
+        self._population_adapter_index = (
+            config.morphology_ids.index(config.population_adapter_morphology_id)
+            if config.population_adapter_morphology_id is not None
+            else None
+        )
+        self.population_embedding_adapter = (
+            nn.Parameter(torch.zeros(config.model_dim))
+            if self._population_adapter_index is not None
+            and self.morphology_embedding is not None
+            else None
+        )
         self.branch_subunit_projection = (
             nn.Linear(config.num_branch * config.branch_subunits, config.model_dim)
             if config.branch_subunits
@@ -603,6 +662,24 @@ class BranchOfficialMamba(nn.Module):
                     ),
                 )
 
+    def _morphology_embedding_values(
+        self,
+        morphology_indices: torch.Tensor,
+        *,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> torch.Tensor:
+        assert self.morphology_embedding is not None
+        indices = morphology_indices.to(dtype=torch.long, device=device)
+        values = self.morphology_embedding(indices).to(dtype=dtype)
+        if self.population_embedding_adapter is not None:
+            assert self._population_adapter_index is not None
+            mask = (indices == self._population_adapter_index).to(dtype=dtype)
+            values = values + mask.unsqueeze(1) * self.population_embedding_adapter.to(
+                dtype=dtype, device=device
+            ).unsqueeze(0)
+        return values
+
     def forward(
         self,
         x: torch.Tensor,
@@ -686,9 +763,9 @@ class BranchOfficialMamba(nn.Module):
                 raise ValueError("morphology_indices are required for morphology-conditioned AxoMamba")
             if morphology_indices.ndim != 1 or morphology_indices.shape[0] != x.shape[0]:
                 raise ValueError("morphology_indices must have shape (batch,)")
-            morphology = self.morphology_embedding(
-                morphology_indices.to(dtype=torch.long, device=hidden.device)
-            ).to(dtype=hidden.dtype)
+            morphology = self._morphology_embedding_values(
+                morphology_indices, dtype=hidden.dtype, device=hidden.device
+            )
             assert self.config.morphology_embedding_scale is not None
             hidden = hidden + self.config.morphology_embedding_scale * morphology.unsqueeze(1)
         elif morphology_indices is not None and self.config.morphology_ids is None:
@@ -961,12 +1038,9 @@ class BranchOfficialMamba(nn.Module):
                 )
             if morphology_indices.ndim != 1 or morphology_indices.shape[0] != branch_inputs.shape[0]:
                 raise ValueError("morphology_indices must have shape (batch,)")
-            morphology = self.morphology_embedding(
-                morphology_indices.to(
-                    dtype=torch.long,
-                    device=hidden.device,
-                )
-            ).to(dtype=hidden.dtype)
+            morphology = self._morphology_embedding_values(
+                morphology_indices, dtype=hidden.dtype, device=hidden.device
+            )
             assert self.config.morphology_embedding_scale is not None
             hidden = hidden + self.config.morphology_embedding_scale * morphology.unsqueeze(1)
         elif morphology_indices is not None and self.config.morphology_ids is None:
@@ -1026,13 +1100,35 @@ class BranchOfficialMamba(nn.Module):
             if morphology_indices is None and not self.config.share_morphology_synapse_gain:
                 raise ValueError("morphology_indices are required for morphology-conditioned synaptic gains")
             assert self.config.morphology_synapse_gain_scale is not None
-            gain = torch.exp(
-                self.config.morphology_synapse_gain_scale
-                * self.morphology_synapse_log_gain
-            ).to(dtype=weighted.dtype, device=weighted.device)
+            if self.config.morphology_synapse_gain_rank:
+                assert morphology_indices is not None
+                assert self.morphology_synapse_gain_context is not None
+                morphology_indices = morphology_indices.to(
+                    dtype=torch.long,
+                    device=self.morphology_synapse_gain_context.device,
+                )
+                context = self.morphology_synapse_gain_context.index_select(
+                    0, morphology_indices
+                )
+                basis = self.morphology_synapse_log_gain.flatten(1).transpose(0, 1)
+                selected_basis = basis.index_select(0, slots.flatten()).view(
+                    *slots.shape,
+                    self.config.morphology_synapse_gain_rank,
+                )
+                selected_log_gain = (
+                    selected_basis * context.unsqueeze(1)
+                ).sum(dim=-1)
+                selected_gain = torch.exp(
+                    self.config.morphology_synapse_gain_scale * selected_log_gain
+                ).to(dtype=weighted.dtype, device=weighted.device)
+            else:
+                gain = torch.exp(
+                    self.config.morphology_synapse_gain_scale
+                    * self.morphology_synapse_log_gain
+                ).to(dtype=weighted.dtype, device=weighted.device)
             if self.config.share_morphology_synapse_gain:
                 selected_gain = gain.flatten().index_select(0, slots.flatten())
-            else:
+            elif not self.config.morphology_synapse_gain_rank:
                 assert morphology_indices is not None
                 slot_count = self.num_branch * self.num_synapse_per_branch
                 morphology_slots = morphology_indices.unsqueeze(1) * slot_count + slots
@@ -1475,13 +1571,24 @@ class BranchOfficialMamba(nn.Module):
                     raise ValueError("morphology_indices are required for morphology-conditioned synaptic gains")
                 if morphology_indices.ndim != 1 or morphology_indices.shape[0] != batch_size:
                     raise ValueError("morphology_indices must have shape (batch,)")
-                selected_log_gain = self.morphology_synapse_log_gain.index_select(
-                    0,
-                    morphology_indices.to(
-                        dtype=torch.long,
-                        device=self.morphology_synapse_log_gain.device,
-                    ),
+                morphology_indices = morphology_indices.to(
+                    dtype=torch.long,
+                    device=self.morphology_synapse_log_gain.device,
                 )
+                if self.config.morphology_synapse_gain_rank:
+                    assert self.morphology_synapse_gain_context is not None
+                    context = self.morphology_synapse_gain_context.index_select(
+                        0, morphology_indices
+                    )
+                    selected_log_gain = torch.einsum(
+                        "br,rns->bns",
+                        context,
+                        self.morphology_synapse_log_gain,
+                    )
+                else:
+                    selected_log_gain = self.morphology_synapse_log_gain.index_select(
+                        0, morphology_indices
+                    )
                 morphology_gain = torch.exp(
                     self.config.morphology_synapse_gain_scale * selected_log_gain
                 ).to(dtype=routed.dtype, device=routed.device)

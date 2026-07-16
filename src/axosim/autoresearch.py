@@ -31,6 +31,7 @@ AXOMAMBA_DEFAULT_BURN_IN = 50
 PRACTICAL_SERA_DELTA = 0.1
 PRACTICAL_F1_DELTA = 0.02
 PRACTICAL_EFFICIENCY_FRACTION = 0.10
+POPULATION_MEMORY_REFERENCE_NEURONS = 1_000_000
 
 
 def model_resident_state_metrics(model: nn.Module) -> dict[str, int]:
@@ -138,21 +139,41 @@ def model_population_memory_metrics(
         if elements
     }
     streaming_state_bytes = sum(component_bytes.values())
+    shared_fixed_state_bytes = frozen_bytes + buffer_bytes
+    per_neuron_simulation_state_bytes = trainable_bytes + streaming_state_bytes
+    per_neuron_adamw_training_state_bytes = (
+        4 * trainable_bytes + streaming_state_bytes
+    )
     return {
         "trainable_parameter_count": trainable_count,
         "trainable_parameter_bytes": trainable_bytes,
         "frozen_parameter_count": frozen_count,
         "frozen_parameter_bytes": frozen_bytes,
         "shared_buffer_bytes": buffer_bytes,
-        "shared_fixed_state_bytes": frozen_bytes + buffer_bytes,
+        "shared_fixed_state_bytes": shared_fixed_state_bytes,
         "streaming_state_dtype": str(streaming_dtype).removeprefix("torch."),
         "streaming_state_components_bytes": component_bytes,
         "per_neuron_streaming_state_bytes": streaming_state_bytes,
         "per_neuron_trainable_plus_streaming_bytes": (
             trainable_bytes + streaming_state_bytes
         ),
+        "per_neuron_simulation_state_bytes": per_neuron_simulation_state_bytes,
+        "per_neuron_adamw_training_state_bytes": (
+            per_neuron_adamw_training_state_bytes
+        ),
+        "population_memory_reference_neurons": POPULATION_MEMORY_REFERENCE_NEURONS,
+        "population_simulation_state_bytes_at_reference_scale": (
+            shared_fixed_state_bytes
+            + POPULATION_MEMORY_REFERENCE_NEURONS
+            * per_neuron_simulation_state_bytes
+        ),
+        "population_adamw_training_state_bytes_at_reference_scale": (
+            shared_fixed_state_bytes
+            + POPULATION_MEMORY_REFERENCE_NEURONS
+            * per_neuron_adamw_training_state_bytes
+        ),
         "estimated_adamw_training_state_bytes": (
-            4 * trainable_bytes + frozen_bytes + buffer_bytes
+            4 * trainable_bytes + shared_fixed_state_bytes
         ),
     }
 
@@ -645,6 +666,75 @@ def freeze_named_parameters(model: nn.Module, names: Iterable[str]) -> list[str]
     return sorted(requested)
 
 
+def set_trainable_parameter_names(model: nn.Module, names: Iterable[str]) -> list[str]:
+    """Make an exact parameter subset trainable and freeze every other tensor."""
+    requested = set(names)
+    parameters = dict(model.named_parameters())
+    unknown = sorted(requested - set(parameters))
+    if unknown:
+        raise ValueError(f"unknown model parameters in trainable request: {unknown}")
+    if not requested:
+        raise ValueError("trainable parameter request must not be empty")
+    for name, parameter in parameters.items():
+        parameter.requires_grad_(name in requested)
+    return sorted(set(parameters) - requested)
+
+
+def initialize_morphology_parameter_rows_from_mean(
+    model: nn.Module,
+    *,
+    target_morphology_id: str,
+    source_morphology_ids: Iterable[str],
+    parameter_names: Iterable[str],
+) -> dict[str, Any]:
+    """Initialize held-out morphology rows from the mean trained source row."""
+    configured = tuple(
+        str(name)
+        for name in (getattr(getattr(model, "config", None), "morphology_ids", None) or ())
+    )
+    if not configured:
+        raise ValueError("mean morphology initialization requires morphology_ids")
+    mapping = {name: index for index, name in enumerate(configured)}
+    target = str(target_morphology_id)
+    sources = tuple(str(name) for name in source_morphology_ids)
+    unknown = sorted(({target} | set(sources)) - set(mapping))
+    if unknown:
+        raise ValueError(f"unknown morphology IDs in mean initialization: {unknown}")
+    if not sources:
+        raise ValueError("source_morphology_ids must not be empty")
+    if target in sources:
+        raise ValueError("target morphology must not be a source morphology")
+    if len(set(sources)) != len(sources):
+        raise ValueError("source_morphology_ids must be unique")
+
+    parameters = dict(model.named_parameters())
+    names = tuple(str(name) for name in parameter_names)
+    unknown_parameters = sorted(set(names) - set(parameters))
+    if unknown_parameters:
+        raise ValueError(
+            f"unknown model parameters in mean initialization: {unknown_parameters}"
+        )
+    if not names:
+        raise ValueError("mean initialization parameter_names must not be empty")
+    target_index = mapping[target]
+    source_indices = [mapping[name] for name in sources]
+    with torch.no_grad():
+        for name in names:
+            parameter = parameters[name]
+            if parameter.ndim < 1 or parameter.shape[0] != len(configured):
+                raise ValueError(
+                    f"mean initialization parameter {name!r} must have one row per morphology"
+                )
+            parameter[target_index].copy_(parameter[source_indices].mean(dim=0))
+    return {
+        "target_morphology_id": target,
+        "target_index": target_index,
+        "source_morphology_ids": list(sources),
+        "source_indices": source_indices,
+        "parameter_names": sorted(names),
+    }
+
+
 def load_named_buffer_artifact(
     model: nn.Module,
     *,
@@ -701,6 +791,7 @@ def create_frozen_window_schedule(
     start_offset: int = 500,
     sequence_length: int | None = 6000,
     seed: int = 0,
+    morphology_ids: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Create a deterministic schedule balanced across morphology groups."""
     if presentations <= 0 or schedule_batch_size <= 0 or shard_reuse_batches <= 0:
@@ -710,6 +801,19 @@ def create_frozen_window_schedule(
         by_morphology[_morphology_id(sample_id)][shard_idx].append((sample_idx, sample_id))
     if not by_morphology:
         raise ValueError("dataset contains no samples")
+    if morphology_ids is not None:
+        requested = tuple(str(name) for name in morphology_ids)
+        if not requested:
+            raise ValueError("morphology_ids must not be empty")
+        if len(set(requested)) != len(requested):
+            raise ValueError("morphology_ids must be unique")
+        unknown = sorted(set(requested) - set(by_morphology))
+        if unknown:
+            raise ValueError(f"unknown morphology IDs in schedule request: {unknown}")
+        by_morphology = {
+            name: by_morphology[name]
+            for name in requested
+        }
 
     rng = np.random.default_rng(seed)
     morphology_names = sorted(by_morphology)
@@ -771,6 +875,7 @@ def create_frozen_window_schedule(
         "start_offset": start_offset,
         "sequence_length": sequence_length,
         "seed": seed,
+        "morphology_ids": morphology_names,
         "morphology_counts": morphology_counts,
     }
     output = Path(output_path)

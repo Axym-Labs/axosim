@@ -7,6 +7,7 @@ from axosim.structured import (
     FactorizedPointwiseConv1d,
     average_repeated_module_state,
     balanced_proxy_compress_mamba_state,
+    factorize_morphology_synapse_gain_state,
     initialize_factorized_linears_from_state,
     share_morphology_synapse_gain_state,
     initialize_shared_tcn_adapters_from_pretrained_state,
@@ -76,6 +77,42 @@ def test_morphology_gain_transfer_averages_log_gains_across_morphologies():
         gains.mean(dim=0, keepdim=True),
     )
     torch.testing.assert_close(shared["readout.weight"], state["readout.weight"])
+
+
+def test_morphology_gain_factorization_recovers_rank_one_log_gains():
+    context = torch.tensor([[0.5], [-1.0], [2.0]])
+    basis = torch.arange(8, dtype=torch.float32).view(1, 4, 2) / 10.0
+    gains = context.view(3, 1, 1) * basis
+
+    factorized = factorize_morphology_synapse_gain_state(
+        {"morphology_synapse_log_gain": gains},
+        rank=1,
+        morphology_count=3,
+    )
+
+    reconstructed = torch.einsum(
+        "mr,rbs->mbs",
+        factorized["morphology_synapse_gain_context"],
+        factorized["morphology_synapse_log_gain"],
+    )
+    torch.testing.assert_close(reconstructed, gains, atol=1e-6, rtol=1e-6)
+
+
+def test_morphology_gain_factorization_preserves_shared_bank_exactly():
+    gains = torch.arange(8, dtype=torch.float32).view(1, 4, 2) / 10.0
+
+    factorized = factorize_morphology_synapse_gain_state(
+        {"morphology_synapse_log_gain": gains},
+        rank=1,
+        morphology_count=3,
+    )
+
+    assert factorized["morphology_synapse_gain_context"].shape == (3, 1)
+    torch.testing.assert_close(
+        factorized["morphology_synapse_gain_context"],
+        torch.ones(3, 1),
+    )
+    torch.testing.assert_close(factorized["morphology_synapse_log_gain"], gains)
 
 
 def test_full_rank_tcn_adapters_reconstruct_untied_pointwise_maps():

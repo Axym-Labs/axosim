@@ -22,6 +22,7 @@ from axosim.autoresearch import (
     create_frozen_window_schedule,
     default_axomamba_training_objective,
     freeze_named_parameters,
+    initialize_morphology_parameter_rows_from_mean,
     initialize_named_parameters,
     load_named_buffer_artifact,
     model_population_memory_metrics,
@@ -29,6 +30,7 @@ from axosim.autoresearch import (
     offset_named_parameters,
     output_distillation_loss,
     resolve_presentation_budget,
+    set_trainable_parameter_names,
     train_candidate_panel,
     training_objective_loss,
     differentiable_near_spike_voltage_loss,
@@ -94,6 +96,23 @@ def test_population_memory_metrics_separate_trainable_shared_and_streaming_state
         "mamba": 128,
     }
     assert metrics["per_neuron_streaming_state_bytes"] == 800
+    assert metrics["per_neuron_simulation_state_bytes"] == (
+        expected_trainable_bytes + 800
+    )
+    assert metrics["per_neuron_adamw_training_state_bytes"] == (
+        4 * expected_trainable_bytes + 800
+    )
+    assert metrics["population_memory_reference_neurons"] == 1_000_000
+    assert metrics["population_simulation_state_bytes_at_reference_scale"] == (
+        expected_frozen_bytes
+        + expected_buffer_bytes
+        + 1_000_000 * (expected_trainable_bytes + 800)
+    )
+    assert metrics["population_adamw_training_state_bytes_at_reference_scale"] == (
+        expected_frozen_bytes
+        + expected_buffer_bytes
+        + 1_000_000 * (4 * expected_trainable_bytes + 800)
+    )
     assert metrics["estimated_adamw_training_state_bytes"] == (
         4 * expected_trainable_bytes + expected_frozen_bytes + expected_buffer_bytes
     )
@@ -534,6 +553,45 @@ def test_frozen_window_schedule_is_deterministic_and_morphology_balanced(tmp_pat
     np.testing.assert_array_equal(first_y, second_y)
 
 
+def test_frozen_window_schedule_can_exclude_held_out_morphology(tmp_path) -> None:
+    data_root = tmp_path / "train"
+    _write_morphology_dataset(data_root)
+    base = ShardedNeuronIODataset(data_root, cache_shards=1)
+    schedule_path = tmp_path / "schedule-subset.npz"
+
+    metadata = create_frozen_window_schedule(
+        base,
+        schedule_path,
+        presentations=16,
+        schedule_batch_size=4,
+        shard_reuse_batches=2,
+        window_size=8,
+        start_offset=4,
+        seed=23,
+        morphology_ids=["specimen_a"],
+    )
+    frozen = FrozenWindowDataset(base, schedule_path)
+
+    assert metadata["morphology_ids"] == ["specimen_a"]
+    assert metadata["morphology_counts"] == {"specimen_a": 16}
+    assert {
+        sample_id.split(":", 1)[0]
+        for sample_id in frozen.get_sample_ids(range(len(frozen)))
+    } == {"specimen_a"}
+
+    with np.testing.assert_raises_regex(ValueError, "unknown morphology IDs"):
+        create_frozen_window_schedule(
+            base,
+            tmp_path / "unknown.npz",
+            presentations=8,
+            schedule_batch_size=4,
+            shard_reuse_batches=1,
+            window_size=8,
+            start_offset=4,
+            morphology_ids=["specimen_missing"],
+        )
+
+
 def test_frozen_schedule_does_not_decompress_shards_to_read_sequence_lengths(tmp_path) -> None:
     data_root = tmp_path / "train"
     _write_morphology_dataset(data_root)
@@ -810,6 +868,63 @@ def test_named_parameter_freeze_changes_only_requested_tensors() -> None:
     )
     with np.testing.assert_raises_regex(ValueError, "unknown model parameters"):
         freeze_named_parameters(model, ["missing.parameter"])
+
+
+def test_named_trainable_subset_freezes_every_other_tensor() -> None:
+    model = BranchELM(BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4))
+
+    frozen = set_trainable_parameter_names(model, ["readout.bias"])
+
+    assert dict(model.named_parameters())["readout.bias"].requires_grad is True
+    assert all(
+        not parameter.requires_grad
+        for name, parameter in model.named_parameters()
+        if name != "readout.bias"
+    )
+    assert set(frozen) == set(dict(model.named_parameters())) - {"readout.bias"}
+    with np.testing.assert_raises_regex(ValueError, "unknown model parameters"):
+        set_trainable_parameter_names(model, ["missing.parameter"])
+
+
+def test_morphology_parameter_rows_can_be_mean_initialized() -> None:
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=4,
+            num_branch=2,
+            num_synapse_per_branch=2,
+            model_dim=4,
+            state_dim=2,
+            num_layers=1,
+            morphology_ids=("source_a", "source_b", "target"),
+            morphology_embedding_scale=0.1,
+            morphology_synapse_gain_scale=1.0,
+            morphology_synapse_gain_rank=1,
+        )
+    )
+    with torch.no_grad():
+        model.morphology_synapse_gain_context[:, 0].copy_(torch.tensor([2.0, 4.0, 99.0]))
+        model.morphology_embedding.weight[0].fill_(1.0)
+        model.morphology_embedding.weight[1].fill_(3.0)
+        model.morphology_embedding.weight[2].fill_(99.0)
+
+    initialized = initialize_morphology_parameter_rows_from_mean(
+        model,
+        target_morphology_id="target",
+        source_morphology_ids=["source_a", "source_b"],
+        parameter_names=[
+            "morphology_synapse_gain_context",
+            "morphology_embedding.weight",
+        ],
+    )
+
+    assert initialized["target_index"] == 2
+    assert initialized["source_indices"] == [0, 1]
+    torch.testing.assert_close(
+        model.morphology_synapse_gain_context[2], torch.tensor([3.0])
+    )
+    torch.testing.assert_close(
+        model.morphology_embedding.weight[2], torch.full((4,), 2.0)
+    )
 
 
 def test_named_buffer_artifact_loads_tensor_and_checks_morphology_order(tmp_path) -> None:

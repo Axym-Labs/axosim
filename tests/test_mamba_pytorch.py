@@ -174,6 +174,7 @@ def test_axomamba_spike_config_uses_long_gated_population_structure():
     assert config.local_tcn_pointwise_adapter_rank == 4
     assert config.local_tcn_pointwise_rank == 0
     assert config.local_tcn_output_rank == 0
+    assert config.morphology_synapse_gain_rank == 1
 
 
 def test_spike_voltage_coupling_uses_soma_without_adding_parameters():
@@ -461,6 +462,86 @@ def test_morphology_synapse_gain_configuration_is_strict():
                 share_morphology_synapse_gain=True,
             )
         )
+    with pytest.raises(ValueError, match="morphology_synapse_gain_rank"):
+        AxoPyTorchMamba(
+            AxoMambaConfig(
+                **common,
+                morphology_ids=["morph-a", "morph-b"],
+                morphology_embedding_scale=0.1,
+                morphology_synapse_gain_rank=1,
+            )
+        )
+    with pytest.raises(ValueError, match="incompatible"):
+        AxoPyTorchMamba(
+            AxoMambaConfig(
+                **common,
+                morphology_ids=["morph-a", "morph-b"],
+                morphology_embedding_scale=0.1,
+                morphology_synapse_gain_scale=1.0,
+                share_morphology_synapse_gain=True,
+                morphology_synapse_gain_rank=1,
+            )
+        )
+    with pytest.raises(ValueError, match="population_adapter_morphology_id"):
+        AxoPyTorchMamba(
+            AxoMambaConfig(
+                **common,
+                morphology_ids=["morph-a", "morph-b"],
+                morphology_embedding_scale=0.1,
+                population_adapter_morphology_id="morph-missing",
+            )
+        )
+
+
+def test_population_adapter_is_zero_initialized_and_target_specific():
+    common = dict(
+        num_input=8,
+        num_output=2,
+        num_branch=4,
+        num_synapse_per_branch=2,
+        model_dim=6,
+        num_layers=1,
+        state_dim=2,
+        conv_kernel=2,
+        expansion=2,
+        morphology_ids=["morph-a", "morph-b"],
+        morphology_embedding_scale=1.0,
+        morphology_synapse_gain_scale=1.0,
+        morphology_synapse_gain_rank=1,
+    )
+    torch.manual_seed(109)
+    control = AxoPyTorchMamba(AxoMambaConfig(**common))
+    torch.manual_seed(109)
+    adapted = AxoPyTorchMamba(
+        AxoMambaConfig(**common, population_adapter_morphology_id="morph-b")
+    )
+    shared = {
+        name: tensor
+        for name, tensor in control.state_dict().items()
+        if name in adapted.state_dict()
+        and adapted.state_dict()[name].shape == tensor.shape
+    }
+    state = adapted.state_dict()
+    state.update(shared)
+    adapted.load_state_dict(state)
+    x = torch.randn(2, 13, 8)
+    morphology_indices = torch.tensor([0, 1])
+
+    assert adapted.population_embedding_adapter.shape == (6,)
+    torch.testing.assert_close(
+        adapted(x, morphology_indices=morphology_indices),
+        control(x, morphology_indices=morphology_indices),
+    )
+
+    with torch.no_grad():
+        adapted.population_embedding_adapter.copy_(torch.linspace(-0.5, 0.5, 6))
+        adapted.morphology_synapse_log_gain.fill_(0.2)
+        control.morphology_synapse_log_gain.fill_(0.2)
+    adapted_output = adapted(x, morphology_indices=morphology_indices)
+    control_output = control(x, morphology_indices=morphology_indices)
+
+    torch.testing.assert_close(adapted_output[0], control_output[0])
+    assert not torch.allclose(adapted_output[1], control_output[1])
 
 
 def test_shared_morphology_synapse_gain_matches_repeated_gain_dense_and_sparse():
@@ -530,6 +611,77 @@ def test_shared_morphology_synapse_gain_matches_repeated_gain_dense_and_sparse()
             event_indices,
             event_values,
             repeated_state,
+            morphology_indices=morphology_indices,
+        ),
+    )
+
+
+def test_rank_one_morphology_gain_matches_explicit_dense_and_sparse_gains():
+    common = dict(
+        num_input=8,
+        num_output=2,
+        num_branch=4,
+        num_synapse_per_branch=2,
+        model_dim=6,
+        num_layers=1,
+        state_dim=2,
+        conv_kernel=2,
+        expansion=2,
+        morphology_ids=["morph-a", "morph-b"],
+        morphology_embedding_scale=0.1,
+        morphology_synapse_gain_scale=1.0,
+    )
+    torch.manual_seed(106)
+    explicit = AxoPyTorchMamba(AxoMambaConfig(**common))
+    torch.manual_seed(106)
+    factorized = AxoPyTorchMamba(
+        AxoMambaConfig(**common, morphology_synapse_gain_rank=1)
+    )
+    factorized_state = factorized.state_dict()
+    factorized_state.update(
+        {
+            name: value
+            for name, value in explicit.state_dict().items()
+            if name in factorized_state and factorized_state[name].shape == value.shape
+        }
+    )
+    factorized.load_state_dict(factorized_state)
+    basis = torch.randn(1, 4, 2) * 0.1
+    context = torch.tensor([[0.5], [-1.25]])
+    with torch.no_grad():
+        assert explicit.morphology_synapse_log_gain is not None
+        assert factorized.morphology_synapse_log_gain is not None
+        assert factorized.morphology_synapse_gain_context is not None
+        explicit.morphology_synapse_log_gain.copy_(
+            context.view(2, 1, 1) * basis
+        )
+        factorized.morphology_synapse_log_gain.copy_(basis)
+        factorized.morphology_synapse_gain_context.copy_(context)
+
+    morphology_indices = torch.tensor([0, 1])
+    inputs = torch.randn(2, 7, 8)
+    torch.testing.assert_close(
+        factorized(inputs, morphology_indices=morphology_indices),
+        explicit(inputs, morphology_indices=morphology_indices),
+    )
+
+    event_indices = torch.tensor([[0, 3, -1], [2, 7, 5]])
+    event_values = torch.tensor([[1.0, -0.5, 0.0], [0.25, 0.75, -1.0]])
+    factorized.eval()
+    explicit.eval()
+    factorized_stream = factorized.allocate_streaming_state(2)
+    explicit_stream = explicit.allocate_streaming_state(2)
+    torch.testing.assert_close(
+        factorized.streaming_step_events(
+            event_indices,
+            event_values,
+            factorized_stream,
+            morphology_indices=morphology_indices,
+        ),
+        explicit.streaming_step_events(
+            event_indices,
+            event_values,
+            explicit_stream,
             morphology_indices=morphology_indices,
         ),
     )
