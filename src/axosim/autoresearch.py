@@ -39,8 +39,15 @@ def practical_candidate_gate(
     assessments: dict[str, str],
     baseline_training: dict[str, Any],
     candidate_training: dict[str, Any],
+    metric_families: Iterable[str] = ("sera", "f1"),
 ) -> dict[str, Any]:
     """Require statistical and practical significance on at least one axis."""
+    active_families = frozenset(str(family) for family in metric_families)
+    unsupported_families = active_families - {"sera", "f1"}
+    if not active_families or unsupported_families:
+        raise ValueError(
+            "metric_families must contain one or both of 'sera' and 'f1'"
+        )
     sera_metrics = {
         "voltage_sera_mv",
         "dynamics_sera_mv_per_ms",
@@ -54,7 +61,7 @@ def practical_candidate_gate(
     material_improvements = []
     material_regressions = []
     for metric, delta in deltas.items():
-        if metric in sera_metrics:
+        if metric in sera_metrics and "sera" in active_families:
             if (
                 delta <= -PRACTICAL_SERA_DELTA
                 and assessments.get(metric) == "improved"
@@ -65,7 +72,7 @@ def practical_candidate_gate(
                 and assessments.get(metric) == "regressed"
             ):
                 material_regressions.append(metric)
-        elif metric in f1_metrics:
+        elif metric in f1_metrics and "f1" in active_families:
             if (
                 delta >= PRACTICAL_F1_DELTA
                 and assessments.get(metric) == "improved"
@@ -150,6 +157,7 @@ def practical_candidate_gate(
             "f1_absolute": PRACTICAL_F1_DELTA,
             "efficiency_fraction": PRACTICAL_EFFICIENCY_FRACTION,
         },
+        "metric_families": sorted(active_families),
         "material_improvements": material_improvements,
         "material_regressions": material_regressions,
         "efficiency_improvements": efficiency_improvements,

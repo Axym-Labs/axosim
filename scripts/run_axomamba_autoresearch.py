@@ -320,6 +320,15 @@ def run_iteration(
                 assessments=candidate_diagnostics["assessments"],
                 baseline_training=baseline_training,
                 candidate_training=training_results[candidate_id],
+                metric_families=getattr(
+                    next(
+                        record
+                        for record in candidate_records
+                        if record.candidate_id == candidate_id
+                    ),
+                    "selection_metric_families",
+                    ("sera", "f1"),
+                ),
             )
     result = {
         **plan,
@@ -521,6 +530,17 @@ def _build_candidates(
         setattr(record, "retained_state_indices", retained_state_indices)
         setattr(record, "shared_module_prefix_groups", shared_module_prefix_groups)
         setattr(record, "initialized_tcn_adapters", initialized_tcn_adapters)
+        setattr(
+            record,
+            "selection_metric_families",
+            tuple(
+                str(family)
+                for family in specification.get(
+                    "selection_metric_families",
+                    training.get("selection_metric_families", ("sera", "f1")),
+                )
+            ),
+        )
         records.append(record)
     return records
 

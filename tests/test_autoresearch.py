@@ -199,6 +199,28 @@ def test_practical_gate_labels_efficiency_with_material_regression_as_tradeoff()
     assert gate["material_regressions"] == ["voltage_sera_mv"]
 
 
+def test_practical_gate_ignores_metrics_outside_the_declared_task_family() -> None:
+    gate = practical_candidate_gate(
+        {
+            "voltage_sera_mv": 0.01,
+            "spike_f1_area_0_5ms": -0.08,
+            "spike_f1_5ms": -0.09,
+        },
+        assessments={
+            "voltage_sera_mv": "uncertain",
+            "spike_f1_area_0_5ms": "regressed",
+            "spike_f1_5ms": "regressed",
+        },
+        baseline_training={"parameter_count": 100_000},
+        candidate_training={"parameter_count": 80_000},
+        metric_families={"sera"},
+    )
+
+    assert gate["decision"] == "review_efficiency_gain"
+    assert gate["material_regressions"] == []
+    assert gate["metric_families"] == ["sera"]
+
+
 def test_practical_gate_requires_robust_inference_speed_separation() -> None:
     common_deltas = {"voltage_sera_mv": 0.0}
     common_assessments = {"voltage_sera_mv": "uncertain"}
