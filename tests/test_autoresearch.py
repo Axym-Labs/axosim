@@ -53,15 +53,17 @@ def _write_morphology_dataset(root) -> None:
         )
 
 
-def test_task_objective_recipes_are_explicit_and_use_cross_task_auxiliaries() -> None:
+def test_task_objective_recipes_keep_replicated_regression_objective_separate() -> None:
     dual = axomamba_training_objective("dual")
     regression = axomamba_training_objective("regression")
     spike = axomamba_training_objective("spike")
 
     assert dual == default_axomamba_training_objective()
-    assert regression.direct_sera_loss_weight == 0.03
-    assert regression.spike_loss_weight > 0
-    assert regression.f1_curve_loss_weight > 0
+    assert regression.direct_sera_loss_weight == 0.01
+    assert regression.spike_loss_weight == 0.0
+    assert regression.soma_loss_weight == 0.0
+    assert regression.f1_curve_loss_weight == 0.0
+    assert regression.near_spike_voltage_loss_weight == 0.0
     assert spike.soma_loss_weight == 0.1
     assert spike.direct_sera_loss_weight == 0.001
     assert spike.f1_curve_loss_weight == 0.05

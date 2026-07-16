@@ -146,6 +146,7 @@ _RETIRED_AXOMAMBA_CONFIG_KEYS = frozenset(
         "synapse_trace_taus",
         "task_head_mamba_mode",
         "task_head_mamba_scale",
+        "task_refiner_mode",
         "voltage_state_decay_init",
         "voltage_state_decoder_hidden",
         "voltage_state_decoder_mode",

@@ -216,13 +216,13 @@ def default_axomamba_training_objective() -> TrainingObjective:
 
 
 def regression_axomamba_training_objective() -> TrainingObjective:
-    """Exploratory SERA-primary recipe; not a practical-gate model lead."""
+    """Return the replicated direct-SERA objective for voltage regression."""
     return TrainingObjective(
-        spike_loss_weight=0.25,
-        soma_loss_weight=0.75,
-        direct_sera_loss_weight=0.03,
-        f1_curve_loss_weight=0.05,
-        near_spike_voltage_loss_weight=0.02,
+        spike_loss_weight=0.0,
+        soma_loss_weight=0.0,
+        direct_sera_loss_weight=0.01,
+        f1_curve_loss_weight=0.0,
+        near_spike_voltage_loss_weight=0.0,
         near_spike_radius_steps=5,
         raw_soma_target_mix=1.0,
         sera_threshold_count=101,

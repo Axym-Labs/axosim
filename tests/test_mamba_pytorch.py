@@ -862,6 +862,7 @@ def test_axomamba_checkpoint_load_ignores_retired_experiment_config(tmp_path):
             "synapse_trace_mixture": "heterogeneous",
             "synapse_trace_residual": False,
             "synapse_trace_taus": None,
+            "task_refiner_mode": "none",
         }
     )
     payload["state_dict"].pop("branch_subunit_mask")
