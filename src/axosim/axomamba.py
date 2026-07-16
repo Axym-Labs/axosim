@@ -10,6 +10,7 @@ from axosim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
 
 AXOMAMBA_MODEL_KIND = "axomamba"
 AXOMAMBA_DEFAULT_CONFIG = "configs/axomamba.json"
+AXOMAMBA_STRUCTURED_COMPACT_CONFIG = "configs/axomamba-structured-compact.json"
 
 
 @dataclass(frozen=True)
@@ -18,7 +19,7 @@ class AxoMambaConfig(BranchOfficialMambaConfig):
 
 
 def default_axomamba_config(**overrides: Any) -> AxoMambaConfig:
-    """Return the promoted compact Mamba config.
+    """Return the promoted full dual-objective Mamba config.
 
     This is the practical-gate ablation-retained compact stack: 118 routed
     branches, morphology-conditioned synaptic efficacy, a learned route-
@@ -77,6 +78,19 @@ def default_axomamba_config(**overrides: Any) -> AxoMambaConfig:
     }
     values.update(overrides)
     return AxoMambaConfig(**values)
+
+
+def structured_compact_axomamba_config(**overrides: Any) -> AxoMambaConfig:
+    """Return the 300k-gated parameter-efficient AxoMamba variant."""
+
+    values: dict[str, Any] = {
+        "mamba_projection_rank": 16,
+        "state_dim": 2,
+        "share_local_tcn_pointwise": True,
+        "local_tcn_pointwise_adapter_rank": 2,
+    }
+    values.update(overrides)
+    return default_axomamba_config(**values)
 
 
 def load_axomamba_config(path: str | Path | None = None, **overrides: Any) -> AxoMambaConfig:
