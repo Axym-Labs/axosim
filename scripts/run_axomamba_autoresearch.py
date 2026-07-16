@@ -213,7 +213,9 @@ def run_iteration(
             device=str(training.get("device", "cuda")),
             burn_in=int(training.get("burn_in", AXOMAMBA_DEFAULT_BURN_IN)),
             seed=seed,
-            prefetch_batches=int(training.get("prefetch_batches", 1)),
+            prefetch_batches=int(
+                training.get("prefetch_batches", min(shard_reuse_batches, 16))
+            ),
             pin_memory=bool(training.get("pin_memory", False)),
             non_blocking=bool(training.get("non_blocking", True)),
             warmup_cuda=bool(training.get("warmup_cuda", True)),

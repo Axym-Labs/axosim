@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 import hashlib
@@ -50,6 +50,117 @@ def model_resident_state_metrics(model: nn.Module) -> dict[str, int]:
         "resident_buffer_bytes": buffer_bytes,
         "resident_state_bytes": parameter_bytes + buffer_bytes,
     }
+
+
+def model_population_memory_metrics(
+    model: nn.Module,
+    *,
+    streaming_dtype: torch.dtype = torch.float32,
+) -> dict[str, Any]:
+    """Separate shared model memory from state that scales with neuron count."""
+    parameters = list(model.parameters())
+    buffers = list(model.buffers())
+    trainable_parameters = [parameter for parameter in parameters if parameter.requires_grad]
+    frozen_parameters = [parameter for parameter in parameters if not parameter.requires_grad]
+    trainable_count = sum(parameter.numel() for parameter in trainable_parameters)
+    frozen_count = sum(parameter.numel() for parameter in frozen_parameters)
+    trainable_bytes = sum(
+        parameter.numel() * parameter.element_size()
+        for parameter in trainable_parameters
+    )
+    frozen_bytes = sum(
+        parameter.numel() * parameter.element_size()
+        for parameter in frozen_parameters
+    )
+    buffer_bytes = sum(buffer.numel() * buffer.element_size() for buffer in buffers)
+    state_element_bytes = torch.empty((), dtype=streaming_dtype).element_size()
+    components_elements: dict[str, int] = defaultdict(int)
+
+    for block in getattr(model, "blocks", ()):
+        mamba = getattr(block, "mamba", block)
+        d_inner = getattr(mamba, "d_inner", None)
+        d_conv = getattr(mamba, "d_conv", None)
+        d_state = getattr(mamba, "d_state", None)
+        if all(value is not None for value in (d_inner, d_conv, d_state)):
+            components_elements["mamba"] += int(d_inner) * (
+                int(d_conv) + int(d_state)
+            )
+
+    for block in getattr(model, "local_tcn_blocks", ()):
+        depthwise = getattr(block, "depthwise", None)
+        if isinstance(depthwise, nn.Conv1d):
+            components_elements["local_tcn"] += _conv1d_streaming_history_elements(
+                depthwise
+            )
+    for block in getattr(model, "soma_tcn_blocks", ()):
+        depthwise = getattr(block, "depthwise", None)
+        if isinstance(depthwise, nn.Conv1d):
+            components_elements["soma_tcn"] += _conv1d_streaming_history_elements(
+                depthwise
+            )
+    temporal_refine = getattr(model, "temporal_refine", None)
+    temporal_conv = getattr(temporal_refine, "conv", None)
+    if isinstance(temporal_conv, nn.Conv1d):
+        components_elements["temporal_refine"] += _conv1d_streaming_history_elements(
+            temporal_conv
+        )
+    for name in ("integrative_pre", "integrative_post"):
+        mixer = getattr(model, name, None)
+        if mixer is None:
+            continue
+        for conv_name in ("short_conv", "long_conv"):
+            conv = getattr(mixer, conv_name, None)
+            if isinstance(conv, nn.Conv1d):
+                components_elements["integrative_mixer"] += (
+                    _conv1d_streaming_history_elements(conv)
+                )
+
+    branch_trace_taus = tuple(getattr(model, "branch_trace_taus", ()))
+    if branch_trace_taus:
+        config = getattr(model, "config")
+        components_elements["branch_traces"] += (
+            len(branch_trace_taus)
+            * int(config.num_branch)
+            * (int(config.branch_trace_kernel) - 1)
+        )
+    hidden_trace_taus = tuple(getattr(model, "hidden_trace_taus", ()))
+    if hidden_trace_taus:
+        config = getattr(model, "config")
+        components_elements["hidden_traces"] += (
+            len(hidden_trace_taus)
+            * int(config.model_dim)
+            * (int(config.hidden_trace_kernel) - 1)
+        )
+
+    component_bytes = {
+        name: elements * state_element_bytes
+        for name, elements in sorted(components_elements.items())
+        if elements
+    }
+    streaming_state_bytes = sum(component_bytes.values())
+    return {
+        "trainable_parameter_count": trainable_count,
+        "trainable_parameter_bytes": trainable_bytes,
+        "frozen_parameter_count": frozen_count,
+        "frozen_parameter_bytes": frozen_bytes,
+        "shared_buffer_bytes": buffer_bytes,
+        "shared_fixed_state_bytes": frozen_bytes + buffer_bytes,
+        "streaming_state_dtype": str(streaming_dtype).removeprefix("torch."),
+        "streaming_state_components_bytes": component_bytes,
+        "per_neuron_streaming_state_bytes": streaming_state_bytes,
+        "per_neuron_trainable_plus_streaming_bytes": (
+            trainable_bytes + streaming_state_bytes
+        ),
+        "estimated_adamw_training_state_bytes": (
+            4 * trainable_bytes + frozen_bytes + buffer_bytes
+        ),
+    }
+
+
+def _conv1d_streaming_history_elements(conv: nn.Conv1d) -> int:
+    kernel = int(conv.kernel_size[0])
+    dilation = int(conv.dilation[0])
+    return int(conv.in_channels) * (kernel - 1) * dilation
 
 
 def practical_candidate_gate(
@@ -106,20 +217,28 @@ def practical_candidate_gate(
     efficiency_improvements: dict[str, float] = {}
     baseline_parameters = float(
         baseline_training.get(
-            "resident_parameter_count",
-            baseline_training.get("parameter_count", 0),
+            "trainable_parameter_count",
+            baseline_training.get(
+                "resident_parameter_count",
+                baseline_training.get("parameter_count", 0),
+            ),
         )
     )
     candidate_parameters = float(
         candidate_training.get(
-            "resident_parameter_count",
-            candidate_training.get("parameter_count", 0),
+            "trainable_parameter_count",
+            candidate_training.get(
+                "resident_parameter_count",
+                candidate_training.get("parameter_count", 0),
+            ),
         )
     )
     if baseline_parameters > 0 and candidate_parameters > 0:
         parameter_reduction = (baseline_parameters - candidate_parameters) / baseline_parameters
         if parameter_reduction >= PRACTICAL_EFFICIENCY_FRACTION:
-            efficiency_improvements["parameter_reduction_fraction"] = parameter_reduction
+            efficiency_improvements[
+                "trainable_parameter_reduction_fraction"
+            ] = parameter_reduction
     baseline_state_bytes = float(baseline_training.get("resident_state_bytes", 0))
     candidate_state_bytes = float(candidate_training.get("resident_state_bytes", 0))
     if baseline_state_bytes > 0 and candidate_state_bytes > 0:
@@ -130,6 +249,20 @@ def practical_candidate_gate(
             efficiency_improvements[
                 "resident_state_memory_reduction_fraction"
             ] = state_memory_reduction
+    baseline_streaming_bytes = float(
+        baseline_training.get("per_neuron_streaming_state_bytes", 0)
+    )
+    candidate_streaming_bytes = float(
+        candidate_training.get("per_neuron_streaming_state_bytes", 0)
+    )
+    if baseline_streaming_bytes > 0 and candidate_streaming_bytes > 0:
+        streaming_state_reduction = (
+            baseline_streaming_bytes - candidate_streaming_bytes
+        ) / baseline_streaming_bytes
+        if streaming_state_reduction >= PRACTICAL_EFFICIENCY_FRACTION:
+            efficiency_improvements[
+                "per_neuron_streaming_state_reduction_fraction"
+            ] = streaming_state_reduction
     baseline_rate = float(
         baseline_training.get("training_step_presentations_per_second", 0)
     )
@@ -176,6 +309,45 @@ def practical_candidate_gate(
             and robust_latency_separation
         ):
             efficiency_improvements["inference_speedup_fraction"] = inference_speedup
+    baseline_population_memory = float(
+        baseline_training.get("population_peak_allocated_bytes", 0)
+    )
+    candidate_population_memory = float(
+        candidate_training.get("population_peak_allocated_bytes", 0)
+    )
+    if baseline_population_memory > 0 and candidate_population_memory > 0:
+        population_memory_reduction = (
+            baseline_population_memory - candidate_population_memory
+        ) / baseline_population_memory
+        if population_memory_reduction >= PRACTICAL_EFFICIENCY_FRACTION:
+            efficiency_improvements[
+                "population_peak_memory_reduction_fraction"
+            ] = population_memory_reduction
+    baseline_population_rate = float(
+        baseline_training.get("population_neuron_steps_per_second", 0)
+    )
+    candidate_population_rate = float(
+        candidate_training.get("population_neuron_steps_per_second", 0)
+    )
+    if baseline_population_rate > 0 and candidate_population_rate > 0:
+        population_speedup = candidate_population_rate / baseline_population_rate - 1.0
+        baseline_latency_p10 = float(
+            baseline_training.get("population_step_latency_p10_ms", 0)
+        )
+        candidate_latency_p90 = float(
+            candidate_training.get("population_step_latency_p90_ms", float("inf"))
+        )
+        robust_latency_separation = (
+            baseline_latency_p10 > 0
+            and candidate_latency_p90 < baseline_latency_p10
+        )
+        if (
+            population_speedup >= PRACTICAL_EFFICIENCY_FRACTION
+            and robust_latency_separation
+        ):
+            efficiency_improvements[
+                "population_inference_speedup_fraction"
+            ] = population_speedup
 
     automatically_rejected = not material_improvements and not efficiency_improvements
     if automatically_rejected:
@@ -834,6 +1006,7 @@ def train_candidate_panel(
         else:
             compute_seconds = sum(state["compute_timing"])
         resident_state = model_resident_state_metrics(model)
+        population_memory = model_population_memory_metrics(model)
         metrics = {
             "candidate_id": candidate_id,
             "train_presentations": state["presentations"],
@@ -848,14 +1021,13 @@ def train_candidate_panel(
             "seed": seed,
             "device": device,
             "parameter_count": resident_state["resident_parameter_count"],
-            "trainable_parameter_count": sum(
-                parameter.numel() for parameter in model.parameters() if parameter.requires_grad
-            ),
             **resident_state,
+            **population_memory,
             "mean_training_loss": state["loss_sum"] / max(state["steps"], 1),
             "last_components": state["last_components"],
             "panel_candidates": [item.candidate_id for item in candidates],
             "shared_super_batch_size": super_batch_size,
+            "prefetch_batches": prefetch_batches,
             "panel_wall_seconds": panel_seconds,
             "warmup_seconds": warmup_seconds,
             "shared_teacher_compute_seconds": teacher_compute_seconds,
@@ -1206,18 +1378,25 @@ def resolve_presentation_budget(*, iteration: int, force_long: bool) -> int:
 
 def _iter_shared_batches(dataset: Any, batch_size: int, *, prefetch_batches: int):
     ranges = [range(start, min(start + batch_size, len(dataset))) for start in range(0, len(dataset), batch_size)]
-    load = getattr(dataset, "get_shared_batch", dataset.get_batch)
+    load = getattr(dataset, "get_shared_batch", None)
+    if load is None:
+        load = dataset.get_batch
     if prefetch_batches <= 0:
         for batch_index, indices in enumerate(ranges):
             yield batch_index, indices, load(indices)
         return
+    queue_depth = min(prefetch_batches, len(ranges))
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(load, ranges[0])
-        for batch_index in range(len(ranges)):
-            batch_arrays = future.result()
-            next_index = batch_index + 1
-            future = executor.submit(load, ranges[next_index]) if next_index < len(ranges) else None
-            yield batch_index, ranges[batch_index], batch_arrays
+        futures = deque(
+            executor.submit(load, ranges[index]) for index in range(queue_depth)
+        )
+        next_index = queue_depth
+        for batch_index, indices in enumerate(ranges):
+            batch_arrays = futures.popleft().result()
+            if next_index < len(ranges):
+                futures.append(executor.submit(load, ranges[next_index]))
+                next_index += 1
+            yield batch_index, indices, batch_arrays
 
 
 def _forward_model(

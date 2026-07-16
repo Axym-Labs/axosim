@@ -53,6 +53,8 @@ class BranchOfficialMambaConfig:
     morphology_synapse_feature_dim: int = 0
     morphology_synapse_feature_hidden: int = 0
     morphology_synapse_feature_scale: float | None = None
+    morphology_synapse_feature_storage_dtype: str = "float32"
+    share_morphology_feature_compute: bool = True
     local_tcn_scale: float | None = None
     local_tcn_mode: str = "dilated"
     local_tcn_position: str = "parallel"
@@ -81,6 +83,15 @@ class BranchOfficialMambaConfig:
     integrative_mixer_long_kernel: int = 65
     integrative_mixer_position: str = "pre"
     integrative_mixer_long_path_bias: float = 0.5
+
+
+@dataclass
+class BranchMambaStreamingState:
+    """Mutable recurrent state for exact one-timestep AxoMamba inference."""
+
+    mamba_states: list[tuple[torch.Tensor, torch.Tensor]]
+    local_tcn_histories: list[torch.Tensor]
+    morphology_feature_gains: torch.Tensor | None = None
 
 
 class BranchOfficialMamba(nn.Module):
@@ -163,6 +174,14 @@ class BranchOfficialMamba(nn.Module):
             or config.morphology_synapse_feature_hidden > 0
             or config.morphology_synapse_feature_scale is not None
         )
+        if config.morphology_synapse_feature_storage_dtype not in {
+            "float32",
+            "float16",
+        }:
+            raise ValueError(
+                "morphology_synapse_feature_storage_dtype must be "
+                "'float32' or 'float16'"
+            )
         if feature_operator_enabled:
             if config.morphology_ids is None:
                 raise ValueError("morphology_synapse_feature operator requires morphology_ids")
@@ -275,6 +294,11 @@ class BranchOfficialMamba(nn.Module):
                 len(config.morphology_ids),
                 config.num_input,
                 config.morphology_synapse_feature_dim,
+                dtype=(
+                    torch.float16
+                    if config.morphology_synapse_feature_storage_dtype == "float16"
+                    else torch.float32
+                ),
             )
             if feature_operator_enabled
             else torch.empty(0)
@@ -722,6 +746,235 @@ class BranchOfficialMamba(nn.Module):
             local = block(local)
         return self.config.local_tcn_scale * self.local_tcn_out(local)
 
+    def allocate_streaming_state(
+        self,
+        batch_size: int,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> BranchMambaStreamingState:
+        """Allocate state that advances a population without replaying history."""
+        self._validate_streaming_configuration()
+        if batch_size <= 0:
+            raise ValueError("streaming batch_size must be positive")
+        parameter = next(self.parameters())
+        resolved_device = parameter.device if device is None else torch.device(device)
+        resolved_dtype = parameter.dtype if dtype is None else dtype
+        mamba_states = [
+            block.mamba.allocate_inference_cache(
+                batch_size,
+                max_seqlen=1,
+                dtype=resolved_dtype,
+                device=resolved_device,
+            )
+            for block in self.blocks
+        ]
+        local_tcn_histories = [
+            torch.zeros(
+                batch_size,
+                block.depthwise.in_channels,
+                block.right_padding,
+                device=resolved_device,
+                dtype=resolved_dtype,
+            )
+            for block in self.local_tcn_blocks
+        ]
+        return BranchMambaStreamingState(
+            mamba_states=mamba_states,
+            local_tcn_histories=local_tcn_histories,
+            morphology_feature_gains=self._all_morphology_feature_gains(
+                dtype=resolved_dtype,
+                device=resolved_device,
+            ) if self.config.share_morphology_feature_compute else None,
+        )
+
+    def streaming_step(
+        self,
+        x: torch.Tensor,
+        state: BranchMambaStreamingState,
+        *,
+        morphology_indices: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Advance one timestep and return `(batch, 1, output)` predictions."""
+        self._validate_streaming_configuration()
+        if x.ndim == 2:
+            x = x.unsqueeze(1)
+        if x.ndim != 3 or x.shape[1] != 1 or x.shape[2] != self.num_input:
+            raise ValueError(
+                "streaming input must have shape (batch, channels) or "
+                "(batch, 1, channels)"
+            )
+        if len(state.mamba_states) != len(self.blocks):
+            raise ValueError("streaming Mamba state does not match model layers")
+        if len(state.local_tcn_histories) != len(self.local_tcn_blocks):
+            raise ValueError("streaming TCN state does not match model blocks")
+
+        routed_events = self._route_input_to_synapses(
+            x,
+            morphology_indices=morphology_indices,
+        )
+        routed_synapses = self._apply_synapse_weights(
+            routed_events,
+            morphology_indices=morphology_indices,
+            morphology_feature_gains=state.morphology_feature_gains,
+        )
+        branch_inputs = routed_synapses.sum(dim=-1)
+        if self.branch_gain is not None:
+            gain = self.branch_gain.to(
+                dtype=branch_inputs.dtype,
+                device=branch_inputs.device,
+            )
+            branch_inputs = branch_inputs * gain.view(1, 1, -1)
+        if self.config.branch_nonlinearity == "tanh":
+            assert self.branch_nonlinearity_log_scale is not None
+            assert self.branch_nonlinearity_bias is not None
+            scale = self.branch_nonlinearity_log_scale.exp().to(
+                dtype=branch_inputs.dtype,
+                device=branch_inputs.device,
+            )
+            bias = self.branch_nonlinearity_bias.to(
+                dtype=branch_inputs.dtype,
+                device=branch_inputs.device,
+            )
+            branch_inputs = torch.tanh(
+                scale.view(1, 1, -1)
+                * (branch_inputs + bias.view(1, 1, -1))
+            )
+            branch_inputs = branch_inputs / scale.view(1, 1, -1).clamp_min(
+                torch.finfo(branch_inputs.dtype).eps
+            )
+
+        hidden = self.branch_projection(branch_inputs)
+        if self.branch_subunit_projection is not None:
+            subunit_inputs = self._branch_subunit_features(routed_synapses)
+            if self.branch_gain is not None:
+                assert self.branch_gain is not None
+                subunit_inputs = subunit_inputs * self.branch_gain.to(
+                    dtype=subunit_inputs.dtype,
+                    device=subunit_inputs.device,
+                ).view(1, 1, -1, 1)
+            hidden = hidden + self.config.branch_subunit_scale * self.branch_subunit_projection(
+                subunit_inputs.flatten(start_dim=-2)
+            )
+        hidden = self._apply_projected_branch_bilinear(
+            hidden,
+            self._branch_bilinear_projection(branch_inputs),
+        )
+        if self.morphology_embedding is not None:
+            if morphology_indices is None:
+                raise ValueError(
+                    "morphology_indices are required for morphology-conditioned AxoMamba"
+                )
+            if morphology_indices.ndim != 1 or morphology_indices.shape[0] != x.shape[0]:
+                raise ValueError("morphology_indices must have shape (batch,)")
+            morphology = self.morphology_embedding(
+                morphology_indices.to(
+                    dtype=torch.long,
+                    device=hidden.device,
+                )
+            ).to(dtype=hidden.dtype)
+            assert self.config.morphology_embedding_scale is not None
+            hidden = hidden + self.config.morphology_embedding_scale * morphology.unsqueeze(1)
+        elif morphology_indices is not None and self.config.morphology_ids is None:
+            raise ValueError("morphology_indices were provided to an unconditioned AxoMamba")
+
+        for block_index, block in enumerate(self.blocks):
+            conv_state, ssm_state = state.mamba_states[block_index]
+            update, conv_state, ssm_state = block.mamba.step(
+                block.norm(hidden),
+                conv_state,
+                ssm_state,
+            )
+            state.mamba_states[block_index] = (conv_state, ssm_state)
+            hidden = hidden + block.residual_scale.view(1, 1, -1) * block.dropout(update)
+
+        hidden = hidden + self._stream_local_tcn_correction(
+            hidden,
+            state.local_tcn_histories,
+        )
+        features = self.norm(hidden)
+        if self.readout is not None:
+            output = self.readout(features)
+            spike = output[..., 0:1]
+            base_soma = output[..., 1:2]
+            soma = base_soma
+        else:
+            assert self.spike_readout is not None and self.soma_readout is not None
+            spike = self.spike_readout(features)
+            base_soma = self._readout_soma(features, None)
+            soma = base_soma
+        self.base_soma_prediction = base_soma
+        if self.config.spike_voltage_coupling_scale:
+            spike = self._couple_spike_voltage(spike, soma)
+        return torch.cat([spike, soma], dim=-1)
+
+    def _stream_local_tcn_correction(
+        self,
+        hidden: torch.Tensor,
+        histories: list[torch.Tensor],
+    ) -> torch.Tensor:
+        if self.local_tcn_out is None:
+            return torch.zeros_like(hidden)
+        local = hidden
+        for block, history in zip(self.local_tcn_blocks, histories, strict=True):
+            value = local.transpose(1, 2)
+            if history.shape[:2] != value.shape[:2] or history.shape[2] != block.right_padding:
+                raise ValueError("streaming TCN history has the wrong shape")
+            window = torch.cat([history, value], dim=-1)
+            filtered = F.conv1d(
+                window,
+                block.depthwise.weight,
+                block.depthwise.bias,
+                dilation=block.depthwise.dilation,
+                groups=block.depthwise.groups,
+            )
+            history.copy_(window[..., -block.right_padding :])
+            activated = F.silu(filtered)
+            update = block.pointwise(activated)
+            if block.pointwise_adapter_in is not None:
+                assert block.pointwise_adapter_out is not None
+                update = update + block.pointwise_adapter_out(
+                    block.pointwise_adapter_in(activated)
+                )
+            local = local + update.transpose(1, 2)
+        assert self.config.local_tcn_scale is not None
+        return self.config.local_tcn_scale * self.local_tcn_out(local)
+
+    def _validate_streaming_configuration(self) -> None:
+        unsupported = []
+        if self.training:
+            unsupported.append("training mode")
+        if self.config.block_type != "mamba1":
+            unsupported.append("non-Mamba-1 block")
+        if self.config.block_repeats != 1:
+            unsupported.append("block repeats")
+        if self.branch_trace_taus:
+            unsupported.append("branch traces")
+        if self.hidden_trace_taus:
+            unsupported.append("hidden traces")
+        if self.integrative_pre is not None or self.integrative_post is not None:
+            unsupported.append("integrative mixer")
+        if self.temporal_refine is not None:
+            unsupported.append("temporal refine")
+        if self.local_tcn_blocks and self.config.local_tcn_position != "post":
+            unsupported.append("non-post local TCN")
+        if self.soma_tcn_out is not None:
+            unsupported.append("soma TCN")
+        if self.soma_filter_logit is not None:
+            unsupported.append("soma filter")
+        if self.soma_highpass_correction_scale is not None:
+            unsupported.append("soma highpass correction")
+        if any(
+            not hasattr(block.mamba, "allocate_inference_cache")
+            or not hasattr(block.mamba, "step")
+            for block in self.blocks
+        ):
+            unsupported.append("Mamba backend without streaming state")
+        if unsupported:
+            raise ValueError(
+                "streaming AxoMamba does not support " + ", ".join(unsupported)
+            )
+
     def _apply_branch_bilinear(
         self,
         hidden: torch.Tensor,
@@ -889,6 +1142,7 @@ class BranchOfficialMamba(nn.Module):
         routed: torch.Tensor,
         *,
         morphology_indices: torch.Tensor | None = None,
+        morphology_feature_gains: torch.Tensor | None = None,
     ) -> torch.Tensor:
         batch_size, time_steps, _ = routed.shape
         routed = routed.view(batch_size, time_steps, self.num_branch, -1)
@@ -919,34 +1173,95 @@ class BranchOfficialMamba(nn.Module):
         if self.morphology_synapse_feature_out is not None:
             if morphology_indices is None:
                 raise ValueError("morphology_indices are required for morphology synapse features")
-            assert self.morphology_synapse_feature_in is not None
-            assert self.config.morphology_synapse_feature_scale is not None
-            selected_features = self.morphology_synapse_features.index_select(
-                0,
-                morphology_indices.to(
-                    dtype=torch.long,
-                    device=self.morphology_synapse_features.device,
-                ),
-            )
-            if self.input_to_synapse_routing is not None:
-                selected_features = torch.index_select(
-                    selected_features,
-                    1,
-                    self.input_to_synapse_indices,
+            feature_gains = morphology_feature_gains
+            if feature_gains is None and self.config.share_morphology_feature_compute:
+                feature_gains = self._all_morphology_feature_gains(
+                    dtype=routed.dtype,
+                    device=routed.device,
                 )
-            selected_features = selected_features.view(
-                batch_size,
-                self.num_branch,
-                self.num_synapse_per_branch,
-                self.config.morphology_synapse_feature_dim,
-            ).to(dtype=routed.dtype, device=routed.device)
-            feature_hidden = F.silu(self.morphology_synapse_feature_in(selected_features))
-            feature_delta = self.morphology_synapse_feature_out(feature_hidden).squeeze(-1)
-            feature_gain = torch.exp(
-                self.config.morphology_synapse_feature_scale * feature_delta
-            )
-            routed = routed * feature_gain.unsqueeze(1)
+            if feature_gains is None:
+                feature_gains = self._per_neuron_morphology_feature_gains(
+                    morphology_indices,
+                    dtype=routed.dtype,
+                    device=routed.device,
+                )
+                feature_gain = feature_gains
+            else:
+                feature_gain = feature_gains.index_select(
+                    0,
+                    morphology_indices.to(
+                        dtype=torch.long,
+                        device=feature_gains.device,
+                    ),
+                )
+            routed = routed * feature_gain.to(
+                dtype=routed.dtype,
+                device=routed.device,
+            ).unsqueeze(1)
         return routed
+
+    def _all_morphology_feature_gains(
+        self,
+        *,
+        dtype: torch.dtype,
+        device: torch.device | str,
+    ) -> torch.Tensor | None:
+        if self.morphology_synapse_feature_out is None:
+            return None
+        assert self.morphology_synapse_feature_in is not None
+        assert self.config.morphology_synapse_feature_scale is not None
+        assert self.config.morphology_ids is not None
+        features = self.morphology_synapse_features
+        if self.input_to_synapse_routing is not None:
+            features = torch.index_select(
+                features,
+                1,
+                self.input_to_synapse_indices,
+            )
+        features = features.view(
+            len(self.config.morphology_ids),
+            self.num_branch,
+            self.num_synapse_per_branch,
+            self.config.morphology_synapse_feature_dim,
+        ).to(dtype=dtype, device=device)
+        feature_hidden = F.silu(self.morphology_synapse_feature_in(features))
+        feature_delta = self.morphology_synapse_feature_out(feature_hidden).squeeze(-1)
+        return torch.exp(
+            self.config.morphology_synapse_feature_scale * feature_delta
+        )
+
+    def _per_neuron_morphology_feature_gains(
+        self,
+        morphology_indices: torch.Tensor,
+        *,
+        dtype: torch.dtype,
+        device: torch.device | str,
+    ) -> torch.Tensor:
+        assert self.morphology_synapse_feature_in is not None
+        assert self.morphology_synapse_feature_out is not None
+        assert self.config.morphology_synapse_feature_scale is not None
+        features = self.morphology_synapse_features.index_select(
+            0,
+            morphology_indices.to(
+                dtype=torch.long,
+                device=self.morphology_synapse_features.device,
+            ),
+        )
+        if self.input_to_synapse_routing is not None:
+            features = torch.index_select(
+                features,
+                1,
+                self.input_to_synapse_indices,
+            )
+        features = features.view(
+            morphology_indices.shape[0],
+            self.num_branch,
+            self.num_synapse_per_branch,
+            self.config.morphology_synapse_feature_dim,
+        ).to(dtype=dtype, device=device)
+        hidden = F.silu(self.morphology_synapse_feature_in(features))
+        delta = self.morphology_synapse_feature_out(hidden).squeeze(-1)
+        return torch.exp(self.config.morphology_synapse_feature_scale * delta)
 
     def _branch_subunit_features(self, routed_synapses: torch.Tensor) -> torch.Tensor:
         if self.branch_subunit_log_gain is None:

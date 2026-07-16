@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import threading
 
 import numpy as np
 import torch
@@ -23,6 +24,7 @@ from axosim.autoresearch import (
     freeze_named_parameters,
     initialize_named_parameters,
     load_named_buffer_artifact,
+    model_population_memory_metrics,
     model_resident_state_metrics,
     offset_named_parameters,
     output_distillation_loss,
@@ -30,6 +32,7 @@ from axosim.autoresearch import (
     train_candidate_panel,
     training_objective_loss,
     differentiable_near_spike_voltage_loss,
+    _iter_shared_batches,
 )
 from axosim.data import ShardedNeuronIODataset
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
@@ -51,6 +54,78 @@ def test_resident_state_metrics_count_all_parameters_and_buffers_once() -> None:
         "resident_buffer_bytes": 8,
         "resident_state_bytes": 40,
     }
+
+
+def test_population_memory_metrics_separate_trainable_shared_and_streaming_state() -> None:
+    config = AxoMambaConfig(
+        num_input=8,
+        num_output=2,
+        num_branch=4,
+        num_synapse_per_branch=2,
+        model_dim=4,
+        num_layers=1,
+        state_dim=2,
+        conv_kernel=2,
+        expansion=2,
+        local_tcn_scale=1.0,
+    )
+    model = AxoPyTorchMamba(config)
+    model.readout.weight.requires_grad_(False)
+    metrics = model_population_memory_metrics(model)
+    expected_trainable_bytes = sum(
+        parameter.numel() * parameter.element_size()
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    )
+    expected_frozen_bytes = sum(
+        parameter.numel() * parameter.element_size()
+        for parameter in model.parameters()
+        if not parameter.requires_grad
+    )
+    expected_buffer_bytes = sum(
+        buffer.numel() * buffer.element_size() for buffer in model.buffers()
+    )
+
+    assert metrics["trainable_parameter_bytes"] == expected_trainable_bytes
+    assert metrics["frozen_parameter_bytes"] == expected_frozen_bytes
+    assert metrics["shared_buffer_bytes"] == expected_buffer_bytes
+    assert metrics["streaming_state_components_bytes"] == {
+        "local_tcn": 672,
+        "mamba": 128,
+    }
+    assert metrics["per_neuron_streaming_state_bytes"] == 800
+    assert metrics["estimated_adamw_training_state_bytes"] == (
+        4 * expected_trainable_bytes + expected_frozen_bytes + expected_buffer_bytes
+    )
+
+
+def test_shared_batch_prefetch_fills_requested_queue_depth() -> None:
+    third_batch_loaded = threading.Event()
+
+    class Dataset:
+        def __init__(self) -> None:
+            self.loaded: list[int] = []
+
+        def __len__(self) -> int:
+            return 4
+
+        def get_batch(self, indices: range) -> tuple[np.ndarray, np.ndarray]:
+            index = int(indices.start)
+            self.loaded.append(index)
+            if len(self.loaded) >= 3:
+                third_batch_loaded.set()
+            values = np.asarray([[index]], dtype=np.float32)
+            return values, values
+
+    dataset = Dataset()
+    batches = _iter_shared_batches(dataset, 1, prefetch_batches=3)
+
+    first_batch = next(batches)
+
+    assert first_batch[0] == 0
+    assert third_batch_loaded.wait(timeout=1.0)
+    assert dataset.loaded[:3] == [0, 1, 2]
+    batches.close()
 
 
 def _write_morphology_dataset(root) -> None:
@@ -165,6 +240,53 @@ def test_practical_gate_counts_resident_state_memory_as_efficiency() -> None:
     assert gate["automatically_rejected"] is False
     assert gate["efficiency_improvements"] == {
         "resident_state_memory_reduction_fraction": 0.2
+    }
+
+
+def test_practical_gate_counts_per_neuron_streaming_state_as_efficiency() -> None:
+    gate = practical_candidate_gate(
+        {"voltage_sera_mv": 0.02},
+        assessments={"voltage_sera_mv": "uncertain"},
+        baseline_training={
+            "trainable_parameter_count": 100,
+            "per_neuron_streaming_state_bytes": 10_000,
+        },
+        candidate_training={
+            "trainable_parameter_count": 100,
+            "per_neuron_streaming_state_bytes": 6_000,
+        },
+        metric_families=("sera",),
+    )
+
+    assert gate["automatically_rejected"] is False
+    assert gate["efficiency_improvements"] == {
+        "per_neuron_streaming_state_reduction_fraction": 0.4
+    }
+
+
+def test_practical_gate_counts_robust_population_speed_and_peak_memory() -> None:
+    gate = practical_candidate_gate(
+        {"voltage_sera_mv": 0.0},
+        assessments={"voltage_sera_mv": "uncertain"},
+        baseline_training={
+            "trainable_parameter_count": 100,
+            "population_neuron_steps_per_second": 1_000_000,
+            "population_step_latency_p10_ms": 7.0,
+            "population_peak_allocated_bytes": 2_000_000_000,
+        },
+        candidate_training={
+            "trainable_parameter_count": 100,
+            "population_neuron_steps_per_second": 8_000_000,
+            "population_step_latency_p90_ms": 1.2,
+            "population_peak_allocated_bytes": 400_000_000,
+        },
+        metric_families=("sera",),
+    )
+
+    assert gate["automatically_rejected"] is False
+    assert gate["efficiency_improvements"] == {
+        "population_peak_memory_reduction_fraction": 0.8,
+        "population_inference_speedup_fraction": 7.0,
     }
 
 

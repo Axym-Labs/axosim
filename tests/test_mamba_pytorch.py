@@ -511,6 +511,91 @@ def test_morphology_coordinate_synapse_operator_is_exactly_controlled():
     )
 
 
+def test_morphology_feature_mlp_runs_once_per_morphology_not_per_neuron():
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=8,
+            num_output=2,
+            num_branch=4,
+            num_synapse_per_branch=2,
+            model_dim=6,
+            num_layers=1,
+            state_dim=2,
+            conv_kernel=2,
+            expansion=2,
+            morphology_ids=["morph-a", "morph-b"],
+            morphology_embedding_scale=0.1,
+            morphology_synapse_feature_dim=3,
+            morphology_synapse_feature_hidden=4,
+            morphology_synapse_feature_scale=1.0,
+        )
+    )
+    assert model.morphology_synapse_feature_in is not None
+    observed_shapes = []
+    hook = model.morphology_synapse_feature_in.register_forward_pre_hook(
+        lambda _module, arguments: observed_shapes.append(tuple(arguments[0].shape))
+    )
+
+    model(
+        torch.randn(7, 5, 8),
+        morphology_indices=torch.tensor([0, 1, 0, 1, 0, 1, 0]),
+    )
+    hook.remove()
+
+    assert observed_shapes == [(2, 4, 2, 3)]
+
+
+def test_morphology_feature_float16_storage_halves_buffer_with_close_outputs():
+    common = dict(
+        num_input=8,
+        num_output=2,
+        num_branch=4,
+        num_synapse_per_branch=2,
+        model_dim=6,
+        num_layers=1,
+        state_dim=2,
+        conv_kernel=2,
+        expansion=2,
+        morphology_ids=["morph-a", "morph-b"],
+        morphology_embedding_scale=0.1,
+        morphology_synapse_gain_scale=1.0,
+        morphology_synapse_feature_dim=3,
+        morphology_synapse_feature_hidden=4,
+        morphology_synapse_feature_scale=1.0,
+    )
+    torch.manual_seed(109)
+    reference = AxoPyTorchMamba(AxoMambaConfig(**common))
+    torch.manual_seed(109)
+    compact = AxoPyTorchMamba(
+        AxoMambaConfig(
+            **common,
+            morphology_synapse_feature_storage_dtype="float16",
+        )
+    )
+    features = torch.linspace(-1.0, 1.0, 2 * 8 * 3).view(2, 8, 3)
+    reference.morphology_synapse_features.copy_(features)
+    compact.load_state_dict(reference.state_dict())
+    with torch.no_grad():
+        reference.morphology_synapse_feature_out.weight.fill_(0.1)
+        compact.morphology_synapse_feature_out.weight.fill_(0.1)
+    x = torch.randn(2, 11, 8)
+    morphology_indices = torch.tensor([0, 1])
+
+    assert reference.morphology_synapse_features.dtype == torch.float32
+    assert compact.morphology_synapse_features.dtype == torch.float16
+    assert (
+        compact.morphology_synapse_features.untyped_storage().nbytes()
+        * 2
+        == reference.morphology_synapse_features.untyped_storage().nbytes()
+    )
+    torch.testing.assert_close(
+        compact(x, morphology_indices=morphology_indices),
+        reference(x, morphology_indices=morphology_indices),
+        atol=5e-4,
+        rtol=5e-4,
+    )
+
+
 def test_morphology_coordinate_synapse_configuration_is_strict():
     common = dict(
         num_input=8,
@@ -530,6 +615,18 @@ def test_morphology_coordinate_synapse_configuration_is_strict():
                 morphology_synapse_feature_dim=3,
                 morphology_synapse_feature_hidden=4,
                 morphology_synapse_feature_scale=1.0,
+            )
+        )
+    with pytest.raises(ValueError, match="morphology_synapse_feature_storage_dtype"):
+        AxoPyTorchMamba(
+            AxoMambaConfig(
+                **common,
+                morphology_ids=["morph-a"],
+                morphology_embedding_scale=0.1,
+                morphology_synapse_feature_dim=3,
+                morphology_synapse_feature_hidden=4,
+                morphology_synapse_feature_scale=1.0,
+                morphology_synapse_feature_storage_dtype="float64",
             )
         )
     with pytest.raises(ValueError, match="morphology_synapse_feature"):
@@ -896,3 +993,63 @@ def test_axomamba_checkpoint_load_ignores_retired_experiment_config(tmp_path):
 
     assert loaded.__class__.__name__ == "AxoPyTorchMamba"
     assert loaded.config == model.config
+
+
+def test_streaming_step_matches_full_sequence_for_population_model_path():
+    torch.manual_seed(131)
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=8,
+            num_output=2,
+            num_branch=4,
+            num_synapse_per_branch=2,
+            model_dim=6,
+            num_layers=2,
+            state_dim=2,
+            conv_kernel=2,
+            expansion=2,
+            morphology_ids=["morph-a", "morph-b"],
+            morphology_embedding_scale=0.15,
+            morphology_synapse_gain_scale=1.0,
+            morphology_synapse_feature_dim=3,
+            morphology_synapse_feature_hidden=4,
+            morphology_synapse_feature_scale=1.0,
+            branch_nonlinearity="tanh",
+            separate_heads=True,
+            spike_voltage_coupling_scale=4.0,
+            local_tcn_scale=1.0,
+            local_tcn_mode="undilated",
+            local_tcn_position="post",
+        )
+    ).eval()
+    with torch.no_grad():
+        assert model.morphology_synapse_log_gain is not None
+        model.morphology_synapse_log_gain.normal_(std=0.1)
+        model.morphology_synapse_features.normal_(std=0.2)
+        assert model.morphology_synapse_feature_out is not None
+        model.morphology_synapse_feature_out.weight.normal_(std=0.1)
+        assert model.local_tcn_out is not None
+        model.local_tcn_out.weight.normal_(std=0.1)
+    inputs = torch.randn(3, 17, 8)
+    morphology_indices = torch.tensor([0, 1, 0])
+
+    with torch.no_grad():
+        full = model(inputs, morphology_indices=morphology_indices)
+        state = model.allocate_streaming_state(
+            inputs.shape[0],
+            device=inputs.device,
+            dtype=inputs.dtype,
+        )
+        streamed = torch.cat(
+            [
+                model.streaming_step(
+                    inputs[:, step],
+                    state,
+                    morphology_indices=morphology_indices,
+                )
+                for step in range(inputs.shape[1])
+            ],
+            dim=1,
+        )
+
+    torch.testing.assert_close(streamed, full, atol=2e-5, rtol=2e-5)

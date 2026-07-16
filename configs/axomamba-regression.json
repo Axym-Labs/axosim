@@ -34,7 +34,7 @@
   "integrative_mixer_position": "pre",
   "integrative_mixer_long_path_bias": 0.5,
   "local_tcn_scale": 1.0,
-  "local_tcn_mode": "dilated",
+  "local_tcn_mode": "undilated",
   "local_tcn_position": "post",
   "share_local_tcn_pointwise": true,
   "local_tcn_pointwise_adapter_rank": 2,

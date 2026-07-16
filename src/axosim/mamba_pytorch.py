@@ -127,6 +127,74 @@ class MambaBlock(nn.Module):
 
         return output
 
+    def allocate_inference_cache(
+        self,
+        batch_size: int,
+        max_seqlen: int,
+        dtype: torch.dtype | None = None,
+        **kwargs: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        del max_seqlen
+        device = kwargs.get("device", self.out_proj.weight.device)
+        conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
+        state_dtype = self.dt_proj.weight.dtype if dtype is None else dtype
+        return (
+            torch.zeros(
+                batch_size,
+                self.d_inner,
+                self.d_conv,
+                device=device,
+                dtype=conv_dtype,
+            ),
+            torch.zeros(
+                batch_size,
+                self.d_inner,
+                self.d_state,
+                device=device,
+                dtype=state_dtype,
+            ),
+        )
+
+    def step(
+        self,
+        hidden_states: torch.Tensor,
+        conv_state: torch.Tensor,
+        ssm_state: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if hidden_states.ndim != 3 or hidden_states.shape[1] != 1:
+            raise ValueError("MambaBlock.step expects one timestep")
+        x, z = self.in_proj(hidden_states[:, 0]).chunk(2, dim=-1)
+        conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))
+        conv_state[:, :, -1] = x
+        conv_weight = self.conv1d.weight[:, 0]
+        x = (conv_state * conv_weight.unsqueeze(0)).sum(dim=-1)
+        if self.conv1d.bias is not None:
+            x = x + self.conv1d.bias
+        x = F.silu(x)
+
+        delta, state_input, state_readout = torch.split(
+            self.x_proj(x),
+            [1, self.d_state, self.d_state],
+            dim=-1,
+        )
+        delta = F.softplus(self.dt_proj(delta))
+        transition = -torch.exp(self.A_log.float())
+        discrete_transition = torch.exp(
+            torch.einsum("bd,dn->bdn", delta, transition)
+        )
+        discrete_input = torch.einsum("bd,bn->bdn", delta, state_input)
+        ssm_state.copy_(
+            ssm_state * discrete_transition
+            + x.unsqueeze(-1) * discrete_input
+        )
+        output = torch.einsum(
+            "bdn,bn->bd",
+            ssm_state.to(dtype=x.dtype),
+            state_readout,
+        )
+        output = (output + self.D.to(dtype=x.dtype) * x) * F.silu(z)
+        return self.out_proj(output).unsqueeze(1), conv_state, ssm_state
+
 
 class SimpleMambaModel(nn.Module):
     """Simple Mamba-based sequence model."""
