@@ -12,6 +12,7 @@ AXOMAMBA_MODEL_KIND = "axomamba"
 AXOMAMBA_DEFAULT_CONFIG = "configs/axomamba.json"
 AXOMAMBA_STRUCTURED_COMPACT_CONFIG = "configs/axomamba-structured-compact.json"
 AXOMAMBA_REGRESSION_CONFIG = "configs/axomamba-regression.json"
+AXOMAMBA_SPIKE_CONFIG = "configs/axomamba-spike.json"
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,17 @@ def regression_axomamba_config(**overrides: Any) -> AxoMambaConfig:
     }
     values.update(overrides)
     return structured_compact_axomamba_config(**values)
+
+
+def spike_axomamba_config(**overrides: Any) -> AxoMambaConfig:
+    """Return the 300k-gated F1 deployment AxoMamba architecture."""
+
+    values: dict[str, Any] = {
+        "mamba_projection_rank": 16,
+        "state_dim": 2,
+    }
+    values.update(overrides)
+    return default_axomamba_config(**values)
 
 
 def load_axomamba_config(path: str | Path | None = None, **overrides: Any) -> AxoMambaConfig:

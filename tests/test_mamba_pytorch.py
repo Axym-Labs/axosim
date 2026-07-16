@@ -6,6 +6,7 @@ from axosim.axomamba import (
     AxoPyTorchMamba,
     default_axomamba_config,
     regression_axomamba_config,
+    spike_axomamba_config,
     structured_compact_axomamba_config,
 )
 from axosim.checkpoint import load_checkpoint, save_checkpoint
@@ -161,6 +162,17 @@ def test_axomamba_regression_config_uses_long_gated_tcn_factorization():
     assert config.local_tcn_pointwise_adapter_rank == 2
     assert config.local_tcn_pointwise_rank == 4
     assert config.local_tcn_output_rank == 4
+
+
+def test_axomamba_spike_config_uses_long_gated_state2_structure():
+    config = spike_axomamba_config()
+
+    assert config.state_dim == 2
+    assert config.mamba_projection_rank == 16
+    assert config.share_local_tcn_pointwise is False
+    assert config.local_tcn_pointwise_adapter_rank == 0
+    assert config.local_tcn_pointwise_rank == 0
+    assert config.local_tcn_output_rank == 0
 
 
 def test_spike_voltage_coupling_uses_soma_without_adding_parameters():
