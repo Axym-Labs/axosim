@@ -93,12 +93,6 @@ def model_population_memory_metrics(
             components_elements["local_tcn"] += _conv1d_streaming_history_elements(
                 depthwise
             )
-    for block in getattr(model, "soma_tcn_blocks", ()):
-        depthwise = getattr(block, "depthwise", None)
-        if isinstance(depthwise, nn.Conv1d):
-            components_elements["soma_tcn"] += _conv1d_streaming_history_elements(
-                depthwise
-            )
     temporal_refine = getattr(model, "temporal_refine", None)
     temporal_conv = getattr(temporal_refine, "conv", None)
     if isinstance(temporal_conv, nn.Conv1d):

@@ -68,8 +68,6 @@ class BranchOfficialMambaConfig:
     local_tcn_pointwise_rank: int = 0
     local_tcn_output_rank: int = 0
     mamba_projection_rank: int = 0
-    soma_tcn_scale: float | None = None
-    soma_tcn_coupling_source: str = "corrected"
     branch_gain: bool = False
     branch_nonlinearity: str = "none"
     branch_nonlinearity_scale_init: float = 0.1
@@ -245,10 +243,6 @@ class BranchOfficialMamba(nn.Module):
             )
         if config.mamba_projection_rank < 0:
             raise ValueError("mamba_projection_rank must be non-negative")
-        if config.soma_tcn_scale is not None and config.soma_tcn_scale < 0:
-            raise ValueError("soma_tcn_scale must be non-negative")
-        if config.soma_tcn_coupling_source not in {"corrected", "base"}:
-            raise ValueError("soma_tcn_coupling_source must be 'corrected' or 'base'")
         if local_tcn_enabled and config.local_tcn_position == "interlayer" and config.num_layers < 2:
             raise ValueError("interlayer local TCN requires at least two Mamba layers")
         if config.share_local_tcn_pointwise and not local_tcn_enabled:
@@ -499,21 +493,6 @@ class BranchOfficialMamba(nn.Module):
             self.spike_readout = None
             self.soma_readout = None
         self.base_soma_prediction: torch.Tensor | None = None
-        self.soma_tcn_blocks = nn.ModuleList(
-            [
-                _CausalDepthwiseTCNBlock(readout_dim, dilation=dilation)
-                for dilation in (1, 4, 16)
-            ]
-            if config.soma_tcn_scale is not None
-            else []
-        )
-        self.soma_tcn_out = (
-            nn.Linear(readout_dim, 1, bias=False)
-            if config.soma_tcn_scale is not None
-            else None
-        )
-        if self.soma_tcn_out is not None:
-            nn.init.zeros_(self.soma_tcn_out.weight)
         if config.soma_multiplicative_gate:
             self.soma_gate_readout = nn.Linear(readout_dim, 1)
             self.soma_mod_readout = nn.Linear(readout_dim, 1)
@@ -806,27 +785,17 @@ class BranchOfficialMamba(nn.Module):
             spike = output[..., 0:1]
             base_soma = output[..., 1:2]
             self.base_soma_prediction = base_soma
-            soma = self._apply_soma_tcn(features, base_soma)
+            soma = base_soma
             if self.config.spike_voltage_coupling_scale:
-                coupling_soma = (
-                    base_soma
-                    if self.config.soma_tcn_coupling_source == "base"
-                    else soma
-                )
-                spike = self._couple_spike_voltage(spike, coupling_soma)
+                spike = self._couple_spike_voltage(spike, soma)
             return torch.cat([spike, soma], dim=-1)
         assert self.spike_readout is not None and self.soma_readout is not None
         spike = self.spike_readout(features)
         base_soma = self._readout_soma(features, highpass_features)
         self.base_soma_prediction = base_soma
-        soma = self._apply_soma_tcn(features, base_soma)
+        soma = base_soma
         if self.config.spike_voltage_coupling_scale:
-            coupling_soma = (
-                base_soma
-                if self.config.soma_tcn_coupling_source == "base"
-                else soma
-            )
-            spike = self._couple_spike_voltage(spike, coupling_soma)
+            spike = self._couple_spike_voltage(spike, soma)
         return torch.cat([spike, soma], dim=-1)
 
     def _local_tcn_correction(self, hidden: torch.Tensor) -> torch.Tensor:
@@ -1339,8 +1308,6 @@ class BranchOfficialMamba(nn.Module):
             unsupported.append("temporal refine")
         if self.local_tcn_blocks and self.config.local_tcn_position != "post":
             unsupported.append("non-post local TCN")
-        if self.soma_tcn_out is not None:
-            unsupported.append("soma TCN")
         if self.soma_filter_logit is not None:
             unsupported.append("soma filter")
         if self.soma_highpass_correction_scale is not None:
@@ -1421,17 +1388,6 @@ class BranchOfficialMamba(nn.Module):
 
     def _couple_spike_voltage(self, spike: torch.Tensor, soma: torch.Tensor) -> torch.Tensor:
         return spike + self.config.spike_voltage_coupling_scale * soma
-
-    def _apply_soma_tcn(
-        self, features: torch.Tensor, soma: torch.Tensor
-    ) -> torch.Tensor:
-        if self.soma_tcn_out is None:
-            return soma
-        local = features
-        for block in self.soma_tcn_blocks:
-            local = block(local)
-        assert self.config.soma_tcn_scale is not None
-        return soma + self.config.soma_tcn_scale * self.soma_tcn_out(local)
 
     def _filter_soma(self, soma: torch.Tensor) -> torch.Tensor:
         if self.soma_filter_logit is None:

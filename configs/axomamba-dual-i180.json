@@ -61,8 +61,6 @@
   "soma_multiplicative_scale_init": 0.1,
   "soma_peak_correction": false,
   "soma_peak_correction_scale_init": 0.1,
-  "soma_tcn_coupling_source": "corrected",
-  "soma_tcn_scale": null,
   "spike_voltage_coupling_scale": 4.0,
   "state_dim": 23,
   "synapse_gain_scale": 1.0,
