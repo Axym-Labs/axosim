@@ -1445,3 +1445,62 @@ def test_sparse_event_streaming_bypasses_dense_input_routing(monkeypatch):
         )
 
     assert output.shape == (3, 1, 2)
+
+
+def test_sparse_event_streaming_can_write_a_deployment_output_buffer():
+    torch.manual_seed(149)
+    model = AxoPyTorchMamba(
+        AxoMambaConfig(
+            num_input=8,
+            num_output=2,
+            num_branch=4,
+            num_synapse_per_branch=2,
+            model_dim=6,
+            num_layers=2,
+            state_dim=2,
+            conv_kernel=2,
+            expansion=2,
+        )
+    ).eval()
+    reference_state = model.allocate_streaming_state(5)
+    deployment_state = model.allocate_streaming_state(5)
+    event_indices = torch.tensor(
+        [[0, 3], [2, -1], [7, 7], [-1, -1], [1, 6]]
+    )
+    event_values = torch.tensor(
+        [[1.0, -1.0], [1.0, 0.0], [0.5, 0.5], [0.0, 0.0], [-1.0, 1.0]]
+    )
+
+    with torch.no_grad():
+        reference = model.streaming_step_events(
+            event_indices,
+            event_values,
+            reference_state,
+            chunk_size=2,
+        )
+        output_buffer = torch.empty_like(reference)
+        deployment = model.streaming_step_events(
+            event_indices,
+            event_values,
+            deployment_state,
+            chunk_size=2,
+            output_buffer=output_buffer,
+            retain_base_soma_prediction=False,
+        )
+
+    assert deployment is output_buffer
+    assert model.base_soma_prediction is None
+    torch.testing.assert_close(deployment, reference)
+    for reference_pair, deployment_pair in zip(
+        reference_state.mamba_states,
+        deployment_state.mamba_states,
+        strict=True,
+    ):
+        torch.testing.assert_close(deployment_pair[0], reference_pair[0])
+        torch.testing.assert_close(deployment_pair[1], reference_pair[1])
+    for reference_history, deployment_history in zip(
+        reference_state.local_tcn_histories,
+        deployment_state.local_tcn_histories,
+        strict=True,
+    ):
+        torch.testing.assert_close(deployment_history, reference_history)

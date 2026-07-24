@@ -1144,12 +1144,16 @@ class BranchOfficialMamba(nn.Module):
         *,
         morphology_indices: torch.Tensor | None = None,
         chunk_size: int | None = None,
+        output_buffer: torch.Tensor | None = None,
+        retain_base_soma_prediction: bool = True,
     ) -> torch.Tensor:
         """Advance one timestep from padded sparse channel/value event rows.
 
         ``event_indices`` and ``event_values`` have shape ``(batch, events)``.
         Negative indices are padding; repeated channels are summed. Dense input
-        exists only for the current population chunk.
+        exists only for the current population chunk. Deployment callers may
+        provide ``output_buffer`` and disable diagnostic soma retention to
+        avoid population-wide output concatenation and retained tensors.
         """
         self._validate_streaming_configuration()
         if event_indices.ndim != 2 or event_values.shape != event_indices.shape:
@@ -1171,6 +1175,17 @@ class BranchOfficialMamba(nn.Module):
             raise ValueError("streaming TCN state does not match model blocks")
 
         parameter = next(self.parameters())
+        expected_output_shape = (event_indices.shape[0], 1, self.num_output)
+        if output_buffer is not None:
+            if output_buffer.shape != expected_output_shape:
+                raise ValueError(
+                    "streaming output_buffer must have shape "
+                    f"{expected_output_shape}"
+                )
+            if output_buffer.device != parameter.device:
+                raise ValueError("streaming output_buffer must be on the model device")
+            if output_buffer.dtype != parameter.dtype:
+                raise ValueError("streaming output_buffer must match the model dtype")
         outputs = []
         base_soma_predictions = []
         for start in range(0, event_indices.shape[0], resolved_chunk_size):
@@ -1213,12 +1228,10 @@ class BranchOfficialMamba(nn.Module):
                     morphology_indices=chunk_morphology_indices,
                     morphology_feature_gains=state.morphology_feature_gains,
                 )
-                outputs.append(
-                    self._streaming_step_from_branch_inputs(
-                        branch_inputs,
-                        chunk_state,
-                        morphology_indices=chunk_morphology_indices,
-                    )
+                chunk_output = self._streaming_step_from_branch_inputs(
+                    branch_inputs,
+                    chunk_state,
+                    morphology_indices=chunk_morphology_indices,
                 )
             else:
                 dense = torch.zeros(
@@ -1232,15 +1245,19 @@ class BranchOfficialMamba(nn.Module):
                     chunk_indices.clamp_min(0),
                     chunk_values * valid.to(dtype=parameter.dtype),
                 )
-                outputs.append(
-                    self.streaming_step(
-                        dense,
-                        chunk_state,
-                        morphology_indices=chunk_morphology_indices,
-                    )
+                chunk_output = self.streaming_step(
+                    dense,
+                    chunk_state,
+                    morphology_indices=chunk_morphology_indices,
                 )
-            if self.base_soma_prediction is not None:
+            if output_buffer is None:
+                outputs.append(chunk_output)
+            else:
+                output_buffer[start:stop].copy_(chunk_output)
+            if retain_base_soma_prediction and self.base_soma_prediction is not None:
                 base_soma_predictions.append(self.base_soma_prediction)
+            elif not retain_base_soma_prediction:
+                self.base_soma_prediction = None
             for parent, updated in zip(
                 state.mamba_states,
                 chunk_state.mamba_states,
@@ -1256,6 +1273,10 @@ class BranchOfficialMamba(nn.Module):
                 parent[start:stop].copy_(updated)
         if base_soma_predictions:
             self.base_soma_prediction = torch.cat(base_soma_predictions, dim=0)
+        elif not retain_base_soma_prediction:
+            self.base_soma_prediction = None
+        if output_buffer is not None:
+            return output_buffer
         return torch.cat(outputs, dim=0)
 
     def _stream_local_tcn_correction(
