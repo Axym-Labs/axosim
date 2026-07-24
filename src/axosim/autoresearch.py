@@ -1209,7 +1209,13 @@ def benchmark_model_inference(
         else None
     )
     timings: list[float] = []
-    with torch.inference_mode():
+    needs_normal_no_grad = any(
+        getattr(module, "learn_memory_tau", False)
+        or hasattr(module, "branch_gain_enabled")
+        for module in model.modules()
+    )
+    eval_context = torch.no_grad() if needs_normal_no_grad else torch.inference_mode()
+    with eval_context:
         for _ in range(warmup_repeats):
             _forward_model(model, x, morphology_indices)
         _synchronize(device)

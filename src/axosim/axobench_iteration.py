@@ -153,7 +153,6 @@ def main(argv: list[str] | None = None) -> int:
             create_model_evaluation_cache,
             evaluate_model,
             evaluate_model_against_cache,
-            evaluate_model_comparison,
             format_evaluation_report,
             format_model_comparison,
             write_evaluation_report,
@@ -183,12 +182,29 @@ def main(argv: list[str] | None = None) -> int:
             args.baseline_checkpoint,
             device=args.device,
         )
-        comparison = evaluate_model_comparison(
-            predictor,
+        baseline_cache = create_model_evaluation_cache(
             baseline_predictor,
             dataset_root=args.dataset_root,
+            model_id=Path(args.baseline_checkpoint).stem,
+            max_samples=args.max_samples,
+            batch_size=args.batch_size,
+            max_intervention_samples=args.max_intervention_samples,
+            max_interventions=args.max_interventions,
+            intervention_workers=args.intervention_workers,
+            intervention_names=interventions,
+            multiple_morphologies=args.multiple_morphologies,
+            morphology_id=args.morphology_id,
+            config=config,
+        )
+        baseline_cache.report["checkpoint"] = str(
+            Path(args.baseline_checkpoint).resolve()
+        )
+        baseline_cache.report["checkpoint_metadata"] = baseline_metadata
+        comparison = evaluate_model_against_cache(
+            predictor,
+            baseline_cache=baseline_cache,
+            dataset_root=args.dataset_root,
             candidate_id=model_id,
-            baseline_id=Path(args.baseline_checkpoint).stem,
             max_samples=args.max_samples,
             batch_size=args.batch_size,
             max_intervention_samples=args.max_intervention_samples,
@@ -203,8 +219,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         comparison["candidate"]["checkpoint"] = str(Path(args.checkpoint).resolve())
         comparison["candidate"]["checkpoint_metadata"] = metadata
-        comparison["baseline"]["checkpoint"] = str(Path(args.baseline_checkpoint).resolve())
-        comparison["baseline"]["checkpoint_metadata"] = baseline_metadata
         print(format_evaluation_report(comparison["candidate"]))
         print()
         print(format_model_comparison(comparison))

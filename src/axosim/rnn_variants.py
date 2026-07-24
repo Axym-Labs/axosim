@@ -293,7 +293,7 @@ class BranchTraceRNN(jit.ScriptModule):
         return routed * self.valid_indices_mask
 
     @jit.script_method
-    def forward_routed(self, routed_inputs):
+    def _forward_routed_scripted(self, routed_inputs):
         batch_size, T, _ = routed_inputs.shape
         w_s = self.w_s
         kappa_trace = self.kappa_trace
@@ -310,6 +310,12 @@ class BranchTraceRNN(jit.ScriptModule):
             outputs[:, t, :] = y_t
         return outputs
 
+    def forward_routed(self, routed_inputs):
+        if torch.is_inference_mode_enabled():
+            with torch.inference_mode(False):
+                return self._forward_routed_scripted(routed_inputs.clone())
+        return self._forward_routed_scripted(routed_inputs)
+
     @jit.script_method
     def forward(self, X):
-        return self.forward_routed(self.route_sequence(X))
+        return self._forward_routed_scripted(self.route_sequence(X))

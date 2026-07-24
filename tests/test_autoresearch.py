@@ -39,6 +39,7 @@ from axosim.autoresearch import (
 from axosim.data import ShardedNeuronIODataset
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
 from axosim.model import BranchELM, BranchELMConfig
+from axosim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
 
 
 def test_resident_state_metrics_count_all_parameters_and_buffers_once() -> None:
@@ -494,6 +495,44 @@ def test_inference_benchmark_records_repeated_latency():
     assert result["inference_benchmark_repeats"] == 3
     assert result["inference_latency_median_ms"] > 0
     assert result["inference_presentations_per_second"] > 0
+
+
+def test_inference_benchmark_supports_nested_scripted_branch_trace_rnn():
+    class ComposedTraceRNN(torch.nn.Module):
+        num_input = 6
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.encoder = torch.nn.Linear(6, 6)
+            self.core = BranchTraceRNN(
+                BranchTraceRNNConfig(
+                    num_input=6,
+                    num_branch=3,
+                    num_synapse_per_branch=2,
+                    num_memory=4,
+                    trace_banks=2,
+                    readout_hidden_size=8,
+                )
+            )
+
+        def forward(self, inputs):
+            return self.core.forward_routed(self.encoder(inputs))
+
+    model = ComposedTraceRNN()
+    model(torch.zeros(2, 8, 6)).sum().backward()
+    model.zero_grad(set_to_none=True)
+
+    result = benchmark_model_inference(
+        model,
+        device="cpu",
+        batch_size=2,
+        window_size=8,
+        warmup_repeats=1,
+        repeats=2,
+    )
+
+    assert result["inference_benchmark_repeats"] == 2
+    assert result["inference_latency_median_ms"] > 0
 
 
 def test_training_benchmark_records_repeated_latency():

@@ -48,3 +48,22 @@ def test_branch_trace_rnn_forward_routed_matches_forward():
 
     assert routed.shape == (2, 5, 6)
     assert torch.allclose(direct, routed_out)
+
+
+def test_branch_trace_rnn_forward_routed_accepts_inference_tensor():
+    model = BranchTraceRNN(
+        BranchTraceRNNConfig(
+            num_input=6,
+            num_branch=3,
+            num_synapse_per_branch=2,
+            num_memory=4,
+            trace_banks=2,
+            readout_hidden_size=8,
+        )
+    ).eval()
+
+    with torch.inference_mode():
+        routed = model.route_sequence(torch.randn(2, 5, 6))
+        output = model.forward_routed(routed)
+
+    assert output.shape == (2, 5, 2)
