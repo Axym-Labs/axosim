@@ -6,11 +6,10 @@ from typing import Any
 
 import torch
 
-from axosim.model import BranchELM, BranchELMConfig
 from axosim.mamba_pytorch import SimpleMambaModel
+from axosim.model import BranchELM, BranchELMConfig
 from axosim.official import ELM, create_official_elm
 from axosim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
-
 
 _RETIRED_AXOMAMBA_CONFIG_KEYS = frozenset(
     {
@@ -207,6 +206,26 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
 
         config = AxoMambaConfig(**_active_axomamba_config(payload["config"]))
         model = AxoPyTorchMamba(config)
+    elif model_kind in {"axo-temporal", "axo-temporal-pytorch"}:
+        from axosim.axomamba import AxoMamba, AxoMambaConfig, AxoPyTorchMamba
+        from axosim.temporal_core import (
+            AxoTemporalCoreConfig,
+            AxoTemporalModel,
+        )
+
+        values = payload["config"]
+        backbone_config = AxoMambaConfig(
+            **_active_axomamba_config(values["backbone"])
+        )
+        backbone = (
+            AxoPyTorchMamba(backbone_config)
+            if model_kind == "axo-temporal-pytorch"
+            else AxoMamba(backbone_config)
+        )
+        model = AxoTemporalModel(
+            backbone,
+            AxoTemporalCoreConfig(**values["temporal_core"]),
+        )
     elif model_kind == "mamba-official":
         from axosim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
 
@@ -236,6 +255,21 @@ def _active_axomamba_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]]:
+    from axosim.temporal_core import AxoTemporalModel
+
+    if isinstance(model, AxoTemporalModel):
+        pytorch_backbone = (
+            model.backbone.__class__.__name__ == "AxoPyTorchMamba"
+        )
+        return (
+            "axo-temporal-pytorch"
+            if pytorch_backbone
+            else "axo-temporal",
+            {
+                "backbone": asdict(model.backbone.config),
+                "temporal_core": asdict(model.temporal_config),
+            },
+        )
     if isinstance(model, BranchELM):
         return "baseline", asdict(model.config)
     if isinstance(model, BranchTraceRNN):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
@@ -11,7 +11,6 @@ from axosim.official.modeling_utils import (
     create_interlocking_indices,
     create_overlapping_window_indices,
 )
-
 
 DEFAULT_STREAMING_CHUNK_SIZE = 32_768
 
@@ -665,6 +664,19 @@ class BranchOfficialMamba(nn.Module):
         *,
         morphology_indices: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        hidden, local_source, highpass_features = self._encode_sequence(
+            x,
+            morphology_indices=morphology_indices,
+        )
+        hidden = self._run_temporal_sequence(hidden, local_source)
+        return self._decode_sequence(hidden, highpass_features)
+
+    def _encode_sequence(
+        self,
+        x: torch.Tensor,
+        *,
+        morphology_indices: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         if x.ndim != 3:
             raise ValueError(f"x must have shape (batch, time, channels), got {tuple(x.shape)}")
         if x.shape[-1] != self.num_input:
@@ -750,14 +762,41 @@ class BranchOfficialMamba(nn.Module):
         elif morphology_indices is not None and self.config.morphology_ids is None:
             raise ValueError("morphology_indices were provided to an unconditioned AxoMamba")
         local_source = hidden
+        return hidden, local_source, highpass_features
+
+    def _run_temporal_sequence(
+        self,
+        hidden: torch.Tensor,
+        local_source: torch.Tensor,
+    ) -> torch.Tensor:
+        return self._run_temporal_sequence_with_core(
+            hidden,
+            local_source,
+            temporal_core=None,
+        )
+
+    def _run_temporal_sequence_with_core(
+        self,
+        hidden: torch.Tensor,
+        local_source: torch.Tensor,
+        *,
+        temporal_core: nn.Module | None,
+    ) -> torch.Tensor:
         if self.integrative_pre is not None:
             hidden = self.integrative_pre(hidden)
-        for _ in range(self.config.block_repeats):
-            for layer_index, block in enumerate(self.blocks):
-                hidden = block(hidden)
-                if layer_index == 0:
-                    if self.config.local_tcn_position == "interlayer":
+        if temporal_core is None:
+            for _ in range(self.config.block_repeats):
+                for layer_index, block in enumerate(self.blocks):
+                    hidden = block(hidden)
+                    if (
+                        layer_index == 0
+                        and self.config.local_tcn_position == "interlayer"
+                    ):
                         hidden = hidden + self._local_tcn_correction(hidden)
+        else:
+            hidden = temporal_core(hidden)
+            if self.config.local_tcn_position == "interlayer":
+                hidden = hidden + self._local_tcn_correction(hidden)
         if self.integrative_post is not None:
             hidden = self.integrative_post(hidden)
         if self.temporal_refine is not None:
@@ -766,6 +805,13 @@ class BranchOfficialMamba(nn.Module):
             hidden = hidden + self._local_tcn_correction(local_source)
         elif self.config.local_tcn_position == "post":
             hidden = hidden + self._local_tcn_correction(hidden)
+        return hidden
+
+    def _decode_sequence(
+        self,
+        hidden: torch.Tensor,
+        highpass_features: torch.Tensor | None,
+    ) -> torch.Tensor:
         features = self.norm(hidden)
         if self.hidden_trace_taus:
             features = torch.cat(

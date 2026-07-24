@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
 import hashlib
 import json
 import math
-from pathlib import Path
 import time
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 from axosim.checkpoint import save_checkpoint
 from axosim.data import ShardedNeuronIODataset
@@ -23,7 +23,6 @@ from axosim.train import (
     _build_scheduler,
     _sera_soma_relevance,
 )
-
 
 STANDARD_PRESENTATIONS = 120_000
 LONG_PRESENTATIONS = 300_000
@@ -77,7 +76,19 @@ def model_population_memory_metrics(
     state_element_bytes = torch.empty((), dtype=streaming_dtype).element_size()
     components_elements: dict[str, int] = defaultdict(int)
 
-    for block in getattr(model, "blocks", ()):
+    state_model = getattr(model, "backbone", model)
+    temporal_core = getattr(model, "temporal_core", None)
+    recurrent_state_elements = getattr(
+        temporal_core,
+        "recurrent_state_elements",
+        0,
+    )
+    if recurrent_state_elements:
+        components_elements["temporal_core"] += int(
+            recurrent_state_elements
+        )
+
+    for block in getattr(state_model, "blocks", ()):
         mamba = getattr(block, "mamba", block)
         d_inner = getattr(mamba, "d_inner", None)
         d_conv = getattr(mamba, "d_conv", None)
@@ -87,20 +98,20 @@ def model_population_memory_metrics(
                 int(d_conv) + int(d_state)
             )
 
-    for block in getattr(model, "local_tcn_blocks", ()):
+    for block in getattr(state_model, "local_tcn_blocks", ()):
         depthwise = getattr(block, "depthwise", None)
         if isinstance(depthwise, nn.Conv1d):
             components_elements["local_tcn"] += _conv1d_streaming_history_elements(
                 depthwise
             )
-    temporal_refine = getattr(model, "temporal_refine", None)
+    temporal_refine = getattr(state_model, "temporal_refine", None)
     temporal_conv = getattr(temporal_refine, "conv", None)
     if isinstance(temporal_conv, nn.Conv1d):
         components_elements["temporal_refine"] += _conv1d_streaming_history_elements(
             temporal_conv
         )
     for name in ("integrative_pre", "integrative_post"):
-        mixer = getattr(model, name, None)
+        mixer = getattr(state_model, name, None)
         if mixer is None:
             continue
         for conv_name in ("short_conv", "long_conv"):
@@ -110,17 +121,21 @@ def model_population_memory_metrics(
                     _conv1d_streaming_history_elements(conv)
                 )
 
-    branch_trace_taus = tuple(getattr(model, "branch_trace_taus", ()))
+    branch_trace_taus = tuple(
+        getattr(state_model, "branch_trace_taus", ())
+    )
     if branch_trace_taus:
-        config = getattr(model, "config")
+        config = getattr(state_model, "config")
         components_elements["branch_traces"] += (
             len(branch_trace_taus)
             * int(config.num_branch)
             * (int(config.branch_trace_kernel) - 1)
         )
-    hidden_trace_taus = tuple(getattr(model, "hidden_trace_taus", ()))
+    hidden_trace_taus = tuple(
+        getattr(state_model, "hidden_trace_taus", ())
+    )
     if hidden_trace_taus:
-        config = getattr(model, "config")
+        config = getattr(state_model, "config")
         components_elements["hidden_traces"] += (
             len(hidden_trace_taus)
             * int(config.model_dim)
