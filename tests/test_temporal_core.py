@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import pytest
 import torch
+from torch import nn
 
+import axosim.temporal_core as temporal_core
 from axosim.architecture_frontier import (
     ArchitectureSpec,
     architecture_evidence,
     build_architecture_candidate,
     load_legacy_gru_candidate,
+    transfer_compatible_state,
 )
 from axosim.autoresearch import model_population_memory_metrics
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
@@ -222,3 +225,211 @@ def test_architecture_frontier_loads_legacy_gru_and_records_evidence(
         ]
         == 6 * 4
     )
+
+
+def test_compatible_transfer_preserves_target_only_local_path():
+    torch.manual_seed(19)
+    source = _source_model()
+    control = build_architecture_candidate(
+        source,
+        ArchitectureSpec(
+            candidate_id="spike_gru_control",
+            task="spike",
+            temporal_core="gru",
+            keep_local_tcn=False,
+        ),
+    )
+    torch.manual_seed(23)
+    local = build_architecture_candidate(
+        source,
+        ArchitectureSpec(
+            candidate_id="spike_gru_local",
+            task="spike",
+            temporal_core="gru",
+            keep_local_tcn=True,
+        ),
+    )
+    local_tcn_before = {
+        name: value.clone()
+        for name, value in local.state_dict().items()
+        if "local_tcn" in name
+    }
+
+    transfer = transfer_compatible_state(local, control.state_dict())
+
+    assert transfer["target_only"]
+    for name, value in control.state_dict().items():
+        torch.testing.assert_close(local.state_dict()[name], value)
+    for name, value in local_tcn_before.items():
+        torch.testing.assert_close(local.state_dict()[name], value)
+
+
+def test_causal_patch_wrapper_delays_correction_and_counts_online_state():
+    class TwiceInputCorrection(nn.Module):
+        recurrent_state_elements = 3
+
+        def forward(self, hidden):
+            return hidden + 2.0 * hidden
+
+    hidden = torch.tensor(
+        [[[1.0, 3.0], [3.0, 5.0], [7.0, 9.0], [9.0, 11.0]]]
+    )
+    patched = temporal_core.CausalPatchedTemporalCore(
+        TwiceInputCorrection(),
+        width=2,
+        patch_size=2,
+    )
+
+    actual = patched(hidden)
+
+    expected = hidden.clone()
+    expected[:, 2:] += torch.tensor([[[4.0, 8.0], [4.0, 8.0]]])
+    torch.testing.assert_close(actual, expected)
+    assert patched.recurrent_state_elements == 3 + 2 * 2
+
+
+def test_causal_patch_wrapper_handles_trailing_partial_patch():
+    class TwiceInputCorrection(nn.Module):
+        recurrent_state_elements = 3
+
+        def temporal_correction(self, hidden):
+            return 2.0 * hidden
+
+    hidden = torch.tensor(
+        [[[1.0], [3.0], [5.0], [7.0], [11.0]]]
+    )
+    patched = temporal_core.CausalPatchedTemporalCore(
+        TwiceInputCorrection(),
+        width=1,
+        patch_size=2,
+    )
+
+    actual = patched(hidden)
+
+    expected = torch.tensor(
+        [[[1.0], [3.0], [9.0], [11.0], [23.0]]]
+    )
+    torch.testing.assert_close(actual, expected)
+
+
+def test_causal_patch_wrapper_uses_gru_correction_without_cancellation():
+    torch.manual_seed(37)
+    hidden = torch.randn(3, 20, 6)
+    core = temporal_core.ResidualGRUTemporalCore(
+        6,
+        residual_scale_init=0.1,
+    )
+    patched = temporal_core.CausalPatchedTemporalCore(
+        core,
+        width=6,
+        patch_size=2,
+    )
+    coarse = hidden.reshape(3, 10, 2, 6).mean(dim=2)
+    recurrent, _ = core.gru(core.pre_norm(coarse))
+    correction = core.residual_scale.view(1, 1, -1) * recurrent
+    delayed = torch.zeros_like(correction)
+    delayed[:, 1:] = correction[:, :-1]
+    expected = hidden + delayed.repeat_interleave(2, dim=1)
+
+    actual = patched(hidden)
+
+    assert torch.equal(actual, expected)
+
+
+def test_temporal_model_builds_patched_core_and_reports_full_state():
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=2),
+    )
+
+    assert isinstance(
+        model.temporal_core,
+        temporal_core.CausalPatchedTemporalCore,
+    )
+    assert model.recurrent_state_bytes(dtype=torch.float32) == 3 * 6 * 4
+    manifest = model.component_manifest()
+    assert manifest["temporal_patch_size"] == 2
+
+
+def test_patched_gru_can_reallocate_compute_to_wider_hidden_state():
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(
+            kind="gru",
+            gru_hidden_units=9,
+            patch_size=2,
+        ),
+    )
+    core = model.temporal_core
+
+    assert core.core.gru.hidden_size == 9
+    output = model(
+        torch.randn(2, 8, 8),
+        morphology_indices=torch.tensor([0, 1]),
+    )
+    assert output.shape == (2, 8, 2)
+    assert model.recurrent_state_bytes(dtype=torch.float32) == (9 + 12) * 4
+
+
+def test_architecture_spec_carries_gru_hidden_units_into_candidate():
+    spec = ArchitectureSpec(
+        candidate_id="regression_gru_patch2_wide",
+        task="regression",
+        temporal_core="gru",
+        gru_hidden_units=9,
+        patch_size=2,
+    )
+
+    model = build_architecture_candidate(_source_model(), spec)
+
+    assert model.temporal_config.gru_hidden_units == 9
+    assert model.temporal_core.core.gru.hidden_size == 9
+
+
+def test_architecture_spec_carries_patch_size_into_candidate():
+    spec = ArchitectureSpec(
+        candidate_id="regression_branch_patch2",
+        task="regression",
+        temporal_core="branch_rnn",
+        patch_size=2,
+    )
+
+    model = build_architecture_candidate(_source_model(), spec)
+
+    assert model.temporal_config.patch_size == 2
+    assert isinstance(
+        model.temporal_core,
+        temporal_core.CausalPatchedTemporalCore,
+    )
+
+
+def test_compatible_transfer_maps_native_core_into_patch_wrapper():
+    torch.manual_seed(29)
+    source = _source_model()
+    native = build_architecture_candidate(
+        source,
+        ArchitectureSpec(
+            candidate_id="regression_gru_native",
+            task="regression",
+            temporal_core="gru",
+        ),
+    )
+    torch.manual_seed(31)
+    patched = build_architecture_candidate(
+        source,
+        ArchitectureSpec(
+            candidate_id="regression_gru_patch2",
+            task="regression",
+            temporal_core="gru",
+            patch_size=2,
+        ),
+    )
+
+    transfer = transfer_compatible_state(patched, native.state_dict())
+
+    assert transfer["aliases"]
+    for name, value in native.temporal_core.state_dict().items():
+        torch.testing.assert_close(
+            patched.temporal_core.core.state_dict()[name],
+            value,
+        )

@@ -30,8 +30,10 @@ class ArchitectureSpec:
     task: TaskKind
     temporal_core: Literal["mamba", "gru", "branch_rnn"]
     keep_local_tcn: bool = False
+    gru_hidden_units: int | None = None
     branch_memory_units: int = 30
     branch_hidden_units: int = 64
+    patch_size: int = 1
 
     def __post_init__(self) -> None:
         if not self.candidate_id:
@@ -43,8 +45,10 @@ class ArchitectureSpec:
         return AxoTemporalCoreConfig(
             kind=self.temporal_core,
             keep_local_tcn=self.keep_local_tcn,
+            gru_hidden_units=self.gru_hidden_units,
             branch_memory_units=self.branch_memory_units,
             branch_hidden_units=self.branch_hidden_units,
+            patch_size=self.patch_size,
         )
 
 
@@ -115,4 +119,46 @@ def architecture_evidence(
         "component_manifest": manifest,
         "resident": model_resident_state_metrics(model),
         "population_memory": model_population_memory_metrics(model),
+    }
+
+
+def transfer_compatible_state(
+    target: nn.Module,
+    source_state: dict[str, torch.Tensor],
+) -> dict[str, object]:
+    """Load equal-shaped tensors while preserving target-only components."""
+
+    target_state = target.state_dict()
+    copied: dict[str, torch.Tensor] = {}
+    copied_sources = set()
+    aliases = {}
+    for source_name, value in source_state.items():
+        candidates = [source_name]
+        if source_name.startswith("temporal_core."):
+            suffix = source_name.removeprefix("temporal_core.")
+            if suffix.startswith("core."):
+                candidates.append(
+                    "temporal_core." + suffix.removeprefix("core.")
+                )
+            else:
+                candidates.append("temporal_core.core." + suffix)
+        for target_name in candidates:
+            if (
+                target_name in target_state
+                and target_state[target_name].shape == value.shape
+            ):
+                copied[target_name] = value
+                copied_sources.add(source_name)
+                if target_name != source_name:
+                    aliases[source_name] = target_name
+                break
+    target_state.update(copied)
+    target.load_state_dict(target_state, strict=True)
+    return {
+        "copied": sorted(copied),
+        "aliases": aliases,
+        "target_only": sorted(set(target_state) - set(copied)),
+        "source_only_or_incompatible": sorted(
+            set(source_state) - copied_sources
+        ),
     }
