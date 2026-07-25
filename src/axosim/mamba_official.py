@@ -676,6 +676,13 @@ class BranchOfficialMamba(nn.Module):
         x: torch.Tensor,
         *,
         morphology_indices: torch.Tensor | None = None,
+        branch_log_gain_delta: torch.Tensor | None = None,
+        branch_bias_delta: torch.Tensor | None = None,
+        branch_projection_down: torch.Tensor | None = None,
+        branch_projection_up: torch.Tensor | None = None,
+        branch_projection_adapter_mask: torch.Tensor | None = None,
+        synapse_log_gain_delta: torch.Tensor | None = None,
+        synapse_gain_adapter_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         if x.ndim != 3:
             raise ValueError(f"x must have shape (batch, time, channels), got {tuple(x.shape)}")
@@ -690,10 +697,33 @@ class BranchOfficialMamba(nn.Module):
             routed_events,
             morphology_indices=morphology_indices,
         )
+        if synapse_log_gain_delta is not None:
+            if synapse_gain_adapter_mask is None:
+                raise ValueError(
+                    "synapse gain adaptation requires an adapter mask"
+                )
+            gain = (
+                synapse_gain_adapter_mask.view(-1, 1, 1, 1)
+                * synapse_log_gain_delta.view(
+                    1,
+                    1,
+                    self.num_branch,
+                    self.num_synapse_per_branch,
+                )
+            ).exp()
+            routed_synapses = routed_synapses * gain
         branch_inputs = routed_synapses.sum(dim=-1)
         if self.branch_gain is not None:
             gain = self.branch_gain.to(dtype=branch_inputs.dtype, device=branch_inputs.device)
             branch_inputs = branch_inputs * gain.view(1, 1, -1)
+        if branch_bias_delta is not None:
+            branch_inputs = (
+                branch_inputs + branch_bias_delta.unsqueeze(1)
+            )
+        if branch_log_gain_delta is not None:
+            branch_inputs = branch_inputs * (
+                branch_log_gain_delta.unsqueeze(1).exp()
+            )
         if self.config.branch_nonlinearity == "tanh":
             assert self.branch_nonlinearity_log_scale is not None
             assert self.branch_nonlinearity_bias is not None
@@ -723,6 +753,19 @@ class BranchOfficialMamba(nn.Module):
             if self.branch_gain is not None:
                 gain = self.branch_gain.to(dtype=subunit_inputs.dtype, device=subunit_inputs.device)
                 subunit_inputs = subunit_inputs * gain.view(1, 1, -1, 1)
+            if branch_bias_delta is not None:
+                subunit_inputs = (
+                    subunit_inputs
+                    + branch_bias_delta.unsqueeze(1).unsqueeze(-1)
+                    / self.config.branch_subunits
+                )
+            if branch_log_gain_delta is not None:
+                subunit_inputs = subunit_inputs * (
+                    branch_log_gain_delta
+                    .unsqueeze(1)
+                    .unsqueeze(-1)
+                    .exp()
+                )
             if self.config.branch_nonlinearity == "tanh":
                 assert self.branch_nonlinearity_log_scale is not None
                 assert self.branch_nonlinearity_bias is not None
@@ -745,6 +788,25 @@ class BranchOfficialMamba(nn.Module):
                 subunit_inputs.flatten(start_dim=-2)
             )
         hidden = self.branch_projection(projection_inputs)
+        if branch_projection_down is not None:
+            if (
+                branch_projection_up is None
+                or branch_projection_adapter_mask is None
+            ):
+                raise ValueError(
+                    "low-rank branch adaptation requires both factors "
+                    "and an adapter mask"
+                )
+            branch_correction = F.linear(
+                F.linear(
+                    projection_inputs,
+                    branch_projection_down,
+                ),
+                branch_projection_up,
+            )
+            hidden = hidden + branch_correction * (
+                branch_projection_adapter_mask.view(-1, 1, 1)
+            )
         if subunit_projection is not None:
             hidden = hidden + self.config.branch_subunit_scale * subunit_projection
         bilinear_projection = self._branch_bilinear_projection(bilinear_inputs)
@@ -781,6 +843,7 @@ class BranchOfficialMamba(nn.Module):
         local_source: torch.Tensor,
         *,
         temporal_core: nn.Module | None,
+        temporal_kwargs: dict | None = None,
     ) -> torch.Tensor:
         if self.integrative_pre is not None:
             hidden = self.integrative_pre(hidden)
@@ -794,7 +857,10 @@ class BranchOfficialMamba(nn.Module):
                     ):
                         hidden = hidden + self._local_tcn_correction(hidden)
         else:
-            hidden = temporal_core(hidden)
+            hidden = temporal_core(
+                hidden,
+                **(temporal_kwargs or {}),
+            )
             if self.config.local_tcn_position == "interlayer":
                 hidden = hidden + self._local_tcn_correction(hidden)
         if self.integrative_post is not None:
@@ -811,6 +877,10 @@ class BranchOfficialMamba(nn.Module):
         self,
         hidden: torch.Tensor,
         highpass_features: torch.Tensor | None,
+        *,
+        readout_weight_delta: torch.Tensor | None = None,
+        readout_bias_delta: torch.Tensor | None = None,
+        readout_adapter_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         features = self.norm(hidden)
         if self.hidden_trace_taus:
@@ -830,6 +900,19 @@ class BranchOfficialMamba(nn.Module):
             output = self.readout(features)
             spike = output[..., 0:1]
             base_soma = output[..., 1:2]
+            if readout_weight_delta is not None:
+                assert readout_adapter_mask is not None
+                personalized = F.linear(
+                    features,
+                    readout_weight_delta,
+                    readout_bias_delta,
+                )
+                personalized = (
+                    personalized
+                    * readout_adapter_mask.view(-1, 1, 1)
+                )
+                spike = spike + personalized[..., 0:1]
+                base_soma = base_soma + personalized[..., 1:2]
             self.base_soma_prediction = base_soma
             soma = base_soma
             if self.config.spike_voltage_coupling_scale:
@@ -838,6 +921,18 @@ class BranchOfficialMamba(nn.Module):
         assert self.spike_readout is not None and self.soma_readout is not None
         spike = self.spike_readout(features)
         base_soma = self._readout_soma(features, highpass_features)
+        if readout_weight_delta is not None:
+            assert readout_adapter_mask is not None
+            personalized = F.linear(
+                features,
+                readout_weight_delta,
+                readout_bias_delta,
+            )
+            personalized = (
+                personalized * readout_adapter_mask.view(-1, 1, 1)
+            )
+            spike = spike + personalized[..., 0:1]
+            base_soma = base_soma + personalized[..., 1:2]
         self.base_soma_prediction = base_soma
         soma = base_soma
         if self.config.spike_voltage_coupling_scale:

@@ -6,11 +6,65 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from axosim.deployment import NeuronBehaviorPersonalization
 from axosim.temporal_core import (
     AxoTemporalModel,
     CausalPatchedTemporalCore,
+    NeuronBehaviorAdapter,
     ResidualGRUTemporalCore,
 )
+
+
+def pack_neuron_behavior_adapter(
+    adapter: NeuronBehaviorAdapter,
+    *,
+    personalization: NeuronBehaviorPersonalization,
+) -> torch.Tensor:
+    """Pack a trained behavior adapter into the population ABI."""
+
+    if (
+        adapter.branches != personalization.branches
+        or adapter.width != personalization.width
+        or adapter.outputs != personalization.outputs
+        or adapter.rank != personalization.matrix_rank
+    ):
+        raise ValueError("behavior adapter does not match personalization")
+    if adapter.gru_gate_bias is not None or adapter.synapse_rank:
+        raise ValueError(
+            "population ABI excludes rejected gate and synapse adapters"
+        )
+    if personalization.adapt_recurrent != (
+        adapter.gru_recurrent_down is not None
+    ):
+        raise ValueError("recurrent personalization does not match layout")
+
+    tensors = {
+        "branch_log_gain": adapter.branch_log_gain,
+        "branch_bias": adapter.branch_bias,
+        "latent_gain": adapter.latent_gain,
+        "latent_offset": adapter.latent_offset,
+        "recurrent_output_gain": adapter.recurrent_output_gain,
+        "readout_weight": adapter.readout_weight,
+        "readout_bias": adapter.readout_bias,
+        "branch_projection_down": adapter.branch_projection_down,
+        "branch_projection_up": adapter.branch_projection_up,
+        "gru_input_down": adapter.gru_input_down,
+        "gru_input_up": adapter.gru_input_up,
+        "gru_recurrent_down": adapter.gru_recurrent_down,
+        "gru_recurrent_up": adapter.gru_recurrent_up,
+    }
+    packed = []
+    for name, expected_shape in personalization.tensor_shapes.items():
+        tensor = tensors[name]
+        if tensor is None or tuple(tensor.shape) != expected_shape:
+            raise ValueError(
+                f"behavior adapter tensor {name} has the wrong shape"
+            )
+        packed.append(tensor.reshape(-1))
+    result = torch.cat(packed)
+    if result.numel() != personalization.parameter_count:
+        raise RuntimeError("packed behavior parameter count is inconsistent")
+    return result
 
 
 class _GRUPopulationStep(nn.Module):
@@ -50,6 +104,7 @@ class _GRUPopulationStep(nn.Module):
         event_indices: torch.Tensor,
         event_values: torch.Tensor,
         morphology: torch.Tensor,
+        population_embedding_adapter: torch.Tensor | None = None,
     ) -> torch.Tensor:
         branch = self.backbone._sparse_streaming_branch_inputs(
             event_indices,
@@ -57,6 +112,33 @@ class _GRUPopulationStep(nn.Module):
             morphology_indices=morphology,
             morphology_feature_gains=self.feature_gains,
         )
+        return self._project_branch_inputs(
+            branch,
+            morphology,
+            population_embedding_adapter,
+        )
+
+    def _encode_branch_inputs(
+        self,
+        branch_inputs: torch.Tensor,
+        morphology: torch.Tensor,
+        population_embedding_adapter: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        transformed = self.backbone._apply_streaming_branch_transforms(
+            branch_inputs.unsqueeze(1)
+        )
+        return self._project_branch_inputs(
+            transformed,
+            morphology,
+            population_embedding_adapter,
+        )
+
+    def _project_branch_inputs(
+        self,
+        branch: torch.Tensor,
+        morphology: torch.Tensor,
+        population_embedding_adapter: torch.Tensor | None,
+    ) -> torch.Tensor:
         hidden = self.backbone.branch_projection(branch)
         hidden = self.backbone._apply_projected_branch_bilinear(
             hidden,
@@ -68,6 +150,8 @@ class _GRUPopulationStep(nn.Module):
                 dtype=hidden.dtype,
                 device=hidden.device,
             )
+            if population_embedding_adapter is not None:
+                embedding = embedding + population_embedding_adapter
             assert (
                 self.backbone.config.morphology_embedding_scale is not None
             )
@@ -131,8 +215,34 @@ class _NativeGRUPopulationStep(_GRUPopulationStep):
         event_values: torch.Tensor,
         morphology: torch.Tensor,
         recurrent_state: torch.Tensor,
+        population_embedding_adapter: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        hidden = self._encode(event_indices, event_values, morphology)
+        hidden = self._encode(
+            event_indices,
+            event_values,
+            morphology,
+            population_embedding_adapter,
+        )
+        correction, next_state = self._advance_gru(
+            hidden,
+            recurrent_state,
+        )
+        return self._decode(hidden + correction), next_state
+
+
+class _NativeGRUBranchPopulationStep(_GRUPopulationStep):
+    def forward(
+        self,
+        branch_inputs: torch.Tensor,
+        morphology: torch.Tensor,
+        recurrent_state: torch.Tensor,
+        population_embedding_adapter: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        hidden = self._encode_branch_inputs(
+            branch_inputs,
+            morphology,
+            population_embedding_adapter,
+        )
         correction, next_state = self._advance_gru(
             hidden,
             recurrent_state,
@@ -164,13 +274,19 @@ class _PatchedGRUPopulationStep(_GRUPopulationStep):
         recurrent_state: torch.Tensor,
         patch_sum: torch.Tensor,
         patch_correction: torch.Tensor,
+        population_embedding_adapter: torch.Tensor | None = None,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
     ]:
-        hidden = self._encode(event_indices, event_values, morphology)
+        hidden = self._encode(
+            event_indices,
+            event_values,
+            morphology,
+            population_embedding_adapter,
+        )
         corrected = hidden + patch_correction
         accumulated = patch_sum + hidden
         if self.close_patch:
@@ -185,6 +301,368 @@ class _PatchedGRUPopulationStep(_GRUPopulationStep):
             next_correction = patch_correction
         return (
             self._decode(corrected),
+            next_state,
+            next_sum,
+            next_correction,
+        )
+
+
+class _PatchedGRUBranchPopulationStep(_PatchedGRUPopulationStep):
+    def forward(
+        self,
+        branch_inputs: torch.Tensor,
+        morphology: torch.Tensor,
+        recurrent_state: torch.Tensor,
+        patch_sum: torch.Tensor,
+        patch_correction: torch.Tensor,
+        population_embedding_adapter: torch.Tensor | None = None,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        hidden = self._encode_branch_inputs(
+            branch_inputs,
+            morphology,
+            population_embedding_adapter,
+        )
+        corrected = hidden + patch_correction
+        accumulated = patch_sum + hidden
+        if self.close_patch:
+            next_correction, next_state = self._advance_gru(
+                accumulated / self.patch_size,
+                recurrent_state,
+            )
+            next_sum = torch.zeros_like(accumulated)
+        else:
+            next_state = recurrent_state
+            next_sum = accumulated
+            next_correction = patch_correction
+        return (
+            self._decode(corrected),
+            next_state,
+            next_sum,
+            next_correction,
+        )
+
+
+class _PersonalizedGRUBranchStep(_GRUPopulationStep):
+    def __init__(
+        self,
+        model: AxoTemporalModel,
+        *,
+        personalization: NeuronBehaviorPersonalization,
+    ) -> None:
+        super().__init__(model)
+        width = self.weight_hh.shape[1]
+        if not isinstance(self.output_projection, nn.Identity):
+            raise ValueError(
+                "personalized runner requires GRU hidden width to "
+                "match model width"
+            )
+        if (
+            personalization.width != width
+            or personalization.branches != self.backbone.num_branch
+            or personalization.outputs != self.backbone.num_output
+        ):
+            raise ValueError(
+                "personalization dimensions do not match the model"
+            )
+        self.personalization = personalization
+        self.width = width
+        self.rank = personalization.matrix_rank
+        self._tensor_shapes = personalization.tensor_shapes
+        self._tensor_slices = personalization.tensor_slices
+
+    def _parameter(
+        self,
+        behavior_parameters: torch.Tensor,
+        name: str,
+    ) -> torch.Tensor:
+        selection = self._tensor_slices[name]
+        return behavior_parameters[:, selection].view(
+            behavior_parameters.shape[0],
+            *self._tensor_shapes[name],
+        )
+
+    @staticmethod
+    def _low_rank_correction(
+        values: torch.Tensor,
+        down: torch.Tensor,
+        up: torch.Tensor,
+    ) -> torch.Tensor:
+        compressed = torch.bmm(
+            down,
+            values.unsqueeze(-1),
+        )
+        return torch.bmm(up, compressed).squeeze(-1)
+
+    def _encode_personalized(
+        self,
+        branch_inputs: torch.Tensor,
+        morphology: torch.Tensor,
+        behavior_parameters: torch.Tensor,
+    ) -> torch.Tensor:
+        branch = branch_inputs.unsqueeze(1)
+        if self.backbone.branch_gain is not None:
+            gain = self.backbone.branch_gain.to(
+                dtype=branch.dtype,
+                device=branch.device,
+            )
+            branch = branch * gain.view(1, 1, -1)
+        branch = branch + self._parameter(
+            behavior_parameters,
+            "branch_bias",
+        ).unsqueeze(1)
+        branch = branch * self._parameter(
+            behavior_parameters,
+            "branch_log_gain",
+        ).unsqueeze(1).exp()
+        if self.backbone.config.branch_nonlinearity == "tanh":
+            assert self.backbone.branch_nonlinearity_log_scale is not None
+            assert self.backbone.branch_nonlinearity_bias is not None
+            scale = self.backbone.branch_nonlinearity_log_scale.exp().to(
+                dtype=branch.dtype,
+                device=branch.device,
+            )
+            bias = self.backbone.branch_nonlinearity_bias.to(
+                dtype=branch.dtype,
+                device=branch.device,
+            )
+            branch = torch.tanh(
+                scale.view(1, 1, -1)
+                * (branch + bias.view(1, 1, -1))
+            )
+            branch = branch / scale.view(1, 1, -1).clamp_min(
+                torch.finfo(branch.dtype).eps
+            )
+
+        hidden = self.backbone.branch_projection(branch)
+        if self.rank:
+            branch_correction = self._low_rank_correction(
+                branch.squeeze(1),
+                self._parameter(
+                    behavior_parameters,
+                    "branch_projection_down",
+                ),
+                self._parameter(
+                    behavior_parameters,
+                    "branch_projection_up",
+                ),
+            )
+            hidden = hidden + branch_correction.unsqueeze(1)
+        hidden = self.backbone._apply_projected_branch_bilinear(
+            hidden,
+            self.backbone._branch_bilinear_projection(branch),
+        )
+        if self.backbone.morphology_embedding is not None:
+            embedding = self.backbone._morphology_embedding_values(
+                morphology,
+                dtype=hidden.dtype,
+                device=hidden.device,
+            )
+            assert (
+                self.backbone.config.morphology_embedding_scale is not None
+            )
+            hidden = hidden + (
+                self.backbone.config.morphology_embedding_scale
+                * embedding.unsqueeze(1)
+            )
+        hidden = hidden.squeeze(1)
+        return (
+            hidden
+            * (
+                1.0
+                + self._parameter(
+                    behavior_parameters,
+                    "latent_gain",
+                )
+            )
+            + self._parameter(
+                behavior_parameters,
+                "latent_offset",
+            )
+        )
+
+    def _advance_personalized(
+        self,
+        hidden: torch.Tensor,
+        recurrent_state: torch.Tensor,
+        behavior_parameters: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        cell_input = self.pre_norm(hidden)
+        input_gates = F.linear(
+            cell_input,
+            self.weight_ih,
+            self.bias_ih,
+        )
+        hidden_gates = F.linear(
+            recurrent_state,
+            self.weight_hh,
+            self.bias_hh,
+        )
+        if self.rank:
+            input_gates = input_gates + self._low_rank_correction(
+                cell_input,
+                self._parameter(
+                    behavior_parameters,
+                    "gru_input_down",
+                ),
+                self._parameter(
+                    behavior_parameters,
+                    "gru_input_up",
+                ),
+            )
+            if self.personalization.adapt_recurrent:
+                hidden_gates = hidden_gates + self._low_rank_correction(
+                    recurrent_state,
+                    self._parameter(
+                        behavior_parameters,
+                        "gru_recurrent_down",
+                    ),
+                    self._parameter(
+                        behavior_parameters,
+                        "gru_recurrent_up",
+                    ),
+                )
+        ir, iz, inn = input_gates.chunk(3, dim=-1)
+        hr, hz, hn = hidden_gates.chunk(3, dim=-1)
+        reset = torch.sigmoid(ir + hr)
+        update = torch.sigmoid(iz + hz)
+        candidate = torch.tanh(inn + reset * hn)
+        next_state = (
+            (1.0 - update) * candidate
+            + update * recurrent_state
+        )
+        correction = self.residual_scale.view(1, -1) * next_state
+        correction = correction * (
+            1.0
+            + self._parameter(
+                behavior_parameters,
+                "recurrent_output_gain",
+            )
+        )
+        return correction, next_state
+
+    def _decode_personalized(
+        self,
+        hidden: torch.Tensor,
+        behavior_parameters: torch.Tensor,
+    ) -> torch.Tensor:
+        features = self.backbone.norm(hidden).unsqueeze(1)
+        if self.backbone.readout is not None:
+            output = self.backbone.readout(features)
+            spike = output[..., 0:1]
+            soma = output[..., 1:2]
+        else:
+            assert self.backbone.spike_readout is not None
+            assert self.backbone.soma_readout is not None
+            spike = self.backbone.spike_readout(features)
+            soma = self.backbone._readout_soma(features, None)
+        personalized = torch.bmm(
+            self._parameter(
+                behavior_parameters,
+                "readout_weight",
+            ),
+            features.squeeze(1).unsqueeze(-1),
+        ).squeeze(-1)
+        personalized = personalized + self._parameter(
+            behavior_parameters,
+            "readout_bias",
+        )
+        spike = spike + personalized[:, None, 0:1]
+        soma = soma + personalized[:, None, 1:2]
+        if self.backbone.config.spike_voltage_coupling_scale:
+            spike = self.backbone._couple_spike_voltage(spike, soma)
+        return torch.cat((spike, soma), dim=-1)
+
+
+class _NativePersonalizedGRUBranchStep(
+    _PersonalizedGRUBranchStep
+):
+    def forward(
+        self,
+        branch_inputs: torch.Tensor,
+        morphology: torch.Tensor,
+        recurrent_state: torch.Tensor,
+        behavior_parameters: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        hidden = self._encode_personalized(
+            branch_inputs,
+            morphology,
+            behavior_parameters,
+        )
+        correction, next_state = self._advance_personalized(
+            hidden,
+            recurrent_state,
+            behavior_parameters,
+        )
+        return (
+            self._decode_personalized(
+                hidden + correction,
+                behavior_parameters,
+            ),
+            next_state,
+        )
+
+
+class _PatchedPersonalizedGRUBranchStep(
+    _PersonalizedGRUBranchStep
+):
+    def __init__(
+        self,
+        model: AxoTemporalModel,
+        *,
+        personalization: NeuronBehaviorPersonalization,
+        close_patch: bool,
+    ) -> None:
+        super().__init__(model, personalization=personalization)
+        if not isinstance(
+            model.temporal_core,
+            CausalPatchedTemporalCore,
+        ):
+            raise TypeError("patched population step requires patching")
+        self.close_patch = close_patch
+        self.patch_size = model.temporal_core.patch_size
+
+    def forward(
+        self,
+        branch_inputs: torch.Tensor,
+        morphology: torch.Tensor,
+        recurrent_state: torch.Tensor,
+        patch_sum: torch.Tensor,
+        patch_correction: torch.Tensor,
+        behavior_parameters: torch.Tensor,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        hidden = self._encode_personalized(
+            branch_inputs,
+            morphology,
+            behavior_parameters,
+        )
+        corrected = hidden + patch_correction
+        accumulated = patch_sum + hidden
+        if self.close_patch:
+            next_correction, next_state = self._advance_personalized(
+                accumulated / self.patch_size,
+                recurrent_state,
+                behavior_parameters,
+            )
+            next_sum = torch.zeros_like(accumulated)
+        else:
+            next_state = recurrent_state
+            next_sum = accumulated
+            next_correction = patch_correction
+        return (
+            self._decode_personalized(
+                corrected,
+                behavior_parameters,
+            ),
             next_state,
             next_sum,
             next_correction,
@@ -239,12 +717,18 @@ class _GroupedGRUPopulationStep(_GRUPopulationStep):
         event_indices: torch.Tensor,
         event_values: torch.Tensor,
         morphology: torch.Tensor,
+        population_embedding_adapter: torch.Tensor | None = None,
     ) -> torch.Tensor:
         groups, neurons, events = event_indices.shape
         flat = self._encode(
             event_indices.reshape(-1, events),
             event_values.reshape(-1, events),
             morphology.reshape(-1),
+            (
+                None
+                if population_embedding_adapter is None
+                else population_embedding_adapter.reshape(-1, self.width)
+            ),
         )
         return flat.view(groups, neurons, self.width)
 
@@ -289,11 +773,13 @@ class _NativeGroupedGRUPopulationStep(_GroupedGRUPopulationStep):
         event_values: torch.Tensor,
         morphology: torch.Tensor,
         recurrent_state: torch.Tensor,
+        population_embedding_adapter: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         hidden = self._encode_grouped(
             event_indices,
             event_values,
             morphology,
+            population_embedding_adapter,
         )
         correction, next_state = self._advance_grouped(
             hidden,
@@ -327,6 +813,7 @@ class _PatchedGroupedGRUPopulationStep(_GroupedGRUPopulationStep):
         recurrent_state: torch.Tensor,
         patch_sum: torch.Tensor,
         patch_correction: torch.Tensor,
+        population_embedding_adapter: torch.Tensor | None = None,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
@@ -337,6 +824,7 @@ class _PatchedGroupedGRUPopulationStep(_GroupedGRUPopulationStep):
             event_indices,
             event_values,
             morphology,
+            population_embedding_adapter,
         )
         corrected = hidden + patch_correction
         accumulated = patch_sum + hidden
@@ -369,6 +857,7 @@ class GRUPopulationRunner:
         chunk_size: int,
         compile_step: bool = True,
         compile_mode: str = "reduce-overhead",
+        population_embedding_adapters: torch.Tensor | None = None,
     ) -> None:
         if model.training:
             raise ValueError("population runner requires eval mode")
@@ -387,6 +876,28 @@ class GRUPopulationRunner:
         self.chunk_size = chunk_size
         self.device = parameter.device
         self.dtype = parameter.dtype
+        width = model._unwrapped_temporal_core().hidden_units
+        if population_embedding_adapters is not None:
+            if model.backbone.morphology_embedding is None:
+                raise ValueError(
+                    "population adapters require morphology embeddings"
+                )
+            if population_embedding_adapters.shape != (population, width):
+                raise ValueError(
+                    "population adapters must have shape "
+                    f"({population}, {width})"
+                )
+            if population_embedding_adapters.device != self.device:
+                raise ValueError(
+                    "population adapters must be on the model device"
+                )
+            if population_embedding_adapters.dtype != self.dtype:
+                raise ValueError(
+                    "population adapters must match the model dtype"
+                )
+        self.population_embedding_adapters = (
+            population_embedding_adapters
+        )
         self.state = model.allocate_streaming_state(
             population,
             device=self.device,
@@ -474,12 +985,18 @@ class GRUPopulationRunner:
                     torch.compiler.cudagraph_mark_step_begin()
                 if self.patch_size == 1:
                     assert self._native_step is not None
-                    output, next_state = self._native_step(
+                    arguments = (
                         event_indices[start:stop],
                         event_values[start:stop],
                         morphology_indices[start:stop],
                         self.recurrent_state[start:stop],
                     )
+                    if self.population_embedding_adapters is not None:
+                        arguments = (
+                            *arguments,
+                            self.population_embedding_adapters[start:stop],
+                        )
+                    output, next_state = self._native_step(*arguments)
                     self.output[start:stop].copy_(output)
                     self.recurrent_state[start:stop].copy_(next_state)
                 else:
@@ -491,7 +1008,7 @@ class GRUPopulationRunner:
                         else self._open_step
                     )
                     assert step is not None
-                    values = step(
+                    arguments = (
                         event_indices[start:stop],
                         event_values[start:stop],
                         morphology_indices[start:stop],
@@ -499,6 +1016,12 @@ class GRUPopulationRunner:
                         self.patch_sum[start:stop],
                         self.patch_correction[start:stop],
                     )
+                    if self.population_embedding_adapters is not None:
+                        arguments = (
+                            *arguments,
+                            self.population_embedding_adapters[start:stop],
+                        )
+                    values = step(*arguments)
                     self.output[start:stop].copy_(values[0])
                     self.recurrent_state[start:stop].copy_(values[1])
                     self.patch_sum[start:stop].copy_(values[2])
@@ -536,6 +1059,323 @@ class GRUPopulationRunner:
             raise ValueError("event indices must be integers")
         if event_values.dtype != self.dtype:
             raise ValueError("event values must match model dtype")
+
+
+class GRUBranchPopulationRunner(GRUPopulationRunner):
+    """Compiled GRU inference from pre-aggregated raw branch inputs."""
+
+    def __init__(
+        self,
+        model: AxoTemporalModel,
+        *,
+        population: int,
+        chunk_size: int,
+        compile_step: bool = True,
+        compile_mode: str = "reduce-overhead",
+        population_embedding_adapters: torch.Tensor | None = None,
+    ) -> None:
+        super().__init__(
+            model,
+            population=population,
+            chunk_size=chunk_size,
+            compile_step=False,
+            compile_mode=compile_mode,
+            population_embedding_adapters=(
+                population_embedding_adapters
+            ),
+        )
+        if compile_step and self.device.type != "cuda":
+            raise ValueError(
+                "compiled branch population runner requires CUDA"
+            )
+        self._compiled = compile_step
+        compile_module: Callable[[nn.Module], nn.Module]
+        if compile_step:
+            compile_module = lambda module: torch.compile(
+                module,
+                fullgraph=True,
+                dynamic=False,
+                mode=compile_mode,
+            )
+        else:
+            compile_module = lambda module: module
+
+        if self.patch_size == 1:
+            self._native_step = compile_module(
+                _NativeGRUBranchPopulationStep(model).eval()
+            )
+            self._open_step = None
+            self._close_step = None
+        else:
+            self._native_step = None
+            self._open_step = compile_module(
+                _PatchedGRUBranchPopulationStep(
+                    model,
+                    close_patch=False,
+                ).eval()
+            )
+            self._close_step = compile_module(
+                _PatchedGRUBranchPopulationStep(
+                    model,
+                    close_patch=True,
+                ).eval()
+            )
+
+    def step(
+        self,
+        branch_inputs: torch.Tensor,
+        morphology_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        if branch_inputs.shape != (
+            self.population,
+            self.model.backbone.num_branch,
+        ):
+            raise ValueError(
+                "branch inputs must have shape "
+                f"({self.population}, "
+                f"{self.model.backbone.num_branch})"
+            )
+        if branch_inputs.device != self.device:
+            raise ValueError(
+                "branch inputs must be on the model device"
+            )
+        if branch_inputs.dtype != self.dtype:
+            raise ValueError(
+                "branch inputs must match the model dtype"
+            )
+        if morphology_indices.shape != (self.population,):
+            raise ValueError(
+                "morphology_indices must have shape (population,)"
+            )
+        if morphology_indices.device != self.device:
+            raise ValueError(
+                "morphology indices must be on the model device"
+            )
+
+        close_patch = (
+            self.patch_size > 1
+            and self._phase == self.patch_size - 1
+        )
+        with torch.inference_mode():
+            for start in range(0, self.population, self.chunk_size):
+                stop = start + self.chunk_size
+                if self._compiled:
+                    torch.compiler.cudagraph_mark_step_begin()
+                common = (
+                    branch_inputs[start:stop],
+                    morphology_indices[start:stop],
+                    self.recurrent_state[start:stop],
+                )
+                if self.patch_size == 1:
+                    assert self._native_step is not None
+                    arguments = common
+                    if self.population_embedding_adapters is not None:
+                        arguments = (
+                            *arguments,
+                            self.population_embedding_adapters[start:stop],
+                        )
+                    output, next_state = self._native_step(*arguments)
+                    self.output[start:stop].copy_(output)
+                    self.recurrent_state[start:stop].copy_(next_state)
+                else:
+                    assert self.patch_sum is not None
+                    assert self.patch_correction is not None
+                    phase = (
+                        self._close_step
+                        if close_patch
+                        else self._open_step
+                    )
+                    assert phase is not None
+                    arguments = (
+                        *common,
+                        self.patch_sum[start:stop],
+                        self.patch_correction[start:stop],
+                    )
+                    if self.population_embedding_adapters is not None:
+                        arguments = (
+                            *arguments,
+                            self.population_embedding_adapters[start:stop],
+                        )
+                    result = phase(*arguments)
+                    self.output[start:stop].copy_(result[0])
+                    self.recurrent_state[start:stop].copy_(result[1])
+                    self.patch_sum[start:stop].copy_(result[2])
+                    self.patch_correction[start:stop].copy_(result[3])
+        self._phase = (self._phase + 1) % self.patch_size
+        self.state.patch_position = self._phase
+        return self.output
+
+
+class PersonalizedGRUBranchPopulationRunner(
+    GRUBranchPopulationRunner
+):
+    """Packed per-neuron behavior adaptation around one shared GRU base."""
+
+    def __init__(
+        self,
+        model: AxoTemporalModel,
+        *,
+        population: int,
+        chunk_size: int,
+        behavior_parameters: torch.Tensor,
+        personalization: NeuronBehaviorPersonalization,
+        compile_step: bool = True,
+        compile_mode: str = "reduce-overhead",
+    ) -> None:
+        if model.behavior_adapter is not None:
+            raise ValueError(
+                "population runner requires an unpersonalized shared base"
+            )
+        super().__init__(
+            model,
+            population=population,
+            chunk_size=chunk_size,
+            compile_step=False,
+            compile_mode=compile_mode,
+        )
+        expected_shape = (
+            population,
+            personalization.parameter_count,
+        )
+        if behavior_parameters.shape != expected_shape:
+            raise ValueError(
+                "behavior parameters must have shape "
+                f"{expected_shape}"
+            )
+        if behavior_parameters.device != self.device:
+            raise ValueError(
+                "behavior parameters must be on the model device"
+            )
+        if behavior_parameters.dtype != self.dtype:
+            raise ValueError(
+                "behavior parameters must match the model dtype"
+            )
+        self.behavior_parameters = behavior_parameters
+        self.personalization = personalization
+        self.personalized_parameters_per_neuron = (
+            personalization.parameter_count
+        )
+        self.personalized_components = tuple(
+            sorted(personalization.personalized_components)
+        )
+        if compile_step and self.device.type != "cuda":
+            raise ValueError(
+                "compiled personalized runner requires CUDA"
+            )
+        self._compiled = compile_step
+        compile_module: Callable[[nn.Module], nn.Module]
+        if compile_step:
+            compile_module = lambda module: torch.compile(
+                module,
+                fullgraph=True,
+                dynamic=False,
+                mode=compile_mode,
+            )
+        else:
+            compile_module = lambda module: module
+
+        if self.patch_size == 1:
+            self._native_step = compile_module(
+                _NativePersonalizedGRUBranchStep(
+                    model,
+                    personalization=personalization,
+                ).eval()
+            )
+            self._open_step = None
+            self._close_step = None
+        else:
+            self._native_step = None
+            self._open_step = compile_module(
+                _PatchedPersonalizedGRUBranchStep(
+                    model,
+                    personalization=personalization,
+                    close_patch=False,
+                ).eval()
+            )
+            self._close_step = compile_module(
+                _PatchedPersonalizedGRUBranchStep(
+                    model,
+                    personalization=personalization,
+                    close_patch=True,
+                ).eval()
+            )
+
+    def step(
+        self,
+        branch_inputs: torch.Tensor,
+        morphology_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        if branch_inputs.shape != (
+            self.population,
+            self.model.backbone.num_branch,
+        ):
+            raise ValueError(
+                "branch inputs must have shape "
+                f"({self.population}, "
+                f"{self.model.backbone.num_branch})"
+            )
+        if branch_inputs.device != self.device:
+            raise ValueError(
+                "branch inputs must be on the model device"
+            )
+        if branch_inputs.dtype != self.dtype:
+            raise ValueError(
+                "branch inputs must match the model dtype"
+            )
+        if morphology_indices.shape != (self.population,):
+            raise ValueError(
+                "morphology_indices must have shape (population,)"
+            )
+        if morphology_indices.device != self.device:
+            raise ValueError(
+                "morphology indices must be on the model device"
+            )
+
+        close_patch = (
+            self.patch_size > 1
+            and self._phase == self.patch_size - 1
+        )
+        with torch.inference_mode():
+            for start in range(0, self.population, self.chunk_size):
+                stop = start + self.chunk_size
+                if self._compiled:
+                    torch.compiler.cudagraph_mark_step_begin()
+                common = (
+                    branch_inputs[start:stop],
+                    morphology_indices[start:stop],
+                    self.recurrent_state[start:stop],
+                )
+                behavior = self.behavior_parameters[start:stop]
+                if self.patch_size == 1:
+                    assert self._native_step is not None
+                    output, next_state = self._native_step(
+                        *common,
+                        behavior,
+                    )
+                    self.output[start:stop].copy_(output)
+                    self.recurrent_state[start:stop].copy_(next_state)
+                else:
+                    assert self.patch_sum is not None
+                    assert self.patch_correction is not None
+                    phase = (
+                        self._close_step
+                        if close_patch
+                        else self._open_step
+                    )
+                    assert phase is not None
+                    result = phase(
+                        *common,
+                        self.patch_sum[start:stop],
+                        self.patch_correction[start:stop],
+                        behavior,
+                    )
+                    self.output[start:stop].copy_(result[0])
+                    self.recurrent_state[start:stop].copy_(result[1])
+                    self.patch_sum[start:stop].copy_(result[2])
+                    self.patch_correction[start:stop].copy_(result[3])
+        self._phase = (self._phase + 1) % self.patch_size
+        self.state.patch_position = self._phase
+        return self.output
 
 
 class GroupedGRUPopulationRunner:

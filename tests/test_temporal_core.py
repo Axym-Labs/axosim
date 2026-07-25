@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import replace
+
 import pytest
 import torch
 from torch import nn
@@ -13,11 +16,16 @@ from axosim.architecture_frontier import (
     transfer_compatible_state,
 )
 from axosim.autoresearch import model_population_memory_metrics
+from axosim.autoresearch import set_trainable_parameter_names
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
 from axosim.checkpoint import load_checkpoint, save_checkpoint
+from axosim.deployment import NeuronBehaviorPersonalization
 from axosim.population import (
+    GRUBranchPopulationRunner,
     GRUPopulationRunner,
     GroupedGRUPopulationRunner,
+    PersonalizedGRUBranchPopulationRunner,
+    pack_neuron_behavior_adapter,
 )
 from axosim.temporal_core import (
     AxoTemporalCoreConfig,
@@ -137,6 +145,174 @@ def test_temporal_model_checkpoint_round_trips(tmp_path, core_kind):
     assert isinstance(loaded, AxoTemporalModel)
     assert loaded.temporal_config.kind == core_kind
     assert metadata["iteration"] == 184
+    torch.testing.assert_close(actual, expected)
+
+
+def test_gru_behavior_adapter_is_target_specific_and_keeps_memory_shared():
+    torch.manual_seed(12)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(
+            kind="gru",
+            behavior_adapter_morphology_id="morph-b",
+        ),
+    ).eval()
+    adapter = model.behavior_adapter
+    assert adapter is not None
+    assert adapter.parameter_counts == {
+        "branch_gain": 4,
+        "branch_bias": 4,
+        "latent_gain": 6,
+        "latent_offset": 6,
+        "recurrent_output_gain": 6,
+        "readout": 14,
+    }
+    assert adapter.parameter_count == 40
+
+    x = torch.randn(2, 9, 8)
+    morphology = torch.tensor([0, 1])
+    baseline = model(x, morphology_indices=morphology)
+    with torch.no_grad():
+        for parameter in adapter.parameters():
+            parameter.normal_(mean=0.0, std=0.1)
+    personalized = model(x, morphology_indices=morphology)
+
+    torch.testing.assert_close(personalized[0], baseline[0])
+    assert not torch.allclose(personalized[1], baseline[1])
+
+    trainable_names = [
+        name
+        for name, _ in model.named_parameters()
+        if name.startswith("behavior_adapter.")
+    ]
+    set_trainable_parameter_names(model, trainable_names)
+    personalized.square().mean().backward()
+    assert all(
+        parameter.grad is not None
+        for parameter in adapter.parameters()
+    )
+    assert all(
+        not parameter.requires_grad
+        for parameter in model._unwrapped_temporal_core().gru.parameters()
+    )
+
+
+def test_gru_low_rank_behavior_adapter_updates_shared_matrix_subspaces():
+    torch.manual_seed(14)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(
+            kind="gru",
+            patch_size=2,
+            behavior_adapter_morphology_id="morph-b",
+            behavior_adapter_rank=2,
+            behavior_gate_bias=True,
+            behavior_synapse_rank=1,
+        ),
+    ).eval()
+    adapter = model.behavior_adapter
+    assert adapter is not None
+    assert adapter.parameter_counts == {
+        "branch_gain": 4,
+        "branch_bias": 4,
+        "latent_gain": 6,
+        "latent_offset": 6,
+        "recurrent_output_gain": 6,
+        "readout": 14,
+        "branch_projection_low_rank": 20,
+        "gru_input_low_rank": 48,
+        "gru_recurrent_low_rank": 48,
+        "gru_gate_bias": 18,
+        "synapse_gain_low_rank": 6,
+    }
+    assert adapter.parameter_count == 180
+
+    x = torch.randn(2, 8, 8)
+    morphology = torch.tensor([0, 1])
+    baseline = model(x, morphology_indices=morphology)
+    with torch.no_grad():
+        for parameter in adapter.parameters():
+            parameter.normal_(mean=0.0, std=0.1)
+    personalized = model(x, morphology_indices=morphology)
+
+    torch.testing.assert_close(personalized[0], baseline[0])
+    assert not torch.allclose(personalized[1], baseline[1])
+
+    trainable_names = [
+        name
+        for name, _ in model.named_parameters()
+        if name.startswith("behavior_adapter.")
+    ]
+    set_trainable_parameter_names(model, trainable_names)
+    personalized.square().mean().backward()
+    assert all(
+        parameter.grad is not None
+        for parameter in adapter.parameters()
+    )
+    assert all(
+        not parameter.requires_grad
+        for parameter in model._unwrapped_temporal_core().gru.parameters()
+    )
+
+
+def test_gru_input_behavior_adapter_leaves_recurrent_matrix_unadapted():
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(
+            kind="gru",
+            behavior_adapter_morphology_id="morph-b",
+            behavior_adapter_rank=2,
+            behavior_adapt_gru_recurrent=False,
+        ),
+    )
+    adapter = model.behavior_adapter
+    assert adapter is not None
+
+    assert adapter.parameter_counts == {
+        "branch_gain": 4,
+        "branch_bias": 4,
+        "latent_gain": 6,
+        "latent_offset": 6,
+        "recurrent_output_gain": 6,
+        "readout": 14,
+        "branch_projection_low_rank": 20,
+        "gru_input_low_rank": 48,
+    }
+    assert adapter.parameter_count == 108
+    assert adapter.gru_recurrent_down is None
+    assert adapter.gru_recurrent_up is None
+
+
+def test_gru_behavior_adapter_checkpoint_round_trips(tmp_path):
+    torch.manual_seed(13)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(
+            kind="gru",
+            patch_size=2,
+            behavior_adapter_morphology_id="morph-b",
+            behavior_adapter_rank=2,
+            behavior_gate_bias=True,
+            behavior_synapse_rank=1,
+        ),
+    ).eval()
+    assert model.behavior_adapter is not None
+    with torch.no_grad():
+        for parameter in model.behavior_adapter.parameters():
+            parameter.normal_(mean=0.0, std=0.1)
+    x = torch.randn(2, 8, 8)
+    morphology = torch.tensor([0, 1])
+    expected = model(x, morphology_indices=morphology)
+    path = tmp_path / "personalized-gru.pt"
+
+    save_checkpoint(model, path)
+    loaded, _ = load_checkpoint(path)
+    actual = loaded(x, morphology_indices=morphology)
+
+    assert loaded.temporal_config.behavior_adapter_morphology_id == "morph-b"
+    assert loaded.temporal_config.behavior_adapter_rank == 2
+    assert loaded.temporal_config.behavior_gate_bias
+    assert loaded.temporal_config.behavior_synapse_rank == 1
     torch.testing.assert_close(actual, expected)
 
 
@@ -655,6 +831,258 @@ def test_gru_population_runner_does_not_retain_cudnn_gru_module():
     )
 
 
+@pytest.mark.parametrize("patch_size", [1, 4])
+def test_gru_population_runner_applies_per_neuron_embedding_adapters(
+    patch_size,
+):
+    torch.manual_seed(57)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=patch_size),
+    ).eval()
+    population = 4
+    morphology = torch.tensor([0, 1, 0, 1])
+    adapters = torch.randn(population, model.config.model_dim) * 0.1
+    personalized = GRUPopulationRunner(
+        model,
+        population=population,
+        chunk_size=2,
+        compile_step=False,
+        population_embedding_adapters=adapters,
+    )
+    references = []
+    for neuron in range(population):
+        reference_model = deepcopy(model)
+        assert reference_model.backbone.morphology_embedding is not None
+        with torch.no_grad():
+            reference_model.backbone.morphology_embedding.weight[
+                morphology[neuron]
+            ].add_(adapters[neuron])
+        references.append(
+            GRUPopulationRunner(
+                reference_model,
+                population=1,
+                chunk_size=1,
+                compile_step=False,
+            )
+        )
+
+    for _ in range(5):
+        event_indices = torch.randint(0, model.num_input, (population, 3))
+        event_values = torch.randn(population, 3)
+        actual = personalized.step(
+            event_indices,
+            event_values,
+            morphology,
+        )
+        expected = torch.cat(
+            [
+                references[neuron].step(
+                    event_indices[neuron : neuron + 1],
+                    event_values[neuron : neuron + 1],
+                    morphology[neuron : neuron + 1],
+                )
+                for neuron in range(population)
+            ]
+        )
+        torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("patch_size", [1, 4])
+def test_gru_branch_population_runner_matches_sparse_events(patch_size):
+    torch.manual_seed(58)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=patch_size),
+    ).eval()
+    population = 6
+    morphology = torch.tensor([0, 1, 0, 1, 0, 1])
+    adapters = torch.randn(population, model.config.model_dim) * 0.1
+    event_runner = GRUPopulationRunner(
+        model,
+        population=population,
+        chunk_size=3,
+        compile_step=False,
+        population_embedding_adapters=adapters,
+    )
+    branch_runner = GRUBranchPopulationRunner(
+        model,
+        population=population,
+        chunk_size=3,
+        compile_step=False,
+        population_embedding_adapters=adapters,
+    )
+
+    for _ in range(5):
+        event_indices = torch.randint(0, model.num_input, (population, 3))
+        event_values = torch.randn(population, 3)
+        raw_branches = _raw_sparse_branch_inputs(
+            model,
+            event_indices,
+            event_values,
+            morphology,
+        )
+        expected = event_runner.step(
+            event_indices,
+            event_values,
+            morphology,
+        )
+        actual = branch_runner.step(raw_branches, morphology)
+        torch.testing.assert_close(actual, expected)
+
+    torch.testing.assert_close(
+        branch_runner.recurrent_state,
+        event_runner.recurrent_state,
+    )
+    if patch_size > 1:
+        torch.testing.assert_close(
+            branch_runner.patch_sum,
+            event_runner.patch_sum,
+        )
+        torch.testing.assert_close(
+            branch_runner.patch_correction,
+            event_runner.patch_correction,
+        )
+
+
+@pytest.mark.parametrize("patch_size", [1, 4])
+def test_personalized_gru_branch_runner_matches_individual_models(
+    patch_size,
+):
+    torch.manual_seed(61)
+    base = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=patch_size),
+    ).eval()
+    personalization = NeuronBehaviorPersonalization(
+        width=base.config.model_dim,
+        branches=base.num_branch,
+        outputs=base.num_output,
+        matrix_rank=2,
+        adapt_recurrent=True,
+    )
+    population = 4
+    steps = 9
+    morphology = torch.tensor([0, 1, 1, 0])
+    references = []
+    packed = []
+    morphology_ids = tuple(base.config.morphology_ids or ())
+    for neuron in range(population):
+        config = replace(
+            base.temporal_config,
+            behavior_adapter_morphology_id=(
+                morphology_ids[morphology[neuron]]
+            ),
+            behavior_adapter_rank=2,
+        )
+        reference = AxoTemporalModel(base.backbone, config).eval()
+        incompatible = reference.load_state_dict(
+            base.state_dict(),
+            strict=False,
+        )
+        assert not incompatible.unexpected_keys
+        assert all(
+            name.startswith("behavior_adapter.")
+            for name in incompatible.missing_keys
+        )
+        adapter = reference.behavior_adapter
+        assert adapter is not None
+        with torch.no_grad():
+            for parameter in adapter.parameters():
+                parameter.normal_(mean=0.0, std=0.04)
+        packed.append(
+            pack_neuron_behavior_adapter(
+                adapter,
+                personalization=personalization,
+            )
+        )
+        references.append(reference)
+    behavior_parameters = torch.stack(packed)
+    assert behavior_parameters.shape == (
+        population,
+        personalization.parameter_count,
+    )
+    runner = PersonalizedGRUBranchPopulationRunner(
+        base,
+        population=population,
+        chunk_size=2,
+        behavior_parameters=behavior_parameters,
+        personalization=personalization,
+        compile_step=False,
+    )
+
+    event_indices = torch.randint(
+        0,
+        base.num_input,
+        (population, steps, 3),
+    )
+    event_values = torch.randn(population, steps, 3)
+    dense = torch.zeros(population, steps, base.num_input)
+    dense.scatter_add_(2, event_indices, event_values)
+    expected = torch.cat(
+        [
+            references[neuron](
+                dense[neuron : neuron + 1],
+                morphology_indices=morphology[neuron : neuron + 1],
+            )
+            for neuron in range(population)
+        ]
+    )
+    actual_steps = []
+    for time_index in range(steps):
+        raw_branches = _raw_sparse_branch_inputs(
+            base,
+            event_indices[:, time_index],
+            event_values[:, time_index],
+            morphology,
+        )
+        actual_steps.append(
+            runner.step(raw_branches, morphology).clone()
+        )
+    actual = torch.cat(actual_steps, dim=1)
+
+    torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-5)
+    assert runner.personalized_parameters_per_neuron == 156
+    assert runner.personalized_components == (
+        "branch_bias",
+        "branch_gain",
+        "branch_projection_low_rank",
+        "gru_input_low_rank",
+        "gru_recurrent_low_rank",
+        "latent_gain",
+        "latent_offset",
+        "readout",
+        "recurrent_output_gain",
+    )
+
+
+def test_personalized_gru_branch_runner_rejects_incomplete_parameter_bank():
+    base = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=4),
+    ).eval()
+    personalization = NeuronBehaviorPersonalization(
+        width=base.config.model_dim,
+        branches=base.num_branch,
+        outputs=base.num_output,
+        matrix_rank=2,
+        adapt_recurrent=True,
+    )
+
+    with pytest.raises(ValueError, match="behavior parameters"):
+        PersonalizedGRUBranchPopulationRunner(
+            base,
+            population=4,
+            chunk_size=2,
+            behavior_parameters=torch.zeros(
+                4,
+                personalization.parameter_count - 1,
+            ),
+            personalization=personalization,
+            compile_step=False,
+        )
+
+
 @pytest.mark.parametrize("patch_size", [1, 2])
 def test_grouped_gru_population_runner_matches_shared_weights(patch_size):
     torch.manual_seed(59)
@@ -763,3 +1191,61 @@ def _streaming_state_tensors(state):
         state.patch_sum,
         state.patch_correction,
     ]
+
+
+def _raw_sparse_branch_inputs(
+    model,
+    event_indices,
+    event_values,
+    morphology,
+):
+    backbone = model.backbone
+    slots = backbone.sparse_input_slot_indices.index_select(
+        0,
+        event_indices.reshape(-1),
+    ).view_as(event_indices)
+    weighted = event_values
+    assert backbone.morphology_synapse_log_gain is not None
+    assert backbone.config.morphology_synapse_gain_scale is not None
+    gain = torch.exp(
+        backbone.config.morphology_synapse_gain_scale
+        * backbone.morphology_synapse_log_gain
+    )
+    if backbone.config.share_morphology_synapse_gain:
+        weighted = weighted * gain.flatten().index_select(
+            0,
+            slots.flatten(),
+        ).view_as(slots)
+    else:
+        slot_count = (
+            backbone.num_branch * backbone.num_synapse_per_branch
+        )
+        morphology_slots = morphology.unsqueeze(1) * slot_count + slots
+        weighted = weighted * gain.flatten().index_select(
+            0,
+            morphology_slots.flatten(),
+        ).view_as(slots)
+    feature_gains = backbone._all_morphology_feature_gains(
+        dtype=weighted.dtype,
+        device=weighted.device,
+    )
+    if feature_gains is not None:
+        slot_count = (
+            backbone.num_branch * backbone.num_synapse_per_branch
+        )
+        morphology_slots = morphology.unsqueeze(1) * slot_count + slots
+        weighted = weighted * feature_gains.flatten().index_select(
+            0,
+            morphology_slots.flatten(),
+        ).view_as(slots)
+    branch_indices = torch.div(
+        slots,
+        backbone.num_synapse_per_branch,
+        rounding_mode="floor",
+    )
+    branches = torch.zeros(
+        event_indices.shape[0],
+        backbone.num_branch,
+        dtype=event_values.dtype,
+    )
+    return branches.scatter_add_(1, branch_indices, weighted)
