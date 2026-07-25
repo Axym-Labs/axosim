@@ -11,6 +11,10 @@ from axosim.autoresearch import (
     model_population_memory_metrics,
     model_resident_state_metrics,
 )
+from axosim.block_forecast import (
+    BlockForecastConfig,
+    CausalBlockForecastModel,
+)
 from axosim.mamba_official import BranchOfficialMamba
 from axosim.temporal_core import (
     AxoTemporalCoreConfig,
@@ -34,12 +38,27 @@ class ArchitectureSpec:
     branch_memory_units: int = 30
     branch_hidden_units: int = 64
     patch_size: int = 1
+    block_forecast: bool = False
+    max_patch_rank: int = 8
+    max_trajectory_rank: int = 8
+    voltage_anchor_count: int | None = None
+    event_template: tuple[float, ...] | None = None
+    event_template_center_init: float = 0.9208316802978516
+    event_template_temperature: float = 0.25
+    event_template_hard: bool = False
 
     def __post_init__(self) -> None:
         if not self.candidate_id:
             raise ValueError("candidate_id must not be empty")
         if self.task not in {"regression", "spike"}:
             raise ValueError(f"unknown architecture task: {self.task}")
+        if self.block_forecast:
+            if self.temporal_core not in {"mamba", "gru"}:
+                raise ValueError("block forecasting supports Mamba or GRU")
+            if self.patch_size <= 1:
+                raise ValueError(
+                    "block forecasting requires patch_size greater than one"
+                )
 
     def temporal_config(self) -> AxoTemporalCoreConfig:
         return AxoTemporalCoreConfig(
@@ -55,9 +74,26 @@ class ArchitectureSpec:
 def build_architecture_candidate(
     source: BranchOfficialMamba,
     spec: ArchitectureSpec,
-) -> BranchOfficialMamba | AxoTemporalModel:
+) -> BranchOfficialMamba | AxoTemporalModel | CausalBlockForecastModel:
     """Compose one task checkpoint with the requested temporal core."""
 
+    if spec.block_forecast:
+        return CausalBlockForecastModel(
+            source,
+            BlockForecastConfig(
+                core_kind=spec.temporal_core,
+                patch_size=spec.patch_size,
+                max_patch_rank=spec.max_patch_rank,
+                max_trajectory_rank=spec.max_trajectory_rank,
+                keep_local_tcn=spec.keep_local_tcn,
+                gru_hidden_units=spec.gru_hidden_units,
+                voltage_anchor_count=spec.voltage_anchor_count,
+                event_template=spec.event_template,
+                event_template_center_init=(spec.event_template_center_init),
+                event_template_temperature=(spec.event_template_temperature),
+                event_template_hard=spec.event_template_hard,
+            ),
+        )
     return create_temporal_model(source, spec.temporal_config())
 
 
@@ -86,16 +122,12 @@ def load_legacy_gru_candidate(
     )
     state_dict = payload.get("state_dict")
     if not isinstance(state_dict, dict):
-        raise ValueError("legacy GRU checkpoint has no state_dict")
+        raise TypeError("legacy GRU checkpoint has no state_dict")
     model.load_state_dict(
         migrate_legacy_gru_state_dict(state_dict),
         strict=True,
     )
-    metadata = {
-        key: value
-        for key, value in payload.items()
-        if key != "state_dict"
-    }
+    metadata = {key: value for key, value in payload.items() if key != "state_dict"}
     return model, metadata
 
 
@@ -107,7 +139,7 @@ def architecture_evidence(
 
     manifest = (
         model.component_manifest()
-        if isinstance(model, AxoTemporalModel)
+        if hasattr(model, "component_manifest")
         else {
             "temporal_core": "mamba",
             "shared_axomamba_front_end": True,
@@ -137,9 +169,7 @@ def transfer_compatible_state(
         if source_name.startswith("temporal_core."):
             suffix = source_name.removeprefix("temporal_core.")
             if suffix.startswith("core."):
-                candidates.append(
-                    "temporal_core." + suffix.removeprefix("core.")
-                )
+                candidates.append("temporal_core." + suffix.removeprefix("core."))
             else:
                 candidates.append("temporal_core.core." + suffix)
         for target_name in candidates:
@@ -158,7 +188,5 @@ def transfer_compatible_state(
         "copied": sorted(copied),
         "aliases": aliases,
         "target_only": sorted(set(target_state) - set(copied)),
-        "source_only_or_incompatible": sorted(
-            set(source_state) - copied_sources
-        ),
+        "source_only_or_incompatible": sorted(set(source_state) - copied_sources),
     }

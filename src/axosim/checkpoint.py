@@ -171,9 +171,22 @@ _RETIRED_AXOMAMBA_CONFIG_KEYS = frozenset(
         "voltage_state_kernel",
     }
 )
+_RETIRED_BLOCK_FORECAST_CONFIG_KEYS = frozenset(
+    {
+        "context_trajectory_skip",
+        "mamba_time_scale",
+    }
+)
+_RETIRED_AXO_TEMPORAL_CONFIG_KEYS = frozenset(
+    {
+        "patch_mode",
+    }
+)
 
 
-def save_checkpoint(model: torch.nn.Module, path: str | Path, *, metadata: dict[str, Any] | None = None) -> None:
+def save_checkpoint(
+    model: torch.nn.Module, path: str | Path, *, metadata: dict[str, Any] | None = None
+) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     model_kind, config = _serialize_model_config(model)
@@ -187,9 +200,13 @@ def save_checkpoint(model: torch.nn.Module, path: str | Path, *, metadata: dict[
     torch.save(payload, path)
 
 
-def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[torch.nn.Module, dict[str, Any]]:
+def load_checkpoint(
+    path: str | Path, *, map_location: str = "cpu"
+) -> tuple[torch.nn.Module, dict[str, Any]]:
     payload = torch.load(Path(path), map_location=map_location, weights_only=False)
-    model_kind = payload.get("model_kind", payload.get("metadata", {}).get("model_kind", "baseline"))
+    model_kind = payload.get(
+        "model_kind", payload.get("metadata", {}).get("model_kind", "baseline")
+    )
     if model_kind in {"baseline", "branch_elm"}:
         config = BranchELMConfig(**payload["config"])
         model = BranchELM(config)
@@ -214,9 +231,7 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
         )
 
         values = payload["config"]
-        backbone_config = AxoMambaConfig(
-            **_active_axomamba_config(values["backbone"])
-        )
+        backbone_config = AxoMambaConfig(**_active_axomamba_config(values["backbone"]))
         backbone = (
             AxoPyTorchMamba(backbone_config)
             if model_kind == "axo-temporal-pytorch"
@@ -224,7 +239,44 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
         )
         model = AxoTemporalModel(
             backbone,
-            AxoTemporalCoreConfig(**values["temporal_core"]),
+            AxoTemporalCoreConfig(
+                **{
+                    key: value
+                    for key, value in values["temporal_core"].items()
+                    if key not in _RETIRED_AXO_TEMPORAL_CONFIG_KEYS
+                }
+            ),
+        )
+    elif model_kind in {
+        "axo-block-forecast",
+        "axo-block-forecast-pytorch",
+    }:
+        from axosim.axomamba import (
+            AxoMamba,
+            AxoMambaConfig,
+            AxoPyTorchMamba,
+        )
+        from axosim.block_forecast import (
+            BlockForecastConfig,
+            CausalBlockForecastModel,
+        )
+
+        values = payload["config"]
+        backbone_config = AxoMambaConfig(**_active_axomamba_config(values["backbone"]))
+        backbone = (
+            AxoPyTorchMamba(backbone_config)
+            if model_kind == "axo-block-forecast-pytorch"
+            else AxoMamba(backbone_config)
+        )
+        model = CausalBlockForecastModel(
+            backbone,
+            BlockForecastConfig(
+                **{
+                    key: value
+                    for key, value in values["forecast"].items()
+                    if key not in _RETIRED_BLOCK_FORECAST_CONFIG_KEYS
+                }
+            ),
         )
     elif model_kind == "mamba-official":
         from axosim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
@@ -244,27 +296,40 @@ def load_checkpoint(path: str | Path, *, map_location: str = "cpu") -> tuple[tor
         raise ValueError(f"unknown model_kind in checkpoint: {model_kind}")
     strict = model_kind != "branch-trace-rnn"
     state_dict = dict(payload["state_dict"])
-    if "branch_subunit_mask" in model.state_dict() and "branch_subunit_mask" not in state_dict:
+    if (
+        "branch_subunit_mask" in model.state_dict()
+        and "branch_subunit_mask" not in state_dict
+    ):
         state_dict["branch_subunit_mask"] = model.state_dict()["branch_subunit_mask"]
     model.load_state_dict(state_dict, strict=strict)
     return model, dict(payload.get("metadata", {}))
 
 
 def _active_axomamba_config(config: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in config.items() if key not in _RETIRED_AXOMAMBA_CONFIG_KEYS}
+    return {
+        key: value
+        for key, value in config.items()
+        if key not in _RETIRED_AXOMAMBA_CONFIG_KEYS
+    }
 
 
 def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]]:
+    from axosim.block_forecast import CausalBlockForecastModel
     from axosim.temporal_core import AxoTemporalModel
 
-    if isinstance(model, AxoTemporalModel):
-        pytorch_backbone = (
-            model.backbone.__class__.__name__ == "AxoPyTorchMamba"
-        )
+    if isinstance(model, CausalBlockForecastModel):
+        pytorch_backbone = model.backbone.__class__.__name__ == "AxoPyTorchMamba"
         return (
-            "axo-temporal-pytorch"
-            if pytorch_backbone
-            else "axo-temporal",
+            "axo-block-forecast-pytorch" if pytorch_backbone else "axo-block-forecast",
+            {
+                "backbone": asdict(model.backbone.config),
+                "forecast": asdict(model.forecast_config),
+            },
+        )
+    if isinstance(model, AxoTemporalModel):
+        pytorch_backbone = model.backbone.__class__.__name__ == "AxoPyTorchMamba"
+        return (
+            "axo-temporal-pytorch" if pytorch_backbone else "axo-temporal",
             {
                 "backbone": asdict(model.backbone.config),
                 "temporal_core": asdict(model.temporal_config),
@@ -295,8 +360,12 @@ def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]
             "delta_t": float(model.delta_t),
             "branch_gain": bool(getattr(model, "branch_gain_enabled", False)),
             "branch_nonlinearity": str(getattr(model, "branch_nonlinearity", "none")),
-            "soma_multiplicative_gate": bool(getattr(model, "soma_multiplicative_gate_enabled", False)),
-            "branch_readout_skip": bool(getattr(model, "branch_readout_skip_enabled", False)),
+            "soma_multiplicative_gate": bool(
+                getattr(model, "soma_multiplicative_gate_enabled", False)
+            ),
+            "branch_readout_skip": bool(
+                getattr(model, "branch_readout_skip_enabled", False)
+            ),
         }
     if model.__class__.__name__ == "AxoMamba" and hasattr(model, "config"):
         return "axomamba", asdict(model.config)

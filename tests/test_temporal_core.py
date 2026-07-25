@@ -154,6 +154,23 @@ def test_temporal_model_checkpoint_round_trips(tmp_path, core_kind):
     torch.testing.assert_close(actual, expected)
 
 
+def test_temporal_checkpoint_ignores_retired_patch_mode(tmp_path):
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru"),
+    ).eval()
+    path = tmp_path / "historical-gru.pt"
+    save_checkpoint(model, path)
+    payload = torch.load(path, weights_only=False)
+    payload["config"]["temporal_core"]["patch_mode"] = "mean"
+    torch.save(payload, path)
+
+    loaded, _ = load_checkpoint(path)
+
+    assert isinstance(loaded, AxoTemporalModel)
+    assert loaded.temporal_config == model.temporal_config
+
+
 def test_gru_behavior_adapter_is_target_specific_and_keeps_memory_shared():
     torch.manual_seed(12)
     model = create_temporal_model(

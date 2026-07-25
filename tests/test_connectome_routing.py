@@ -28,6 +28,18 @@ def test_delay_buckets_cover_every_fanout_offset_once() -> None:
     assert len(offsets) == len(set(offsets))
 
 
+def test_delay_buckets_respect_causal_block_horizon() -> None:
+    from axosim.connectome import procedural_delay_buckets
+
+    buckets = procedural_delay_buckets(
+        fanout=8,
+        local_fanout=6,
+        minimum_delay_steps=4,
+    )
+
+    assert [row.delay_steps for row in buckets] == [4, 5, 6, 7]
+
+
 def test_dense_spike_compaction_returns_sorted_int32_sources() -> None:
     from axosim.connectome import compact_active_sources
 
@@ -83,7 +95,7 @@ def test_procedural_router_matches_reference_delivery() -> None:
     router.clear_and_route(active, current_slot=0)
 
     expected = torch.zeros(
-        4, 32, 4, device="cuda", dtype=torch.float16
+        8, 32, 4, device="cuda", dtype=torch.float16
     )
     source = 1
     for fanout_offset in range(8):
@@ -93,12 +105,12 @@ def test_procedural_router_matches_reference_delivery() -> None:
                 (source & ~7)
                 + ((source * 131 + fanout_offset * 127) & 7)
             )
-            delay = 1 + (fanout_offset & 1)
+            delay = 4 + (fanout_offset & 1)
         else:
             target = (
                 source * 413_293 + fanout_offset * 489_905
             ) & 31
-            delay = 3 + (fanout_offset & 1)
+            delay = 6 + (fanout_offset & 1)
         target_morphology = target % 2
         channel = (
             source * 37
@@ -109,7 +121,7 @@ def test_procedural_router_matches_reference_delivery() -> None:
         gain = morphology_gain[slot] * feature_gain[
             target_morphology, slot
         ]
-        expected[delay % 4, target, slot // 2] += gain
+        expected[delay, target, slot // 2] += gain
 
     torch.testing.assert_close(
         router.delay_queue,

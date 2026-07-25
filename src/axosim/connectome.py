@@ -35,6 +35,7 @@ def procedural_delay_buckets(
     *,
     fanout: int,
     local_fanout: int,
+    minimum_delay_steps: int = 1,
 ) -> tuple[DelayBucket, ...]:
     """Partition fanout offsets into local/long-range delay classes."""
 
@@ -42,12 +43,14 @@ def procedural_delay_buckets(
         raise ValueError("fanout must be positive")
     if not 0 <= local_fanout <= fanout:
         raise ValueError("local_fanout must be in [0, fanout]")
+    if minimum_delay_steps <= 0:
+        raise ValueError("minimum_delay_steps must be positive")
     buckets = []
-    for delay, parity, is_local in (
-        (1, 0, True),
-        (2, 1, True),
-        (3, 0, False),
-        (4, 1, False),
+    for delay_offset, parity, is_local in (
+        (0, 0, True),
+        (1, 1, True),
+        (2, 0, False),
+        (3, 1, False),
     ):
         lower = 0 if is_local else local_fanout
         upper = local_fanout if is_local else fanout
@@ -55,7 +58,7 @@ def procedural_delay_buckets(
         count = max(0, (upper - first + 1) // 2)
         buckets.append(
             DelayBucket(
-                delay_steps=delay,
+                delay_steps=minimum_delay_steps + delay_offset,
                 first_fanout_offset=first,
                 event_count_per_source=count,
                 local_targets=is_local,
@@ -181,8 +184,8 @@ class ProceduralMorphologyConnectomeRouter:
             raise RuntimeError(
                 "ProceduralMorphologyConnectomeRouter requires Triton"
             )
-        if contract.delay_slots != 4:
-            raise ValueError("procedural routing currently requires 4 delays")
+        if not _is_power_of_two(contract.delay_slots):
+            raise ValueError("delay_slots must be a power of two")
         if not _is_power_of_two(contract.population_size):
             raise ValueError("population_size must be a power of two")
         if not _is_power_of_two(contract.spatial_tile_neurons):
@@ -202,7 +205,14 @@ class ProceduralMorphologyConnectomeRouter:
         self.delay_buckets = procedural_delay_buckets(
             fanout=contract.fanout,
             local_fanout=self.local_fanout,
+            minimum_delay_steps=contract.minimum_routing_delay_steps,
         )
+        if max(
+            bucket.delay_steps for bucket in self.delay_buckets
+        ) >= contract.delay_slots:
+            raise ValueError(
+                "delay_slots must exceed the largest procedural delay"
+            )
 
         tensors = {
             "slot_map": slot_map,

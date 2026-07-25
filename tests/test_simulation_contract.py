@@ -27,8 +27,47 @@ def test_million_neuron_contract_includes_network_work() -> None:
     assert contract.delay_queue_included
     assert contract.morphology_aware_branch_targeting
     assert contract.source_type_aware_branch_targeting
-    assert contract.delay_queue_bytes == 989_855_744
+    assert contract.delay_slots == 8
+    assert contract.delay_queue_bytes == 1_979_711_488
     assert not contract.empirical_connectome
+
+
+def test_million_neuron_contract_keeps_native_temporal_io() -> None:
+    contract = MILLION_NEURON_REALTIME_CONTRACT
+
+    assert contract.step_ms == 1.0
+    assert contract.input_step_ms == 1.0
+    assert contract.output_step_ms == 1.0
+    assert contract.patch_size == 4
+    assert contract.temporal_execution_mode == "causal_next_block_forecast"
+    assert contract.lossless_ordered_temporal_io
+    assert contract.causal_block_feedback_required
+    assert contract.minimum_routing_delay_steps == 4
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("input_step_ms", 4.0, "inputs"),
+        ("output_step_ms", 4.0, "outputs"),
+        ("lossless_ordered_temporal_io", False, "every ordered"),
+        ("causal_block_feedback_required", False, "causal block"),
+        (
+            "temporal_execution_mode",
+            "mean",
+            "causal next-block",
+        ),
+        ("minimum_routing_delay_steps", 3, "routing delays"),
+        ("delay_slots", 4, "delay ring"),
+    ],
+)
+def test_contract_rejects_coarse_temporal_io(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        replace(MILLION_NEURON_REALTIME_CONTRACT, **{field: value})
 
 
 def test_contract_rejects_shared_only_population_proxy() -> None:

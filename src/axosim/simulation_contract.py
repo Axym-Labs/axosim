@@ -12,9 +12,15 @@ class LargePopulationSimulationContract:
     name: str
     population_size: int
     step_ms: float
+    input_step_ms: float
+    output_step_ms: float
     target_latency_ms: float
     model_family: str
     patch_size: int
+    temporal_execution_mode: str
+    lossless_ordered_temporal_io: bool
+    causal_block_feedback_required: bool
+    minimum_routing_delay_steps: int
     logical_adaptation_values_per_neuron: int
     adaptation_storage_bits: int
     activation_storage_bits: int
@@ -39,16 +45,17 @@ class LargePopulationSimulationContract:
         positive_fields = {
             "population_size": self.population_size,
             "step_ms": self.step_ms,
+            "input_step_ms": self.input_step_ms,
+            "output_step_ms": self.output_step_ms,
             "target_latency_ms": self.target_latency_ms,
             "patch_size": self.patch_size,
+            "minimum_routing_delay_steps": (self.minimum_routing_delay_steps),
             "logical_adaptation_values_per_neuron": (
                 self.logical_adaptation_values_per_neuron
             ),
             "adaptation_storage_bits": self.adaptation_storage_bits,
             "activation_storage_bits": self.activation_storage_bits,
-            "recurrent_state_storage_bits": (
-                self.recurrent_state_storage_bits
-            ),
+            "recurrent_state_storage_bits": (self.recurrent_state_storage_bits),
             "morphology_classes": self.morphology_classes,
             "fanout": self.fanout,
             "spatial_tile_neurons": self.spatial_tile_neurons,
@@ -69,9 +76,7 @@ class LargePopulationSimulationContract:
         storage_bits = {
             "adaptation_storage_bits": self.adaptation_storage_bits,
             "activation_storage_bits": self.activation_storage_bits,
-            "recurrent_state_storage_bits": (
-                self.recurrent_state_storage_bits
-            ),
+            "recurrent_state_storage_bits": (self.recurrent_state_storage_bits),
         }
         for field_name, value in storage_bits.items():
             if value % 8:
@@ -80,6 +85,39 @@ class LargePopulationSimulationContract:
             raise ValueError(
                 "the defensive population contract requires custom "
                 "adaptation for every neuron"
+            )
+        if self.input_step_ms != self.step_ms:
+            raise ValueError(
+                "population inputs must retain the native simulation cadence"
+            )
+        if self.output_step_ms != self.step_ms:
+            raise ValueError(
+                "population outputs must retain the native simulation cadence"
+            )
+        if not self.lossless_ordered_temporal_io:
+            raise ValueError(
+                "temporal patching must preserve every ordered input and output"
+            )
+        if not self.causal_block_feedback_required:
+            raise ValueError("connected simulation requires causal block feedback")
+        if (
+            self.patch_size > 1
+            and self.temporal_execution_mode != "causal_next_block_forecast"
+        ):
+            raise ValueError(
+                "multi-step patches must use causal next-block forecasting"
+            )
+        if self.minimum_routing_delay_steps < self.patch_size:
+            raise ValueError(
+                "connected block forecasts require routing delays at least "
+                "as long as the forecast horizon"
+            )
+        if self.delay_slots < (
+            self.minimum_routing_delay_steps + self.patch_size
+        ):
+            raise ValueError(
+                "the delay ring must retain both the ready input block and "
+                "the forecast block's delayed writes"
             )
 
     @property
@@ -126,9 +164,15 @@ MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
     name="million-neuron-realtime-rtx5090",
     population_size=1_048_576,
     step_ms=1.0,
+    input_step_ms=1.0,
+    output_step_ms=1.0,
     target_latency_ms=1.0,
-    model_family="adapted-gru-branch-regression",
+    model_family="adapted-causal-block-gru-regression",
     patch_size=4,
+    temporal_execution_mode="causal_next_block_forecast",
+    lossless_ordered_temporal_io=True,
+    causal_block_feedback_required=True,
+    minimum_routing_delay_steps=4,
     logical_adaptation_values_per_neuron=1_808,
     adaptation_storage_bits=8,
     activation_storage_bits=16,
@@ -139,6 +183,6 @@ MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
     excitatory_fraction=0.8,
     local_connection_fraction=0.9,
     spatial_tile_neurons=4_096,
-    delay_slots=4,
+    delay_slots=8,
     branch_count=118,
 )
