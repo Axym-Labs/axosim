@@ -13,6 +13,8 @@ __all__ = [
     "AxoMambaConfig",
     "BranchELM",
     "BranchELMConfig",
+    "ProceduralMorphologyConnectomeRouter",
+    "compact_active_sources",
     "LargePopulationSimulationContract",
     "MILLION_NEURON_REALTIME_CONTRACT",
 ]
@@ -43,5 +45,20 @@ def __getattr__(name: str) -> Any:
             "MILLION_NEURON_REALTIME_CONTRACT": (
                 MILLION_NEURON_REALTIME_CONTRACT
             ),
+        }[name]
+    if name in {
+        "ProceduralMorphologyConnectomeRouter",
+        "compact_active_sources",
+    }:
+        from axosim.connectome import (
+            ProceduralMorphologyConnectomeRouter,
+            compact_active_sources,
+        )
+
+        return {
+            "ProceduralMorphologyConnectomeRouter": (
+                ProceduralMorphologyConnectomeRouter
+            ),
+            "compact_active_sources": compact_active_sources,
         }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

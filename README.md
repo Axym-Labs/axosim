@@ -171,6 +171,12 @@ The current scalable connectome control uses five morphology classes, an
 4,096-neuron tiles. It is a procedural biologically structured workload, not
 an empirical connectome. The uniform global hash remains the adversarial
 routing control, and empirical SONATA circuits must be labeled separately.
+`ProceduralMorphologyConnectomeRouter` implements this control with one
+contiguous write per delay class and a persistent delay-major ring. Read
+`current_inputs(slot)` before calling `clear_and_route(..., current_slot=slot)`;
+the latter clears the consumed slot and schedules new events. Use
+`compact_active_sources` to turn dense scalar model outputs into the
+source-sorted int32 vector that exposes spatial locality.
 
 ## Smoke Workflow
 
