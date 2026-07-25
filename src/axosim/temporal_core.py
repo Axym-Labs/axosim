@@ -12,6 +12,18 @@ from axosim.mamba_official import BranchOfficialMamba
 TemporalCoreKind = Literal["mamba", "gru", "branch_rnn"]
 
 
+@dataclass
+class AxoTemporalStreamingState:
+    """Mutable online state for a replacement temporal core."""
+
+    core_state: torch.Tensor | tuple[torch.Tensor, torch.Tensor]
+    local_tcn_histories: list[torch.Tensor]
+    morphology_feature_gains: torch.Tensor | None
+    patch_sum: torch.Tensor | None = None
+    patch_correction: torch.Tensor | None = None
+    patch_position: int = 0
+
+
 @dataclass(frozen=True)
 class AxoTemporalCoreConfig:
     """Configuration for a temporal core behind the shared AxoMamba encoder."""
@@ -299,6 +311,479 @@ class AxoTemporalModel(nn.Module):
             hidden,
             highpass_features,
         )
+
+    def allocate_streaming_state(
+        self,
+        batch_size: int,
+        *,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> AxoTemporalStreamingState:
+        """Allocate exact online state without retaining native-rate history."""
+
+        self._validate_streaming_configuration()
+        if batch_size <= 0:
+            raise ValueError("streaming batch_size must be positive")
+        parameter = next(self.parameters())
+        resolved_device = (
+            parameter.device if device is None else torch.device(device)
+        )
+        resolved_dtype = parameter.dtype if dtype is None else dtype
+        core = self._unwrapped_temporal_core()
+        if isinstance(core, ResidualGRUTemporalCore):
+            core_state: torch.Tensor | tuple[torch.Tensor, torch.Tensor]
+            core_state = torch.zeros(
+                batch_size,
+                core.hidden_units,
+                device=resolved_device,
+                dtype=resolved_dtype,
+            )
+        elif isinstance(core, BranchELMTemporalCore):
+            core_state = (
+                torch.zeros(
+                    batch_size,
+                    core.width,
+                    device=resolved_device,
+                    dtype=resolved_dtype,
+                ),
+                torch.zeros(
+                    batch_size,
+                    core.memory_units,
+                    device=resolved_device,
+                    dtype=resolved_dtype,
+                ),
+            )
+        else:
+            raise TypeError(f"unsupported temporal core: {type(core)}")
+        local_tcn_histories = [
+            torch.zeros(
+                batch_size,
+                block.depthwise.in_channels,
+                block.right_padding,
+                device=resolved_device,
+                dtype=resolved_dtype,
+            )
+            for block in self.backbone.local_tcn_blocks
+        ]
+        patch_sum = None
+        patch_correction = None
+        if isinstance(self.temporal_core, CausalPatchedTemporalCore):
+            width = self.temporal_core.width
+            patch_sum = torch.zeros(
+                batch_size,
+                width,
+                device=resolved_device,
+                dtype=resolved_dtype,
+            )
+            patch_correction = torch.zeros_like(patch_sum)
+        return AxoTemporalStreamingState(
+            core_state=core_state,
+            local_tcn_histories=local_tcn_histories,
+            morphology_feature_gains=(
+                self.backbone._all_morphology_feature_gains(
+                    dtype=resolved_dtype,
+                    device=resolved_device,
+                )
+            ),
+            patch_sum=patch_sum,
+            patch_correction=patch_correction,
+        )
+
+    def streaming_step(
+        self,
+        x: torch.Tensor,
+        state: AxoTemporalStreamingState,
+        *,
+        morphology_indices: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Advance one dense native-rate timestep."""
+
+        self._validate_streaming_configuration()
+        if x.ndim == 2:
+            x = x.unsqueeze(1)
+        if (
+            x.ndim != 3
+            or x.shape[1] != 1
+            or x.shape[2] != self.num_input
+        ):
+            raise ValueError(
+                "streaming input must have shape (batch, channels) or "
+                "(batch, 1, channels)"
+            )
+        routed_events = self.backbone._route_input_to_synapses(
+            x,
+            morphology_indices=morphology_indices,
+        )
+        routed_synapses = self.backbone._apply_synapse_weights(
+            routed_events,
+            morphology_indices=morphology_indices,
+            morphology_feature_gains=state.morphology_feature_gains,
+        )
+        branch_inputs = self.backbone._apply_streaming_branch_transforms(
+            routed_synapses.sum(dim=-1)
+        )
+        return self._streaming_step_from_branch_inputs(
+            branch_inputs,
+            state,
+            morphology_indices=morphology_indices,
+            routed_synapses=routed_synapses,
+        )
+
+    def streaming_step_events(
+        self,
+        event_indices: torch.Tensor,
+        event_values: torch.Tensor,
+        state: AxoTemporalStreamingState,
+        *,
+        morphology_indices: torch.Tensor | None = None,
+        chunk_size: int | None = None,
+        output_buffer: torch.Tensor | None = None,
+        retain_base_soma_prediction: bool = True,
+    ) -> torch.Tensor:
+        """Advance one timestep from padded sparse channel/value rows."""
+
+        self._validate_streaming_configuration()
+        if (
+            event_indices.ndim != 2
+            or event_values.shape != event_indices.shape
+        ):
+            raise ValueError(
+                "streaming events must have matching "
+                "(batch, events) indices and values"
+            )
+        if event_indices.shape[0] <= 0:
+            raise ValueError("streaming event batch must be positive")
+        if event_indices.is_floating_point() or event_indices.is_complex():
+            raise ValueError("streaming event indices must be integers")
+        resolved_chunk_size = (
+            event_indices.shape[0]
+            if chunk_size is None
+            else chunk_size
+        )
+        if resolved_chunk_size <= 0:
+            raise ValueError("streaming chunk_size must be positive")
+        parameter = next(self.parameters())
+        expected_output_shape = (
+            event_indices.shape[0],
+            1,
+            self.num_output,
+        )
+        if output_buffer is not None:
+            if output_buffer.shape != expected_output_shape:
+                raise ValueError(
+                    "streaming output_buffer must have shape "
+                    f"{expected_output_shape}"
+                )
+            if output_buffer.device != parameter.device:
+                raise ValueError(
+                    "streaming output_buffer must be on the model device"
+                )
+            if output_buffer.dtype != parameter.dtype:
+                raise ValueError(
+                    "streaming output_buffer must match the model dtype"
+                )
+        outputs = []
+        base_soma_predictions = []
+        next_patch_position = None
+        for start in range(
+            0,
+            event_indices.shape[0],
+            resolved_chunk_size,
+        ):
+            stop = min(
+                start + resolved_chunk_size,
+                event_indices.shape[0],
+            )
+            chunk_indices = event_indices[start:stop].to(
+                device=parameter.device,
+                dtype=torch.long,
+            )
+            chunk_values = event_values[start:stop].to(
+                device=parameter.device,
+                dtype=parameter.dtype,
+            )
+            chunk_morphology = (
+                None
+                if morphology_indices is None
+                else morphology_indices[start:stop].to(
+                    device=parameter.device,
+                    dtype=torch.long,
+                )
+            )
+            chunk_state = self._slice_streaming_state(
+                state,
+                start,
+                stop,
+            )
+            if self.backbone.branch_subunit_projection is None:
+                branch_inputs = (
+                    self.backbone._sparse_streaming_branch_inputs(
+                        chunk_indices,
+                        chunk_values,
+                        morphology_indices=chunk_morphology,
+                        morphology_feature_gains=(
+                            state.morphology_feature_gains
+                        ),
+                    )
+                )
+                chunk_output = self._streaming_step_from_branch_inputs(
+                    branch_inputs,
+                    chunk_state,
+                    morphology_indices=chunk_morphology,
+                )
+            else:
+                dense = torch.zeros(
+                    stop - start,
+                    self.num_input,
+                    device=parameter.device,
+                    dtype=parameter.dtype,
+                )
+                dense.scatter_add_(
+                    1,
+                    chunk_indices.clamp_min(0),
+                    chunk_values
+                    * (chunk_indices >= 0).to(dtype=parameter.dtype),
+                )
+                chunk_output = self.streaming_step(
+                    dense,
+                    chunk_state,
+                    morphology_indices=chunk_morphology,
+                )
+            if output_buffer is None:
+                outputs.append(chunk_output)
+            else:
+                output_buffer[start:stop].copy_(chunk_output)
+            if (
+                retain_base_soma_prediction
+                and self.base_soma_prediction is not None
+            ):
+                base_soma_predictions.append(
+                    self.base_soma_prediction
+                )
+            elif not retain_base_soma_prediction:
+                self.backbone.base_soma_prediction = None
+            if next_patch_position is None:
+                next_patch_position = chunk_state.patch_position
+            elif next_patch_position != chunk_state.patch_position:
+                raise RuntimeError(
+                    "streaming chunks advanced to different patch phases"
+                )
+        if next_patch_position is not None:
+            state.patch_position = next_patch_position
+        if base_soma_predictions:
+            self.backbone.base_soma_prediction = torch.cat(
+                base_soma_predictions,
+                dim=0,
+            )
+        elif not retain_base_soma_prediction:
+            self.backbone.base_soma_prediction = None
+        if output_buffer is not None:
+            return output_buffer
+        return torch.cat(outputs, dim=0)
+
+    @staticmethod
+    def _slice_streaming_state(
+        state: AxoTemporalStreamingState,
+        start: int,
+        stop: int,
+    ) -> AxoTemporalStreamingState:
+        core_state = state.core_state
+        if isinstance(core_state, torch.Tensor):
+            chunk_core_state: (
+                torch.Tensor | tuple[torch.Tensor, torch.Tensor]
+            ) = core_state[start:stop]
+        else:
+            chunk_core_state = (
+                core_state[0][start:stop],
+                core_state[1][start:stop],
+            )
+        return AxoTemporalStreamingState(
+            core_state=chunk_core_state,
+            local_tcn_histories=[
+                history[start:stop]
+                for history in state.local_tcn_histories
+            ],
+            morphology_feature_gains=state.morphology_feature_gains,
+            patch_sum=(
+                None
+                if state.patch_sum is None
+                else state.patch_sum[start:stop]
+            ),
+            patch_correction=(
+                None
+                if state.patch_correction is None
+                else state.patch_correction[start:stop]
+            ),
+            patch_position=state.patch_position,
+        )
+
+    def _streaming_step_from_branch_inputs(
+        self,
+        branch_inputs: torch.Tensor,
+        state: AxoTemporalStreamingState,
+        *,
+        morphology_indices: torch.Tensor | None,
+        routed_synapses: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        backbone = self.backbone
+        hidden = backbone.branch_projection(branch_inputs)
+        if backbone.branch_subunit_projection is not None:
+            if routed_synapses is None:
+                raise ValueError(
+                    "sparse streaming does not support branch subunits"
+                )
+            subunit_inputs = backbone._branch_subunit_features(
+                routed_synapses
+            )
+            if backbone.branch_gain is not None:
+                subunit_inputs = subunit_inputs * backbone.branch_gain.to(
+                    dtype=subunit_inputs.dtype,
+                    device=subunit_inputs.device,
+                ).view(1, 1, -1, 1)
+            hidden = hidden + (
+                backbone.config.branch_subunit_scale
+                * backbone.branch_subunit_projection(
+                    subunit_inputs.flatten(start_dim=-2)
+                )
+            )
+        hidden = backbone._apply_projected_branch_bilinear(
+            hidden,
+            backbone._branch_bilinear_projection(branch_inputs),
+        )
+        if backbone.morphology_embedding is not None:
+            if morphology_indices is None:
+                raise ValueError(
+                    "morphology_indices are required for "
+                    "morphology-conditioned AxoTemporalModel"
+                )
+            morphology = backbone._morphology_embedding_values(
+                morphology_indices,
+                dtype=hidden.dtype,
+                device=hidden.device,
+            )
+            assert backbone.config.morphology_embedding_scale is not None
+            hidden = hidden + (
+                backbone.config.morphology_embedding_scale
+                * morphology.unsqueeze(1)
+            )
+        hidden = self._advance_temporal_core(hidden, state)
+        hidden = hidden + backbone._stream_local_tcn_correction(
+            hidden,
+            state.local_tcn_histories,
+        )
+        return backbone._decode_sequence(hidden, None)
+
+    def _advance_temporal_core(
+        self,
+        hidden: torch.Tensor,
+        state: AxoTemporalStreamingState,
+    ) -> torch.Tensor:
+        if not isinstance(
+            self.temporal_core,
+            CausalPatchedTemporalCore,
+        ):
+            return hidden + self._advance_unwrapped_core(hidden, state)
+        assert state.patch_sum is not None
+        assert state.patch_correction is not None
+        corrected = hidden + state.patch_correction.unsqueeze(1)
+        state.patch_sum.add_(hidden.squeeze(1))
+        state.patch_position += 1
+        if state.patch_position == self.temporal_core.patch_size:
+            patch_mean = (
+                state.patch_sum / self.temporal_core.patch_size
+            ).unsqueeze(1)
+            next_correction = self._advance_unwrapped_core(
+                patch_mean,
+                state,
+            )
+            state.patch_correction.copy_(next_correction.squeeze(1))
+            state.patch_sum.zero_()
+            state.patch_position = 0
+        return corrected
+
+    def _advance_unwrapped_core(
+        self,
+        hidden: torch.Tensor,
+        state: AxoTemporalStreamingState,
+    ) -> torch.Tensor:
+        core = self._unwrapped_temporal_core()
+        if isinstance(core, ResidualGRUTemporalCore):
+            if not isinstance(state.core_state, torch.Tensor):
+                raise TypeError("GRU streaming state has the wrong type")
+            recurrent, next_state = core.gru(
+                core.pre_norm(hidden),
+                state.core_state.unsqueeze(0),
+            )
+            state.core_state.copy_(next_state.squeeze(0))
+            return (
+                core.residual_scale.view(1, 1, -1)
+                * core.output_projection(recurrent)
+            )
+        if not isinstance(state.core_state, tuple):
+            raise TypeError("Branch-RNN streaming state has the wrong type")
+        branch_state, memory_state = state.core_state
+        normalized = core.pre_norm(hidden).squeeze(1)
+        branch_state = (
+            core.synapse_decay * branch_state + normalized
+        )
+        decayed_memory = core.memory_decay * memory_state
+        update = core.integration(
+            torch.cat((branch_state, decayed_memory), dim=-1)
+        )
+        memory_state = (
+            decayed_memory
+            + (1.0 - core.memory_decay) * update
+        )
+        state.core_state[0].copy_(branch_state)
+        state.core_state[1].copy_(memory_state)
+        return (
+            core.residual_scale.view(1, 1, -1)
+            * core.output_projection(memory_state).unsqueeze(1)
+        )
+
+    def _unwrapped_temporal_core(
+        self,
+    ) -> ResidualGRUTemporalCore | BranchELMTemporalCore:
+        core = self.temporal_core
+        if isinstance(core, CausalPatchedTemporalCore):
+            core = core.core
+        if not isinstance(
+            core,
+            (ResidualGRUTemporalCore, BranchELMTemporalCore),
+        ):
+            raise TypeError(f"unsupported temporal core: {type(core)}")
+        return core
+
+    def _validate_streaming_configuration(self) -> None:
+        unsupported = []
+        backbone = self.backbone
+        if self.training:
+            unsupported.append("training mode")
+        if backbone.branch_trace_taus:
+            unsupported.append("branch traces")
+        if backbone.hidden_trace_taus:
+            unsupported.append("hidden traces")
+        if (
+            backbone.integrative_pre is not None
+            or backbone.integrative_post is not None
+        ):
+            unsupported.append("integrative mixer")
+        if backbone.temporal_refine is not None:
+            unsupported.append("temporal refine")
+        if (
+            backbone.local_tcn_blocks
+            and backbone.config.local_tcn_position != "post"
+        ):
+            unsupported.append("non-post local TCN")
+        if backbone.soma_filter_logit is not None:
+            unsupported.append("soma filter")
+        if backbone.soma_highpass_correction_scale is not None:
+            unsupported.append("soma highpass correction")
+        if unsupported:
+            raise ValueError(
+                "streaming AxoTemporalModel does not support "
+                + ", ".join(unsupported)
+            )
 
     def recurrent_state_bytes(
         self,

@@ -433,3 +433,147 @@ def test_compatible_transfer_maps_native_core_into_patch_wrapper():
             patched.temporal_core.core.state_dict()[name],
             value,
         )
+
+
+@pytest.mark.parametrize(
+    ("core_kind", "patch_size"),
+    [
+        ("gru", 1),
+        ("branch_rnn", 1),
+        ("gru", 2),
+        ("branch_rnn", 2),
+    ],
+)
+def test_temporal_model_streaming_matches_full_sequence_with_local_tcn(
+    core_kind,
+    patch_size,
+):
+    torch.manual_seed(41)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(
+            kind=core_kind,
+            branch_memory_units=5,
+            branch_hidden_units=7,
+            keep_local_tcn=True,
+            patch_size=patch_size,
+        ),
+    ).eval()
+    inputs = torch.randn(2, 7, model.num_input)
+    morphology = torch.tensor([0, 1])
+
+    expected = model(inputs, morphology_indices=morphology)
+    state = model.allocate_streaming_state(inputs.shape[0])
+    actual = torch.cat(
+        [
+            model.streaming_step(
+                inputs[:, step],
+                state,
+                morphology_indices=morphology,
+            )
+            for step in range(inputs.shape[1])
+        ],
+        dim=1,
+    )
+
+    torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
+
+
+def test_temporal_model_sparse_event_step_matches_dense_step():
+    torch.manual_seed(43)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=2),
+    ).eval()
+    morphology = torch.tensor([0, 1])
+    event_indices = torch.tensor([[0, 3, 3], [1, 5, -1]])
+    event_values = torch.tensor([[0.4, 0.2, 0.1], [0.7, 0.5, 0.0]])
+    dense = torch.zeros(2, model.num_input)
+    dense.scatter_add_(
+        1,
+        event_indices.clamp_min(0),
+        event_values * (event_indices >= 0),
+    )
+    dense_state = model.allocate_streaming_state(2)
+    sparse_state = model.allocate_streaming_state(2)
+
+    dense_output = model.streaming_step(
+        dense,
+        dense_state,
+        morphology_indices=morphology,
+    )
+    sparse_output = model.streaming_step_events(
+        event_indices,
+        event_values,
+        sparse_state,
+        morphology_indices=morphology,
+    )
+
+    torch.testing.assert_close(sparse_output, dense_output)
+
+
+@pytest.mark.parametrize("core_kind", ["gru", "branch_rnn"])
+def test_temporal_sparse_streaming_chunks_preserve_outputs_and_state(
+    core_kind,
+):
+    torch.manual_seed(47)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(
+            kind=core_kind,
+            branch_memory_units=5,
+            branch_hidden_units=7,
+            keep_local_tcn=True,
+            patch_size=2,
+        ),
+    ).eval()
+    morphology = torch.tensor([0, 1, 0, 1, 0])
+    full_state = model.allocate_streaming_state(5)
+    chunked_state = model.allocate_streaming_state(5)
+
+    for _ in range(3):
+        event_indices = torch.randint(0, model.num_input, (5, 3))
+        event_values = torch.randn(5, 3)
+        expected = model.streaming_step_events(
+            event_indices,
+            event_values,
+            full_state,
+            morphology_indices=morphology,
+            chunk_size=5,
+        )
+        output_buffer = torch.empty(5, 1, model.num_output)
+        actual = model.streaming_step_events(
+            event_indices,
+            event_values,
+            chunked_state,
+            morphology_indices=morphology,
+            chunk_size=2,
+            output_buffer=output_buffer,
+            retain_base_soma_prediction=False,
+        )
+
+        assert actual is output_buffer
+        torch.testing.assert_close(actual, expected)
+
+    assert model.base_soma_prediction is None
+    assert chunked_state.patch_position == full_state.patch_position
+    for actual, expected in zip(
+        _streaming_state_tensors(chunked_state),
+        _streaming_state_tensors(full_state),
+        strict=True,
+    ):
+        torch.testing.assert_close(actual, expected)
+
+
+def _streaming_state_tensors(state):
+    core_state = (
+        [state.core_state]
+        if isinstance(state.core_state, torch.Tensor)
+        else list(state.core_state)
+    )
+    return [
+        *core_state,
+        *state.local_tcn_histories,
+        state.patch_sum,
+        state.patch_correction,
+    ]
