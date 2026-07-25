@@ -885,17 +885,17 @@ class BranchOfficialMamba(nn.Module):
             base_soma = output[..., 1:2]
             if readout_weight_delta is not None:
                 assert readout_adapter_mask is not None
-                personalized = F.linear(
+                adapted = F.linear(
                     features,
                     readout_weight_delta,
                     readout_bias_delta,
                 )
-                personalized = (
-                    personalized
+                adapted = (
+                    adapted
                     * readout_adapter_mask.view(-1, 1, 1)
                 )
-                spike = spike + personalized[..., 0:1]
-                base_soma = base_soma + personalized[..., 1:2]
+                spike = spike + adapted[..., 0:1]
+                base_soma = base_soma + adapted[..., 1:2]
             self.base_soma_prediction = base_soma
             soma = base_soma
             if self.config.spike_voltage_coupling_scale:
@@ -906,16 +906,16 @@ class BranchOfficialMamba(nn.Module):
         base_soma = self._readout_soma(features, highpass_features)
         if readout_weight_delta is not None:
             assert readout_adapter_mask is not None
-            personalized = F.linear(
+            adapted = F.linear(
                 features,
                 readout_weight_delta,
                 readout_bias_delta,
             )
-            personalized = (
-                personalized * readout_adapter_mask.view(-1, 1, 1)
+            adapted = (
+                adapted * readout_adapter_mask.view(-1, 1, 1)
             )
-            spike = spike + personalized[..., 0:1]
-            base_soma = base_soma + personalized[..., 1:2]
+            spike = spike + adapted[..., 0:1]
+            base_soma = base_soma + adapted[..., 1:2]
         self.base_soma_prediction = base_soma
         soma = base_soma
         if self.config.spike_voltage_coupling_scale:

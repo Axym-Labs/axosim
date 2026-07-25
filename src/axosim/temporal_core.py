@@ -64,7 +64,7 @@ class AxoTemporalCoreConfig:
             and self.kind != "gru"
         ):
             raise ValueError(
-                "behavior personalization currently requires a GRU core"
+                "behavior adaptation currently requires a GRU core"
             )
         if self.behavior_adapter_rank < 0:
             raise ValueError("behavior_adapter_rank must be non-negative")
@@ -529,7 +529,7 @@ class AxoTemporalModel(nn.Module):
             if morphology_indices is None:
                 raise ValueError(
                     "morphology indices are required for behavior "
-                    "personalization"
+                    "adaptation"
                 )
             adapter_mask = (
                 morphology_indices == adapter.morphology_index

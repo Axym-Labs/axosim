@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class NeuronBehaviorPersonalization:
+class NeuronBehaviorAdaptation:
     """Mechanism-level parameters that remain unique to each neuron."""
 
     width: int
@@ -100,7 +100,7 @@ class NeuronBehaviorPersonalization:
         return sum(self.parameter_counts.values())
 
     @property
-    def personalized_components(self) -> frozenset[str]:
+    def adapted_components(self) -> frozenset[str]:
         return frozenset(self.parameter_counts)
 
     @property
@@ -120,11 +120,11 @@ class PopulationDeploymentMeasurement:
     """One complete population-simulation measurement."""
 
     population: int
-    personalized_parameters_per_neuron: int
-    personalized_components: tuple[str, ...]
+    adapted_parameters_per_neuron: int
+    adapted_components: tuple[str, ...]
     shared_components: tuple[str, ...]
-    unique_adapter_per_neuron: bool
-    personalization_quality_validated: bool
+    unique_adaptation_per_neuron: bool
+    adaptation_quality_validated: bool
     shared_frozen_base: bool
     output_materialized: bool
     routing_feeds_model: bool
@@ -143,7 +143,7 @@ class PopulationDeploymentTarget:
     headline_population: int
     benchmark_population: int
     biological_step_ms: float
-    personalization: NeuronBehaviorPersonalization
+    adaptation: NeuronBehaviorAdaptation
     shared_frozen_base: bool
     output_materialization_required: bool
     network_routing_required: bool
@@ -151,8 +151,8 @@ class PopulationDeploymentTarget:
     fanout: int
 
     @property
-    def personalized_parameters_per_neuron(self) -> int:
-        return self.personalization.parameter_count
+    def adapted_parameters_per_neuron(self) -> int:
+        return self.adaptation.parameter_count
 
     def evaluate(
         self,
@@ -163,27 +163,27 @@ class PopulationDeploymentTarget:
                 "measurement population is below the headline target"
             )
         if (
-            measurement.personalized_parameters_per_neuron
-            != self.personalized_parameters_per_neuron
-            or not measurement.unique_adapter_per_neuron
-            or frozenset(measurement.personalized_components)
-            != self.personalization.personalized_components
+            measurement.adapted_parameters_per_neuron
+            != self.adapted_parameters_per_neuron
+            or not measurement.unique_adaptation_per_neuron
+            or frozenset(measurement.adapted_components)
+            != self.adaptation.adapted_components
         ):
             raise ValueError(
-                "measurement does not use the required personalized "
+                "measurement does not use the required adapted "
                 "behavior parameters for every neuron"
             )
         if (
             frozenset(measurement.shared_components)
-            != self.personalization.shared_components
+            != self.adaptation.shared_components
         ):
             raise ValueError(
                 "measurement does not preserve the required shared "
                 "population mechanisms"
             )
-        if not measurement.personalization_quality_validated:
+        if not measurement.adaptation_quality_validated:
             raise ValueError(
-                "measurement personalization has not passed the "
+                "measurement adaptation has not passed the "
                 "held-out quality gate"
             )
         if self.shared_frozen_base and not measurement.shared_frozen_base:
@@ -222,9 +222,9 @@ class PopulationDeploymentTarget:
                 measurement.complete_stack_latency_ms
                 <= self.biological_step_ms
             ),
-            "personalized_parameter_count": (
+            "adapted_parameter_count": (
                 measurement.population
-                * measurement.personalized_parameters_per_neuron
+                * measurement.adapted_parameters_per_neuron
             ),
             "events_per_step": (
                 round(measurement.population * self.firing_rate)
@@ -236,7 +236,7 @@ class PopulationDeploymentTarget:
         }
 
 
-GRU_BEHAVIOR_PERSONALIZATION = NeuronBehaviorPersonalization(
+GRU_BEHAVIOR_ADAPTATION = NeuronBehaviorAdaptation(
     width=58,
     branches=118,
     outputs=2,
@@ -245,11 +245,11 @@ GRU_BEHAVIOR_PERSONALIZATION = NeuronBehaviorPersonalization(
 )
 
 
-ONE_MILLION_PERSONALIZED_TARGET = PopulationDeploymentTarget(
+ONE_MILLION_ADAPTED_TARGET = PopulationDeploymentTarget(
     headline_population=1_000_000,
     benchmark_population=1_048_576,
     biological_step_ms=1.0,
-    personalization=GRU_BEHAVIOR_PERSONALIZATION,
+    adaptation=GRU_BEHAVIOR_ADAPTATION,
     shared_frozen_base=True,
     output_materialization_required=True,
     network_routing_required=True,

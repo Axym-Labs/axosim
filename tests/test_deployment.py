@@ -3,20 +3,20 @@ from __future__ import annotations
 import pytest
 
 from axosim.deployment import (
-    GRU_BEHAVIOR_PERSONALIZATION,
-    ONE_MILLION_PERSONALIZED_TARGET,
+    GRU_BEHAVIOR_ADAPTATION,
+    ONE_MILLION_ADAPTED_TARGET,
     PopulationDeploymentMeasurement,
 )
 
 
-def test_one_million_target_requires_personalization_and_routing():
-    target = ONE_MILLION_PERSONALIZED_TARGET
+def test_one_million_target_requires_adaptation_and_routing():
+    target = ONE_MILLION_ADAPTED_TARGET
 
     assert target.headline_population == 1_000_000
     assert target.benchmark_population >= target.headline_population
-    assert target.personalization == GRU_BEHAVIOR_PERSONALIZATION
-    assert target.personalized_parameters_per_neuron == 1_808
-    assert target.personalization.parameter_counts == {
+    assert target.adaptation == GRU_BEHAVIOR_ADAPTATION
+    assert target.adapted_parameters_per_neuron == 1_808
+    assert target.adaptation.parameter_counts == {
         "branch_gain": 118,
         "branch_bias": 118,
         "latent_gain": 58,
@@ -27,7 +27,7 @@ def test_one_million_target_requires_personalization_and_routing():
         "gru_input_low_rank": 464,
         "gru_recurrent_low_rank": 464,
     }
-    assert target.personalization.tensor_shapes == {
+    assert target.adaptation.tensor_shapes == {
         "branch_log_gain": (118,),
         "branch_bias": (118,),
         "latent_gain": (58,),
@@ -43,10 +43,10 @@ def test_one_million_target_requires_personalization_and_routing():
         "gru_recurrent_up": (174, 2),
     }
     assert (
-        target.personalization.tensor_slices["gru_recurrent_up"].stop
+        target.adaptation.tensor_slices["gru_recurrent_up"].stop
         == 1_808
     )
-    assert target.personalization.shared_components == frozenset(
+    assert target.adaptation.shared_components == frozenset(
         {
             "branch_projection_base",
             "gru_base_transition",
@@ -64,8 +64,8 @@ def test_one_million_target_requires_personalization_and_routing():
 def test_one_million_target_rejects_model_only_measurement():
     measurement = PopulationDeploymentMeasurement(
         population=1_048_576,
-        personalized_parameters_per_neuron=1_808,
-        personalized_components=(
+        adapted_parameters_per_neuron=1_808,
+        adapted_components=(
             "branch_gain",
             "branch_bias",
             "branch_projection_low_rank",
@@ -82,8 +82,8 @@ def test_one_million_target_rejects_model_only_measurement():
             "normalization",
             "patch_dynamics",
         ),
-        unique_adapter_per_neuron=True,
-        personalization_quality_validated=True,
+        unique_adaptation_per_neuron=True,
+        adaptation_quality_validated=True,
         shared_frozen_base=True,
         output_materialized=True,
         routing_feeds_model=False,
@@ -96,14 +96,14 @@ def test_one_million_target_rejects_model_only_measurement():
     )
 
     with pytest.raises(ValueError, match="routing"):
-        ONE_MILLION_PERSONALIZED_TARGET.evaluate(measurement)
+        ONE_MILLION_ADAPTED_TARGET.evaluate(measurement)
 
 
 def test_one_million_target_uses_complete_step_latency():
     measurement = PopulationDeploymentMeasurement(
         population=1_048_576,
-        personalized_parameters_per_neuron=1_808,
-        personalized_components=(
+        adapted_parameters_per_neuron=1_808,
+        adapted_components=(
             "branch_gain",
             "branch_bias",
             "branch_projection_low_rank",
@@ -120,8 +120,8 @@ def test_one_million_target_uses_complete_step_latency():
             "normalization",
             "patch_dynamics",
         ),
-        unique_adapter_per_neuron=True,
-        personalization_quality_validated=True,
+        unique_adaptation_per_neuron=True,
+        adaptation_quality_validated=True,
         shared_frozen_base=True,
         output_materialized=True,
         routing_feeds_model=True,
@@ -133,27 +133,27 @@ def test_one_million_target_uses_complete_step_latency():
         complete_stack_peak_bytes=1_500_000_000,
     )
 
-    result = ONE_MILLION_PERSONALIZED_TARGET.evaluate(measurement)
+    result = ONE_MILLION_ADAPTED_TARGET.evaluate(measurement)
 
     assert result["complete_step_latency_ms"] == pytest.approx(0.95)
     assert result["real_time_target_met"]
-    assert result["personalized_parameter_count"] == 1_808 * 1_048_576
+    assert result["adapted_parameter_count"] == 1_808 * 1_048_576
 
 
 def test_one_million_target_rejects_inferred_complete_latency():
     measurement = PopulationDeploymentMeasurement(
         population=1_048_576,
-        personalized_parameters_per_neuron=1_808,
-        personalized_components=tuple(
+        adapted_parameters_per_neuron=1_808,
+        adapted_components=tuple(
             sorted(
-                GRU_BEHAVIOR_PERSONALIZATION.personalized_components
+                GRU_BEHAVIOR_ADAPTATION.adapted_components
             )
         ),
         shared_components=tuple(
-            sorted(GRU_BEHAVIOR_PERSONALIZATION.shared_components)
+            sorted(GRU_BEHAVIOR_ADAPTATION.shared_components)
         ),
-        unique_adapter_per_neuron=True,
-        personalization_quality_validated=True,
+        unique_adaptation_per_neuron=True,
+        adaptation_quality_validated=True,
         shared_frozen_base=True,
         output_materialized=True,
         routing_feeds_model=True,
@@ -166,7 +166,7 @@ def test_one_million_target_rejects_inferred_complete_latency():
     )
 
     with pytest.raises(ValueError, match="complete-stack latency"):
-        ONE_MILLION_PERSONALIZED_TARGET.evaluate(measurement)
+        ONE_MILLION_ADAPTED_TARGET.evaluate(measurement)
 
 
 @pytest.mark.parametrize(
@@ -176,23 +176,23 @@ def test_one_million_target_rejects_inferred_complete_latency():
         (58, ("latent_offset",), True),
     ],
 )
-def test_one_million_target_rejects_underpersonalized_population(
+def test_one_million_target_rejects_underadapted_population(
     parameter_count,
     components,
     unique,
 ):
     measurement = PopulationDeploymentMeasurement(
         population=1_048_576,
-        personalized_parameters_per_neuron=parameter_count,
-        personalized_components=components,
+        adapted_parameters_per_neuron=parameter_count,
+        adapted_components=components,
         shared_components=(
             "branch_projection_base",
             "gru_base_transition",
             "normalization",
             "patch_dynamics",
         ),
-        unique_adapter_per_neuron=unique,
-        personalization_quality_validated=False,
+        unique_adaptation_per_neuron=unique,
+        adaptation_quality_validated=False,
         shared_frozen_base=True,
         output_materialized=True,
         routing_feeds_model=True,
@@ -204,15 +204,15 @@ def test_one_million_target_rejects_underpersonalized_population(
         complete_stack_peak_bytes=1_200_000_000,
     )
 
-    with pytest.raises(ValueError, match="personalized"):
-        ONE_MILLION_PERSONALIZED_TARGET.evaluate(measurement)
+    with pytest.raises(ValueError, match="adapted"):
+        ONE_MILLION_ADAPTED_TARGET.evaluate(measurement)
 
 
 def test_one_million_target_rejects_disconnected_routing_benchmark():
     measurement = PopulationDeploymentMeasurement(
         population=1_048_576,
-        personalized_parameters_per_neuron=1_808,
-        personalized_components=(
+        adapted_parameters_per_neuron=1_808,
+        adapted_components=(
             "branch_gain",
             "branch_bias",
             "branch_projection_low_rank",
@@ -229,8 +229,8 @@ def test_one_million_target_rejects_disconnected_routing_benchmark():
             "normalization",
             "patch_dynamics",
         ),
-        unique_adapter_per_neuron=True,
-        personalization_quality_validated=True,
+        unique_adaptation_per_neuron=True,
+        adaptation_quality_validated=True,
         shared_frozen_base=True,
         output_materialized=True,
         routing_feeds_model=False,
@@ -243,4 +243,4 @@ def test_one_million_target_rejects_disconnected_routing_benchmark():
     )
 
     with pytest.raises(ValueError, match="feed"):
-        ONE_MILLION_PERSONALIZED_TARGET.evaluate(measurement)
+        ONE_MILLION_ADAPTED_TARGET.evaluate(measurement)

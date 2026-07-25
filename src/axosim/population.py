@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from axosim.deployment import NeuronBehaviorPersonalization
+from axosim.deployment import NeuronBehaviorAdaptation
 from axosim.temporal_core import (
     AxoTemporalModel,
     CausalPatchedTemporalCore,
@@ -18,23 +18,23 @@ from axosim.temporal_core import (
 def pack_neuron_behavior_adapter(
     adapter: NeuronBehaviorAdapter,
     *,
-    personalization: NeuronBehaviorPersonalization,
+    adaptation: NeuronBehaviorAdaptation,
 ) -> torch.Tensor:
     """Pack a trained behavior adapter into the population ABI."""
 
     if (
-        adapter.branches != personalization.branches
-        or adapter.width != personalization.width
-        or adapter.outputs != personalization.outputs
-        or adapter.rank != personalization.matrix_rank
+        adapter.branches != adaptation.branches
+        or adapter.width != adaptation.width
+        or adapter.outputs != adaptation.outputs
+        or adapter.rank != adaptation.matrix_rank
     ):
-        raise ValueError("behavior adapter does not match personalization")
-    if not personalization.adapt_recurrent:
+        raise ValueError("behavior adapter does not match adaptation")
+    if not adaptation.adapt_recurrent:
         raise ValueError(
             "population ABI requires recurrent behavior adaptation"
         )
     if adapter.gru_recurrent_down is None:
-        raise ValueError("recurrent personalization does not match layout")
+        raise ValueError("recurrent adaptation does not match layout")
 
     tensors = {
         "branch_log_gain": adapter.branch_log_gain,
@@ -52,7 +52,7 @@ def pack_neuron_behavior_adapter(
         "gru_recurrent_up": adapter.gru_recurrent_up,
     }
     packed = []
-    for name, expected_shape in personalization.tensor_shapes.items():
+    for name, expected_shape in adaptation.tensor_shapes.items():
         tensor = tensors[name]
         if tensor is None or tuple(tensor.shape) != expected_shape:
             raise ValueError(
@@ -60,7 +60,7 @@ def pack_neuron_behavior_adapter(
             )
         packed.append(tensor.reshape(-1))
     result = torch.cat(packed)
-    if result.numel() != personalization.parameter_count:
+    if result.numel() != adaptation.parameter_count:
         raise RuntimeError("packed behavior parameter count is inconsistent")
     return result
 
@@ -345,33 +345,33 @@ class _PatchedGRUBranchPopulationStep(_PatchedGRUPopulationStep):
         )
 
 
-class _PersonalizedGRUBranchStep(_GRUPopulationStep):
+class _AdaptedGRUBranchStep(_GRUPopulationStep):
     def __init__(
         self,
         model: AxoTemporalModel,
         *,
-        personalization: NeuronBehaviorPersonalization,
+        adaptation: NeuronBehaviorAdaptation,
     ) -> None:
         super().__init__(model)
         width = self.weight_hh.shape[1]
         if not isinstance(self.output_projection, nn.Identity):
             raise TypeError(
-                "personalized runner requires GRU hidden width to "
+                "adapted runner requires GRU hidden width to "
                 "match model width"
             )
         if (
-            personalization.width != width
-            or personalization.branches != self.backbone.num_branch
-            or personalization.outputs != self.backbone.num_output
+            adaptation.width != width
+            or adaptation.branches != self.backbone.num_branch
+            or adaptation.outputs != self.backbone.num_output
         ):
             raise ValueError(
-                "personalization dimensions do not match the model"
+                "adaptation dimensions do not match the model"
             )
-        self.personalization = personalization
+        self.adaptation = adaptation
         self.width = width
-        self.rank = personalization.matrix_rank
-        self._tensor_shapes = personalization.tensor_shapes
-        self._tensor_slices = personalization.tensor_slices
+        self.rank = adaptation.matrix_rank
+        self._tensor_shapes = adaptation.tensor_shapes
+        self._tensor_slices = adaptation.tensor_slices
 
     def _parameter(
         self,
@@ -396,7 +396,7 @@ class _PersonalizedGRUBranchStep(_GRUPopulationStep):
         )
         return torch.bmm(up, compressed).squeeze(-1)
 
-    def _encode_personalized(
+    def _encode_adapted(
         self,
         branch_inputs: torch.Tensor,
         morphology: torch.Tensor,
@@ -483,7 +483,7 @@ class _PersonalizedGRUBranchStep(_GRUPopulationStep):
             )
         )
 
-    def _advance_personalized(
+    def _advance_adapted(
         self,
         hidden: torch.Tensor,
         recurrent_state: torch.Tensor,
@@ -512,7 +512,7 @@ class _PersonalizedGRUBranchStep(_GRUPopulationStep):
                     "gru_input_up",
                 ),
             )
-            if self.personalization.adapt_recurrent:
+            if self.adaptation.adapt_recurrent:
                 hidden_gates = hidden_gates + self._low_rank_correction(
                     recurrent_state,
                     self._parameter(
@@ -543,7 +543,7 @@ class _PersonalizedGRUBranchStep(_GRUPopulationStep):
         )
         return correction, next_state
 
-    def _decode_personalized(
+    def _decode_adapted(
         self,
         hidden: torch.Tensor,
         behavior_parameters: torch.Tensor,
@@ -558,26 +558,26 @@ class _PersonalizedGRUBranchStep(_GRUPopulationStep):
             assert self.backbone.soma_readout is not None
             spike = self.backbone.spike_readout(features)
             soma = self.backbone._readout_soma(features, None)
-        personalized = torch.bmm(
+        adapted = torch.bmm(
             self._parameter(
                 behavior_parameters,
                 "readout_weight",
             ),
             features.squeeze(1).unsqueeze(-1),
         ).squeeze(-1)
-        personalized = personalized + self._parameter(
+        adapted = adapted + self._parameter(
             behavior_parameters,
             "readout_bias",
         )
-        spike = spike + personalized[:, None, 0:1]
-        soma = soma + personalized[:, None, 1:2]
+        spike = spike + adapted[:, None, 0:1]
+        soma = soma + adapted[:, None, 1:2]
         if self.backbone.config.spike_voltage_coupling_scale:
             spike = self.backbone._couple_spike_voltage(spike, soma)
         return torch.cat((spike, soma), dim=-1)
 
 
-class _NativePersonalizedGRUBranchStep(
-    _PersonalizedGRUBranchStep
+class _NativeAdaptedGRUBranchStep(
+    _AdaptedGRUBranchStep
 ):
     def forward(
         self,
@@ -586,18 +586,18 @@ class _NativePersonalizedGRUBranchStep(
         recurrent_state: torch.Tensor,
         behavior_parameters: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        hidden = self._encode_personalized(
+        hidden = self._encode_adapted(
             branch_inputs,
             morphology,
             behavior_parameters,
         )
-        correction, next_state = self._advance_personalized(
+        correction, next_state = self._advance_adapted(
             hidden,
             recurrent_state,
             behavior_parameters,
         )
         return (
-            self._decode_personalized(
+            self._decode_adapted(
                 hidden + correction,
                 behavior_parameters,
             ),
@@ -605,17 +605,17 @@ class _NativePersonalizedGRUBranchStep(
         )
 
 
-class _PatchedPersonalizedGRUBranchStep(
-    _PersonalizedGRUBranchStep
+class _PatchedAdaptedGRUBranchStep(
+    _AdaptedGRUBranchStep
 ):
     def __init__(
         self,
         model: AxoTemporalModel,
         *,
-        personalization: NeuronBehaviorPersonalization,
+        adaptation: NeuronBehaviorAdaptation,
         close_patch: bool,
     ) -> None:
-        super().__init__(model, personalization=personalization)
+        super().__init__(model, adaptation=adaptation)
         if not isinstance(
             model.temporal_core,
             CausalPatchedTemporalCore,
@@ -638,7 +638,7 @@ class _PatchedPersonalizedGRUBranchStep(
         torch.Tensor,
         torch.Tensor,
     ]:
-        hidden = self._encode_personalized(
+        hidden = self._encode_adapted(
             branch_inputs,
             morphology,
             behavior_parameters,
@@ -646,7 +646,7 @@ class _PatchedPersonalizedGRUBranchStep(
         corrected = hidden + patch_correction
         accumulated = patch_sum + hidden
         if self.close_patch:
-            next_correction, next_state = self._advance_personalized(
+            next_correction, next_state = self._advance_adapted(
                 accumulated / self.patch_size,
                 recurrent_state,
                 behavior_parameters,
@@ -657,7 +657,7 @@ class _PatchedPersonalizedGRUBranchStep(
             next_sum = accumulated
             next_correction = patch_correction
         return (
-            self._decode_personalized(
+            self._decode_adapted(
                 corrected,
                 behavior_parameters,
             ),
@@ -1204,7 +1204,7 @@ class GRUBranchPopulationRunner(GRUPopulationRunner):
         return self.output
 
 
-class PersonalizedGRUBranchPopulationRunner(
+class AdaptedGRUBranchPopulationRunner(
     GRUBranchPopulationRunner
 ):
     """Packed per-neuron behavior adaptation around one shared GRU base."""
@@ -1216,13 +1216,13 @@ class PersonalizedGRUBranchPopulationRunner(
         population: int,
         chunk_size: int,
         behavior_parameters: torch.Tensor,
-        personalization: NeuronBehaviorPersonalization,
+        adaptation: NeuronBehaviorAdaptation,
         compile_step: bool = True,
-        compile_mode: str = "reduce-overhead",
+        compile_mode: str = "max-autotune-no-cudagraphs",
     ) -> None:
         if model.behavior_adapter is not None:
             raise ValueError(
-                "population runner requires an unpersonalized shared base"
+                "population runner requires an unadapted shared base"
             )
         super().__init__(
             model,
@@ -1233,7 +1233,7 @@ class PersonalizedGRUBranchPopulationRunner(
         )
         expected_shape = (
             population,
-            personalization.parameter_count,
+            adaptation.parameter_count,
         )
         if behavior_parameters.shape != expected_shape:
             raise ValueError(
@@ -1249,16 +1249,17 @@ class PersonalizedGRUBranchPopulationRunner(
                 "behavior parameters must match the model dtype"
             )
         self.behavior_parameters = behavior_parameters
-        self.personalization = personalization
-        self.personalized_parameters_per_neuron = (
-            personalization.parameter_count
+        self.adaptation = adaptation
+        self.compile_mode = compile_mode
+        self.adapted_parameters_per_neuron = (
+            adaptation.parameter_count
         )
-        self.personalized_components = tuple(
-            sorted(personalization.personalized_components)
+        self.adapted_components = tuple(
+            sorted(adaptation.adapted_components)
         )
         if compile_step and self.device.type != "cuda":
             raise ValueError(
-                "compiled personalized runner requires CUDA"
+                "compiled adapted runner requires CUDA"
             )
         self._compiled = compile_step
         compile_module: Callable[[nn.Module], nn.Module]
@@ -1274,9 +1275,9 @@ class PersonalizedGRUBranchPopulationRunner(
 
         if self.patch_size == 1:
             self._native_step = compile_module(
-                _NativePersonalizedGRUBranchStep(
+                _NativeAdaptedGRUBranchStep(
                     model,
-                    personalization=personalization,
+                    adaptation=adaptation,
                 ).eval()
             )
             self._open_step = None
@@ -1284,16 +1285,16 @@ class PersonalizedGRUBranchPopulationRunner(
         else:
             self._native_step = None
             self._open_step = compile_module(
-                _PatchedPersonalizedGRUBranchStep(
+                _PatchedAdaptedGRUBranchStep(
                     model,
-                    personalization=personalization,
+                    adaptation=adaptation,
                     close_patch=False,
                 ).eval()
             )
             self._close_step = compile_module(
-                _PatchedPersonalizedGRUBranchStep(
+                _PatchedAdaptedGRUBranchStep(
                     model,
-                    personalization=personalization,
+                    adaptation=adaptation,
                     close_patch=True,
                 ).eval()
             )

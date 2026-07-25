@@ -21,12 +21,12 @@ from axosim.autoresearch import (
 )
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
 from axosim.checkpoint import load_checkpoint, save_checkpoint
-from axosim.deployment import NeuronBehaviorPersonalization
+from axosim.deployment import NeuronBehaviorAdaptation
 from axosim.population import (
+    AdaptedGRUBranchPopulationRunner,
     GroupedGRUPopulationRunner,
     GRUBranchPopulationRunner,
     GRUPopulationRunner,
-    PersonalizedGRUBranchPopulationRunner,
     pack_neuron_behavior_adapter,
 )
 from axosim.temporal_core import (
@@ -177,10 +177,10 @@ def test_gru_behavior_adapter_is_target_specific_and_keeps_memory_shared():
     with torch.no_grad():
         for parameter in adapter.parameters():
             parameter.normal_(mean=0.0, std=0.1)
-    personalized = model(x, morphology_indices=morphology)
+    adapted = model(x, morphology_indices=morphology)
 
-    torch.testing.assert_close(personalized[0], baseline[0])
-    assert not torch.allclose(personalized[1], baseline[1])
+    torch.testing.assert_close(adapted[0], baseline[0])
+    assert not torch.allclose(adapted[1], baseline[1])
 
     trainable_names = [
         name
@@ -188,7 +188,7 @@ def test_gru_behavior_adapter_is_target_specific_and_keeps_memory_shared():
         if name.startswith("behavior_adapter.")
     ]
     set_trainable_parameter_names(model, trainable_names)
-    personalized.square().mean().backward()
+    adapted.square().mean().backward()
     assert all(
         parameter.grad is not None
         for parameter in adapter.parameters()
@@ -231,10 +231,10 @@ def test_gru_low_rank_behavior_adapter_updates_shared_matrix_subspaces():
     with torch.no_grad():
         for parameter in adapter.parameters():
             parameter.normal_(mean=0.0, std=0.1)
-    personalized = model(x, morphology_indices=morphology)
+    adapted = model(x, morphology_indices=morphology)
 
-    torch.testing.assert_close(personalized[0], baseline[0])
-    assert not torch.allclose(personalized[1], baseline[1])
+    torch.testing.assert_close(adapted[0], baseline[0])
+    assert not torch.allclose(adapted[1], baseline[1])
 
     trainable_names = [
         name
@@ -242,7 +242,7 @@ def test_gru_low_rank_behavior_adapter_updates_shared_matrix_subspaces():
         if name.startswith("behavior_adapter.")
     ]
     set_trainable_parameter_names(model, trainable_names)
-    personalized.square().mean().backward()
+    adapted.square().mean().backward()
     assert all(
         parameter.grad is not None
         for parameter in adapter.parameters()
@@ -271,7 +271,7 @@ def test_gru_behavior_adapter_checkpoint_round_trips(tmp_path):
     x = torch.randn(2, 8, 8)
     morphology = torch.tensor([0, 1])
     expected = model(x, morphology_indices=morphology)
-    path = tmp_path / "personalized-gru.pt"
+    path = tmp_path / "adapted-gru.pt"
 
     save_checkpoint(model, path)
     loaded, _ = load_checkpoint(path)
@@ -809,7 +809,7 @@ def test_gru_population_runner_applies_per_neuron_embedding_adapters(
     population = 4
     morphology = torch.tensor([0, 1, 0, 1])
     adapters = torch.randn(population, model.config.model_dim) * 0.1
-    personalized = GRUPopulationRunner(
+    adapted = GRUPopulationRunner(
         model,
         population=population,
         chunk_size=2,
@@ -836,7 +836,7 @@ def test_gru_population_runner_applies_per_neuron_embedding_adapters(
     for _ in range(5):
         event_indices = torch.randint(0, model.num_input, (population, 3))
         event_values = torch.randn(population, 3)
-        actual = personalized.step(
+        actual = adapted.step(
             event_indices,
             event_values,
             morphology,
@@ -912,7 +912,7 @@ def test_gru_branch_population_runner_matches_sparse_events(patch_size):
 
 
 @pytest.mark.parametrize("patch_size", [1, 4])
-def test_personalized_gru_branch_runner_matches_individual_models(
+def test_adapted_gru_branch_runner_matches_individual_models(
     patch_size,
 ):
     torch.manual_seed(61)
@@ -920,7 +920,7 @@ def test_personalized_gru_branch_runner_matches_individual_models(
         _source_model(),
         AxoTemporalCoreConfig(kind="gru", patch_size=patch_size),
     ).eval()
-    personalization = NeuronBehaviorPersonalization(
+    adaptation = NeuronBehaviorAdaptation(
         width=base.config.model_dim,
         branches=base.num_branch,
         outputs=base.num_output,
@@ -959,23 +959,24 @@ def test_personalized_gru_branch_runner_matches_individual_models(
         packed.append(
             pack_neuron_behavior_adapter(
                 adapter,
-                personalization=personalization,
+                adaptation=adaptation,
             )
         )
         references.append(reference)
     behavior_parameters = torch.stack(packed)
     assert behavior_parameters.shape == (
         population,
-        personalization.parameter_count,
+        adaptation.parameter_count,
     )
-    runner = PersonalizedGRUBranchPopulationRunner(
+    runner = AdaptedGRUBranchPopulationRunner(
         base,
         population=population,
         chunk_size=2,
         behavior_parameters=behavior_parameters,
-        personalization=personalization,
+        adaptation=adaptation,
         compile_step=False,
     )
+    assert runner.compile_mode == "max-autotune-no-cudagraphs"
 
     event_indices = torch.randint(
         0,
@@ -1008,8 +1009,8 @@ def test_personalized_gru_branch_runner_matches_individual_models(
     actual = torch.cat(actual_steps, dim=1)
 
     torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-5)
-    assert runner.personalized_parameters_per_neuron == 156
-    assert runner.personalized_components == (
+    assert runner.adapted_parameters_per_neuron == 156
+    assert runner.adapted_components == (
         "branch_bias",
         "branch_gain",
         "branch_projection_low_rank",
@@ -1022,12 +1023,12 @@ def test_personalized_gru_branch_runner_matches_individual_models(
     )
 
 
-def test_personalized_gru_branch_runner_rejects_incomplete_parameter_bank():
+def test_adapted_gru_branch_runner_rejects_incomplete_parameter_bank():
     base = create_temporal_model(
         _source_model(),
         AxoTemporalCoreConfig(kind="gru", patch_size=4),
     ).eval()
-    personalization = NeuronBehaviorPersonalization(
+    adaptation = NeuronBehaviorAdaptation(
         width=base.config.model_dim,
         branches=base.num_branch,
         outputs=base.num_output,
@@ -1036,15 +1037,15 @@ def test_personalized_gru_branch_runner_rejects_incomplete_parameter_bank():
     )
 
     with pytest.raises(ValueError, match="behavior parameters"):
-        PersonalizedGRUBranchPopulationRunner(
+        AdaptedGRUBranchPopulationRunner(
             base,
             population=4,
             chunk_size=2,
             behavior_parameters=torch.zeros(
                 4,
-                personalization.parameter_count - 1,
+                adaptation.parameter_count - 1,
             ),
-            personalization=personalization,
+            adaptation=adaptation,
             compile_step=False,
         )
 
