@@ -15,6 +15,10 @@ from axosim.architecture_frontier import (
 from axosim.autoresearch import model_population_memory_metrics
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
 from axosim.checkpoint import load_checkpoint, save_checkpoint
+from axosim.population import (
+    GRUPopulationRunner,
+    GroupedGRUPopulationRunner,
+)
 from axosim.temporal_core import (
     AxoTemporalCoreConfig,
     AxoTemporalModel,
@@ -563,6 +567,188 @@ def test_temporal_sparse_streaming_chunks_preserve_outputs_and_state(
         strict=True,
     ):
         torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("patch_size", [1, 2])
+def test_gru_population_runner_matches_sparse_streaming(patch_size):
+    torch.manual_seed(53)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=patch_size),
+    ).eval()
+    population = 6
+    morphology = torch.tensor([0, 1, 0, 1, 0, 1])
+    reference_state = model.allocate_streaming_state(population)
+    runner = GRUPopulationRunner(
+        model,
+        population=population,
+        chunk_size=3,
+        compile_step=False,
+    )
+
+    for step in range(7):
+        event_indices = torch.randint(0, model.num_input, (population, 3))
+        event_values = torch.randn(population, 3)
+        if step % 3 == 0:
+            event_values.neg_()
+        expected = model.streaming_step_events(
+            event_indices,
+            event_values,
+            reference_state,
+            morphology_indices=morphology,
+            retain_base_soma_prediction=False,
+        )
+        actual = runner.step(
+            event_indices,
+            event_values,
+            morphology,
+        )
+        torch.testing.assert_close(actual, expected)
+
+    assert runner.patch_position == reference_state.patch_position
+    torch.testing.assert_close(
+        runner.recurrent_state,
+        reference_state.core_state,
+    )
+    if patch_size > 1:
+        torch.testing.assert_close(
+            runner.patch_sum,
+            reference_state.patch_sum,
+        )
+        torch.testing.assert_close(
+            runner.patch_correction,
+            reference_state.patch_correction,
+        )
+
+
+def test_gru_population_runner_requires_even_chunks():
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru"),
+    ).eval()
+
+    with pytest.raises(ValueError, match="divisible"):
+        GRUPopulationRunner(
+            model,
+            population=5,
+            chunk_size=2,
+            compile_step=False,
+        )
+
+
+def test_gru_population_runner_does_not_retain_cudnn_gru_module():
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru"),
+    ).eval()
+    runner = GRUPopulationRunner(
+        model,
+        population=4,
+        chunk_size=4,
+        compile_step=False,
+    )
+
+    assert runner._native_step is not None
+    assert not any(
+        isinstance(module, nn.GRU)
+        for module in runner._native_step.modules()
+    )
+
+
+@pytest.mark.parametrize("patch_size", [1, 2])
+def test_grouped_gru_population_runner_matches_shared_weights(patch_size):
+    torch.manual_seed(59)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=patch_size),
+    ).eval()
+    population = 8
+    morphology = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1])
+    shared = GRUPopulationRunner(
+        model,
+        population=population,
+        chunk_size=4,
+        compile_step=False,
+    )
+    grouped = GroupedGRUPopulationRunner(
+        model,
+        population=population,
+        groups=2,
+        chunk_size=4,
+        compile_step=False,
+    )
+
+    for _ in range(7):
+        event_indices = torch.randint(0, model.num_input, (population, 3))
+        event_values = torch.randn(population, 3)
+        expected = shared.step(event_indices, event_values, morphology)
+        actual = grouped.step(event_indices, event_values, morphology)
+        torch.testing.assert_close(actual, expected)
+
+    torch.testing.assert_close(
+        grouped.recurrent_state.flatten(0, 1),
+        shared.recurrent_state,
+    )
+    assert grouped.group_specific_parameter_count > 0
+    assert grouped.resident_parameter_count == (
+        grouped.shared_parameter_count
+        + 2 * grouped.group_specific_parameter_count
+    )
+
+
+def test_grouped_gru_population_runner_shares_patched_parameter_storage():
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=2),
+    ).eval()
+    runner = GroupedGRUPopulationRunner(
+        model,
+        population=8,
+        groups=2,
+        chunk_size=4,
+        compile_step=False,
+    )
+
+    assert runner._open_step is not None
+    assert runner._close_step is not None
+    for name in (
+        "group_weight_ih",
+        "group_weight_hh",
+        "group_bias_ih",
+        "group_bias_hh",
+        "group_residual_scale",
+    ):
+        assert getattr(runner._open_step, name) is getattr(
+            runner._close_step,
+            name,
+        )
+
+
+def test_grouped_gru_population_runner_loads_distinct_group_weights():
+    torch.manual_seed(61)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru"),
+    ).eval()
+    source = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru"),
+    ).eval()
+    runner = GroupedGRUPopulationRunner(
+        model,
+        population=8,
+        groups=2,
+        chunk_size=4,
+        compile_step=False,
+    )
+    runner.load_group_recurrent_parameters(1, source)
+
+    event_indices = torch.randint(0, model.num_input, (8, 3))
+    event_values = torch.randn(8, 3)
+    morphology = torch.zeros(8, dtype=torch.long)
+    output = runner.step(event_indices, event_values, morphology)
+
+    assert not torch.allclose(output[:4], output[4:])
 
 
 def _streaming_state_tensors(state):

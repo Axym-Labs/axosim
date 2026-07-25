@@ -123,6 +123,21 @@ metric deltas, 95% bootstrap intervals, and per-metric statistical evidence.
 Use `--bootstrap-replicates` and `--bootstrap-seed` to change the default
 250-replicate deterministic comparison.
 
+## Population Inference
+
+The task-specialized GRU models have reusable persistent-state population
+runners in `axosim.population`. `GRUPopulationRunner` compiles the sparse
+biological front end, explicit GRU update, heads, state writeback, and output
+materialization as one step for a shared-weight population.
+`GroupedGRUPopulationRunner` uses one recurrent parameter set per contiguous
+neuron group, providing a measured tradeoff between individual behavior and
+resident weight memory without a Python loop over groups.
+
+Both runners consume sparse event indices and values for one causal timestep.
+Network fanout, delay queues, and event delivery remain separate simulator
+responsibilities; population-runner throughput alone is not an end-to-end
+network-simulation rate.
+
 ## Smoke Workflow
 
 Create deterministic demo NeuronIO-style shards:
