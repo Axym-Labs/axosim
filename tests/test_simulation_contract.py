@@ -27,6 +27,12 @@ def test_million_neuron_contract_includes_network_work() -> None:
     assert contract.delay_queue_included
     assert contract.morphology_aware_branch_targeting
     assert contract.source_type_aware_branch_targeting
+    assert contract.local_source_identity_required
+    assert contract.long_range_source_identity_required
+    assert contract.morphology_assignment_independent
+    assert contract.activity_must_be_model_generated
+    assert not contract.quota_activity_forcing_allowed
+    assert contract.adaptation_reference_envelope_validation_required
     assert contract.delay_slots == 8
     assert contract.delay_queue_bytes == 1_979_711_488
     assert not contract.empirical_connectome

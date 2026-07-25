@@ -33,6 +33,12 @@ class LargePopulationSimulationContract:
     spatial_tile_neurons: int
     delay_slots: int
     branch_count: int
+    local_source_identity_required: bool
+    long_range_source_identity_required: bool
+    morphology_assignment_independent: bool
+    activity_must_be_model_generated: bool
+    quota_activity_forcing_allowed: bool
+    adaptation_reference_envelope_validation_required: bool
     morphology_aware_branch_targeting: bool = True
     source_type_aware_branch_targeting: bool = True
     source_discovery_included: bool = True
@@ -119,6 +125,21 @@ class LargePopulationSimulationContract:
                 "the delay ring must retain both the ready input block and "
                 "the forecast block's delayed writes"
             )
+        if (
+            self.activity_must_be_model_generated
+            and self.quota_activity_forcing_allowed
+        ):
+            raise ValueError(
+                "a proper simulation cannot require model-generated activity "
+                "while allowing quota-forced firing"
+            )
+        if (
+            self.local_source_identity_required
+            or self.long_range_source_identity_required
+        ) and not self.event_delivery_included:
+            raise ValueError(
+                "source identity requires event delivery in the workload"
+            )
 
     @property
     def steps_per_second(self) -> float:
@@ -185,4 +206,10 @@ MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
     spatial_tile_neurons=4_096,
     delay_slots=8,
     branch_count=118,
+    local_source_identity_required=True,
+    long_range_source_identity_required=True,
+    morphology_assignment_independent=True,
+    activity_must_be_model_generated=True,
+    quota_activity_forcing_allowed=False,
+    adaptation_reference_envelope_validation_required=True,
 )

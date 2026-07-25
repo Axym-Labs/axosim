@@ -134,6 +134,15 @@ class PopulationDeploymentMeasurement:
     model_peak_bytes: int
     routing_peak_bytes: int | None
     complete_stack_peak_bytes: int | None
+    local_source_identity_retained: bool = False
+    long_range_source_identity_retained: bool = False
+    morphology_assignment_independent: bool = False
+    activity_generation_mode: str = "unknown"
+    activity_dynamics_validated: bool = False
+    adaptation_execution_mode: str = "direct"
+    adaptation_reference_envelope_validated: bool = False
+    forecast_block_size: int = 1
+    complete_block_latency_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +156,12 @@ class PopulationDeploymentTarget:
     shared_frozen_base: bool
     output_materialization_required: bool
     network_routing_required: bool
+    local_source_identity_required: bool
+    long_range_source_identity_required: bool
+    independent_morphology_assignment_required: bool
+    activity_dynamics_validation_required: bool
+    quota_activity_allowed: bool
+    forecast_block_size: int
     firing_rate: float
     fanout: int
 
@@ -154,12 +169,13 @@ class PopulationDeploymentTarget:
     def adapted_parameters_per_neuron(self) -> int:
         return self.adaptation.parameter_count
 
-    def evaluate(
+    def validation_errors(
         self,
         measurement: PopulationDeploymentMeasurement,
-    ) -> dict[str, int | float | bool]:
+    ) -> tuple[str, ...]:
+        errors: list[str] = []
         if measurement.population < self.headline_population:
-            raise ValueError(
+            errors.append(
                 "measurement population is below the headline target"
             )
         if (
@@ -169,7 +185,7 @@ class PopulationDeploymentTarget:
             or frozenset(measurement.adapted_components)
             != self.adaptation.adapted_components
         ):
-            raise ValueError(
+            errors.append(
                 "measurement does not use the required adapted "
                 "behavior parameters for every neuron"
             )
@@ -177,47 +193,151 @@ class PopulationDeploymentTarget:
             frozenset(measurement.shared_components)
             != self.adaptation.shared_components
         ):
-            raise ValueError(
+            errors.append(
                 "measurement does not preserve the required shared "
                 "population mechanisms"
             )
         if not measurement.adaptation_quality_validated:
-            raise ValueError(
+            errors.append(
                 "measurement adaptation has not passed the "
                 "held-out quality gate"
             )
         if self.shared_frozen_base and not measurement.shared_frozen_base:
-            raise ValueError("measurement does not use a shared frozen base")
+            errors.append(
+                "measurement does not use a shared frozen base"
+            )
         if (
             self.output_materialization_required
             and not measurement.output_materialized
         ):
-            raise ValueError("measurement omits output materialization")
+            errors.append("measurement omits output materialization")
         if self.network_routing_required:
             if (
                 measurement.routing_latency_ms is None
                 or measurement.routing_peak_bytes is None
             ):
-                raise ValueError(
+                errors.append(
                     "measurement omits required network routing"
                 )
             if not measurement.routing_feeds_model:
-                raise ValueError(
+                errors.append(
                     "routed events do not feed the measured model step"
                 )
+        if (
+            self.local_source_identity_required
+            and not measurement.local_source_identity_retained
+        ):
+            errors.append(
+                "measurement does not retain local source identity"
+            )
+        if (
+            self.long_range_source_identity_required
+            and not measurement.long_range_source_identity_retained
+        ):
+            errors.append(
+                "measurement does not retain long-range source identity"
+            )
+        if (
+            self.independent_morphology_assignment_required
+            and not measurement.morphology_assignment_independent
+        ):
+            errors.append(
+                "measurement morphology assignment is coupled to "
+                "source type or storage index"
+            )
+        activity_invalid = (
+            self.activity_dynamics_validation_required
+            and not measurement.activity_dynamics_validated
+        )
+        quota_invalid = (
+            not self.quota_activity_allowed
+            and measurement.activity_generation_mode == "exact_tile_quota"
+        )
+        if activity_invalid or quota_invalid:
+            errors.append(
+                "measurement activity is quota-forced or has not passed "
+                "closed-loop dynamics validation"
+            )
+        if measurement.adaptation_execution_mode not in {
+            "direct",
+            "compiled_reference_field",
+        }:
+            errors.append(
+                "measurement uses an unsupported adaptation execution mode"
+            )
+        if (
+            measurement.adaptation_execution_mode
+            == "compiled_reference_field"
+            and not measurement.adaptation_reference_envelope_validated
+        ):
+            errors.append(
+                "measurement adaptation reference envelope is not validated"
+            )
         if measurement.complete_stack_peak_bytes is None:
-            raise ValueError(
+            errors.append(
                 "measurement omits complete-stack peak memory"
             )
         if measurement.complete_stack_latency_ms is None:
-            raise ValueError(
+            errors.append(
                 "measurement omits direct complete-stack latency"
             )
+        valid_block_size = measurement.forecast_block_size > 0
+        if (
+            not valid_block_size
+            or measurement.forecast_block_size
+            != self.forecast_block_size
+        ):
+            errors.append(
+                "measurement forecast block size does not match the target"
+            )
+        if measurement.complete_block_latency_ms is None:
+            errors.append(
+                "measurement omits direct complete-block latency"
+            )
+        elif (
+            measurement.complete_stack_latency_ms is not None
+            and valid_block_size
+        ):
+            normalized_block_latency = (
+                measurement.complete_block_latency_ms
+                / measurement.forecast_block_size
+            )
+            tolerance = max(
+                0.005,
+                0.02 * measurement.complete_stack_latency_ms,
+            )
+            if (
+                abs(
+                    normalized_block_latency
+                    - measurement.complete_stack_latency_ms
+                )
+                > tolerance
+            ):
+                errors.append(
+                    "measurement block latency is inconsistent with "
+                    "its complete-step latency"
+                )
+        return tuple(errors)
+
+    def evaluate(
+        self,
+        measurement: PopulationDeploymentMeasurement,
+    ) -> dict[str, int | float | bool]:
+        errors = self.validation_errors(measurement)
+        if errors:
+            raise ValueError("; ".join(errors))
+        assert measurement.complete_stack_latency_ms is not None
+        assert measurement.complete_stack_peak_bytes is not None
+        assert measurement.complete_block_latency_ms is not None
         return {
             "population": measurement.population,
             "complete_step_latency_ms": (
                 measurement.complete_stack_latency_ms
             ),
+            "complete_block_latency_ms": (
+                measurement.complete_block_latency_ms
+            ),
+            "forecast_block_size": measurement.forecast_block_size,
             "real_time_target_met": (
                 measurement.complete_stack_latency_ms
                 <= self.biological_step_ms
@@ -253,6 +373,12 @@ ONE_MILLION_ADAPTED_TARGET = PopulationDeploymentTarget(
     shared_frozen_base=True,
     output_materialization_required=True,
     network_routing_required=True,
+    local_source_identity_required=True,
+    long_range_source_identity_required=True,
+    independent_morphology_assignment_required=True,
+    activity_dynamics_validation_required=True,
+    quota_activity_allowed=False,
+    forecast_block_size=4,
     firing_rate=0.01,
     fanout=1_278,
 )

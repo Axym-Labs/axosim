@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from axosim.deployment import (
@@ -7,6 +9,39 @@ from axosim.deployment import (
     ONE_MILLION_ADAPTED_TARGET,
     PopulationDeploymentMeasurement,
 )
+
+
+def _valid_measurement() -> PopulationDeploymentMeasurement:
+    return PopulationDeploymentMeasurement(
+        population=1_048_576,
+        adapted_parameters_per_neuron=1_808,
+        adapted_components=tuple(
+            sorted(GRU_BEHAVIOR_ADAPTATION.adapted_components)
+        ),
+        shared_components=tuple(
+            sorted(GRU_BEHAVIOR_ADAPTATION.shared_components)
+        ),
+        unique_adaptation_per_neuron=True,
+        adaptation_quality_validated=True,
+        shared_frozen_base=True,
+        output_materialized=True,
+        routing_feeds_model=True,
+        model_latency_ms=0.62,
+        routing_latency_ms=0.35,
+        complete_stack_latency_ms=0.95,
+        model_peak_bytes=1_000_000_000,
+        routing_peak_bytes=900_000_000,
+        complete_stack_peak_bytes=1_500_000_000,
+        local_source_identity_retained=True,
+        long_range_source_identity_retained=True,
+        morphology_assignment_independent=True,
+        activity_generation_mode="model_threshold",
+        activity_dynamics_validated=True,
+        adaptation_execution_mode="direct",
+        adaptation_reference_envelope_validated=True,
+        forecast_block_size=4,
+        complete_block_latency_ms=3.8,
+    )
 
 
 def test_one_million_target_requires_adaptation_and_routing():
@@ -57,6 +92,12 @@ def test_one_million_target_requires_adaptation_and_routing():
     assert target.shared_frozen_base
     assert target.output_materialization_required
     assert target.network_routing_required
+    assert target.local_source_identity_required
+    assert target.long_range_source_identity_required
+    assert target.independent_morphology_assignment_required
+    assert target.activity_dynamics_validation_required
+    assert not target.quota_activity_allowed
+    assert target.forecast_block_size == 4
     assert target.firing_rate == 0.01
     assert target.fanout == 1_278
 
@@ -100,44 +141,77 @@ def test_one_million_target_rejects_model_only_measurement():
 
 
 def test_one_million_target_uses_complete_step_latency():
-    measurement = PopulationDeploymentMeasurement(
-        population=1_048_576,
-        adapted_parameters_per_neuron=1_808,
-        adapted_components=(
-            "branch_gain",
-            "branch_bias",
-            "branch_projection_low_rank",
-            "gru_input_low_rank",
-            "gru_recurrent_low_rank",
-            "latent_gain",
-            "latent_offset",
-            "recurrent_output_gain",
-            "readout",
-        ),
-        shared_components=(
-            "branch_projection_base",
-            "gru_base_transition",
-            "normalization",
-            "patch_dynamics",
-        ),
-        unique_adaptation_per_neuron=True,
-        adaptation_quality_validated=True,
-        shared_frozen_base=True,
-        output_materialized=True,
-        routing_feeds_model=True,
-        model_latency_ms=0.62,
-        routing_latency_ms=0.35,
-        complete_stack_latency_ms=0.95,
-        model_peak_bytes=1_000_000_000,
-        routing_peak_bytes=900_000_000,
-        complete_stack_peak_bytes=1_500_000_000,
-    )
+    measurement = _valid_measurement()
 
     result = ONE_MILLION_ADAPTED_TARGET.evaluate(measurement)
 
     assert result["complete_step_latency_ms"] == pytest.approx(0.95)
+    assert result["complete_block_latency_ms"] == pytest.approx(3.8)
+    assert result["forecast_block_size"] == 4
     assert result["real_time_target_met"]
     assert result["adapted_parameter_count"] == 1_808 * 1_048_576
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"local_source_identity_retained": False}, "local source identity"),
+        (
+            {"long_range_source_identity_retained": False},
+            "long-range source identity",
+        ),
+        (
+            {"morphology_assignment_independent": False},
+            "morphology assignment",
+        ),
+        (
+            {
+                "activity_generation_mode": "exact_tile_quota",
+                "activity_dynamics_validated": False,
+            },
+            "activity",
+        ),
+        (
+            {
+                "adaptation_execution_mode": (
+                    "compiled_reference_field"
+                ),
+                "adaptation_reference_envelope_validated": False,
+            },
+            "adaptation reference envelope",
+        ),
+        ({"forecast_block_size": 0}, "forecast block size"),
+        ({"forecast_block_size": 2}, "forecast block size"),
+        ({"complete_block_latency_ms": None}, "block latency"),
+        ({"complete_block_latency_ms": 3.0}, "inconsistent"),
+    ],
+)
+def test_one_million_target_rejects_incomplete_population_fidelity(
+    changes,
+    message,
+):
+    measurement = replace(_valid_measurement(), **changes)
+
+    with pytest.raises(ValueError, match=message):
+        ONE_MILLION_ADAPTED_TARGET.evaluate(measurement)
+
+
+def test_target_reports_all_provisional_headline_violations():
+    measurement = replace(
+        _valid_measurement(),
+        long_range_source_identity_retained=False,
+        activity_generation_mode="exact_tile_quota",
+        activity_dynamics_validated=False,
+        adaptation_execution_mode="compiled_reference_field",
+        adaptation_reference_envelope_validated=False,
+    )
+
+    errors = ONE_MILLION_ADAPTED_TARGET.validation_errors(measurement)
+
+    assert len(errors) == 3
+    assert any("long-range source identity" in error for error in errors)
+    assert any("activity" in error for error in errors)
+    assert any("adaptation reference envelope" in error for error in errors)
 
 
 def test_one_million_target_rejects_inferred_complete_latency():
