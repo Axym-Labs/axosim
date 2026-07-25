@@ -144,11 +144,33 @@ CUDA execution defaults to `max-autotune-no-cudagraphs`. CUDA graphs stage
 dynamic inputs in static buffers; for the packed adaptation bank that would
 copy every neuron's 1,808-value row on every timestep. The no-graph autotuned
 path consumes the bank in place and is the measured large-population default.
+`quantize_neuron_behavior_parameters` provides physical W8 or packed W4
+storage with one scale per adaptation component, and the same adapted runner
+decodes those values inside the compiled step. W8 is the measured real-time
+default: at 1,048,576 neurons it halves adaptation storage and improves
+model/connected throughput by 26.7%/13.0% versus FP16 while clearing the
+held-out SERA and F1 gates. W4 is a memory-capacity tier; its 75% bank
+reduction does not clear the connected-runtime gate.
 
 Both runners consume sparse event indices and values for one causal timestep.
 Network fanout, delay queues, and event delivery remain separate simulator
 responsibilities; population-runner throughput alone is not an end-to-end
 network-simulation rate.
+
+### One-million-neuron target contract
+
+`MILLION_NEURON_REALTIME_CONTRACT` fixes the workload used for RTX 5090
+systems claims. Every one of 1,048,576 neurons retains the full 1,808-value
+adaptation interface, stored as W8 while activations and recurrent state
+remain FP16. A complete 1 ms population step includes dense spike discovery,
+13,401,108 synaptic events at 1% firing and fanout 1,278, morphology- and
+source-type-aware branch targeting, and a four-slot delay queue.
+
+The current scalable connectome control uses five morphology classes, an
+80/20 excitatory/inhibitory split, and 90% spatially local connectivity within
+4,096-neuron tiles. It is a procedural biologically structured workload, not
+an empirical connectome. The uniform global hash remains the adversarial
+routing control, and empirical SONATA circuits must be labeled separately.
 
 ## Smoke Workflow
 

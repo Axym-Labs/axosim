@@ -27,7 +27,9 @@ from axosim.population import (
     GroupedGRUPopulationRunner,
     GRUBranchPopulationRunner,
     GRUPopulationRunner,
+    dequantize_neuron_behavior_parameters,
     pack_neuron_behavior_adapter,
+    quantize_neuron_behavior_parameters,
 )
 from axosim.temporal_core import (
     AxoTemporalCoreConfig,
@@ -1048,6 +1050,77 @@ def test_adapted_gru_branch_runner_rejects_incomplete_parameter_bank():
             adaptation=adaptation,
             compile_step=False,
         )
+
+
+@pytest.mark.parametrize("bits", [8, 4])
+@pytest.mark.parametrize("patch_size", [1, 4])
+def test_quantized_adapted_runner_matches_dequantized_reference(
+    bits,
+    patch_size,
+):
+    torch.manual_seed(67)
+    base = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=patch_size),
+    ).eval()
+    adaptation = NeuronBehaviorAdaptation(
+        width=base.config.model_dim,
+        branches=base.num_branch,
+        outputs=base.num_output,
+        matrix_rank=2,
+        adapt_recurrent=True,
+    )
+    population = 4
+    parameters = torch.randn(
+        population,
+        adaptation.parameter_count,
+    ) * 0.04
+    bank = quantize_neuron_behavior_parameters(
+        parameters,
+        adaptation=adaptation,
+        bits=bits,
+    )
+    dequantized = dequantize_neuron_behavior_parameters(
+        bank,
+        adaptation=adaptation,
+    )
+    reference = AdaptedGRUBranchPopulationRunner(
+        base,
+        population=population,
+        chunk_size=2,
+        behavior_parameters=dequantized,
+        adaptation=adaptation,
+        compile_step=False,
+    )
+    candidate = AdaptedGRUBranchPopulationRunner(
+        base,
+        population=population,
+        chunk_size=2,
+        behavior_parameters=bank,
+        adaptation=adaptation,
+        compile_step=False,
+    )
+    morphology = torch.tensor([0, 1, 1, 0])
+    for _ in range(9):
+        branch_inputs = torch.randn(population, base.num_branch)
+        expected = reference.step(branch_inputs, morphology).clone()
+        actual = candidate.step(branch_inputs, morphology).clone()
+        torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(
+        candidate.recurrent_state,
+        reference.recurrent_state,
+    )
+    assert candidate.quantization_bits == bits
+    assert bank.logical_parameters_per_neuron == adaptation.parameter_count
+    assert bank.values.dtype == (
+        torch.int8 if bits == 8 else torch.uint8
+    )
+    expected_columns = (
+        adaptation.parameter_count
+        if bits == 8
+        else adaptation.parameter_count // 2
+    )
+    assert bank.values.shape == (population, expected_columns)
 
 
 @pytest.mark.parametrize("patch_size", [1, 2])
