@@ -132,6 +132,13 @@ materialization as one step for a shared-weight population.
 `GroupedGRUPopulationRunner` uses one recurrent parameter set per contiguous
 neuron group, providing a measured tradeoff between individual behavior and
 resident weight memory without a Python loop over groups.
+`PersonalizedGRUBranchPopulationRunner` is the defensive custom-neuron path:
+it keeps one shared frozen biological dynamics base while executing 1,808
+unique behavior parameters per neuron. Those parameters control branch
+response, latent state, rank-2 input and recurrent GRU residuals, recurrent
+output gain, and readout. The smaller 58-value morphology-embedding adapter
+remains an ablation only and does not satisfy the deployment contract in
+`axosim.deployment`.
 
 Both runners consume sparse event indices and values for one causal timestep.
 Network fanout, delay queues, and event delivery remain separate simulator

@@ -7,7 +7,7 @@ import pytest
 import torch
 from torch import nn
 
-import axosim.temporal_core as temporal_core
+from axosim import temporal_core
 from axosim.architecture_frontier import (
     ArchitectureSpec,
     architecture_evidence,
@@ -15,15 +15,17 @@ from axosim.architecture_frontier import (
     load_legacy_gru_candidate,
     transfer_compatible_state,
 )
-from axosim.autoresearch import model_population_memory_metrics
-from axosim.autoresearch import set_trainable_parameter_names
+from axosim.autoresearch import (
+    model_population_memory_metrics,
+    set_trainable_parameter_names,
+)
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
 from axosim.checkpoint import load_checkpoint, save_checkpoint
 from axosim.deployment import NeuronBehaviorPersonalization
 from axosim.population import (
+    GroupedGRUPopulationRunner,
     GRUBranchPopulationRunner,
     GRUPopulationRunner,
-    GroupedGRUPopulationRunner,
     PersonalizedGRUBranchPopulationRunner,
     pack_neuron_behavior_adapter,
 )
@@ -206,8 +208,6 @@ def test_gru_low_rank_behavior_adapter_updates_shared_matrix_subspaces():
             patch_size=2,
             behavior_adapter_morphology_id="morph-b",
             behavior_adapter_rank=2,
-            behavior_gate_bias=True,
-            behavior_synapse_rank=1,
         ),
     ).eval()
     adapter = model.behavior_adapter
@@ -222,10 +222,8 @@ def test_gru_low_rank_behavior_adapter_updates_shared_matrix_subspaces():
         "branch_projection_low_rank": 20,
         "gru_input_low_rank": 48,
         "gru_recurrent_low_rank": 48,
-        "gru_gate_bias": 18,
-        "synapse_gain_low_rank": 6,
     }
-    assert adapter.parameter_count == 180
+    assert adapter.parameter_count == 156
 
     x = torch.randn(2, 8, 8)
     morphology = torch.tensor([0, 1])
@@ -255,34 +253,6 @@ def test_gru_low_rank_behavior_adapter_updates_shared_matrix_subspaces():
     )
 
 
-def test_gru_input_behavior_adapter_leaves_recurrent_matrix_unadapted():
-    model = create_temporal_model(
-        _source_model(),
-        AxoTemporalCoreConfig(
-            kind="gru",
-            behavior_adapter_morphology_id="morph-b",
-            behavior_adapter_rank=2,
-            behavior_adapt_gru_recurrent=False,
-        ),
-    )
-    adapter = model.behavior_adapter
-    assert adapter is not None
-
-    assert adapter.parameter_counts == {
-        "branch_gain": 4,
-        "branch_bias": 4,
-        "latent_gain": 6,
-        "latent_offset": 6,
-        "recurrent_output_gain": 6,
-        "readout": 14,
-        "branch_projection_low_rank": 20,
-        "gru_input_low_rank": 48,
-    }
-    assert adapter.parameter_count == 108
-    assert adapter.gru_recurrent_down is None
-    assert adapter.gru_recurrent_up is None
-
-
 def test_gru_behavior_adapter_checkpoint_round_trips(tmp_path):
     torch.manual_seed(13)
     model = create_temporal_model(
@@ -292,8 +262,6 @@ def test_gru_behavior_adapter_checkpoint_round_trips(tmp_path):
             patch_size=2,
             behavior_adapter_morphology_id="morph-b",
             behavior_adapter_rank=2,
-            behavior_gate_bias=True,
-            behavior_synapse_rank=1,
         ),
     ).eval()
     assert model.behavior_adapter is not None
@@ -311,8 +279,6 @@ def test_gru_behavior_adapter_checkpoint_round_trips(tmp_path):
 
     assert loaded.temporal_config.behavior_adapter_morphology_id == "morph-b"
     assert loaded.temporal_config.behavior_adapter_rank == 2
-    assert loaded.temporal_config.behavior_gate_bias
-    assert loaded.temporal_config.behavior_synapse_rank == 1
     torch.testing.assert_close(actual, expected)
 
 

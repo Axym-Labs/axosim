@@ -39,9 +39,6 @@ class AxoTemporalCoreConfig:
     patch_size: int = 1
     behavior_adapter_morphology_id: str | None = None
     behavior_adapter_rank: int = 0
-    behavior_gate_bias: bool = False
-    behavior_synapse_rank: int = 0
-    behavior_adapt_gru_recurrent: bool = True
 
     def __post_init__(self) -> None:
         if self.kind not in {"mamba", "gru", "branch_rnn"}:
@@ -71,16 +68,8 @@ class AxoTemporalCoreConfig:
             )
         if self.behavior_adapter_rank < 0:
             raise ValueError("behavior_adapter_rank must be non-negative")
-        if self.behavior_synapse_rank < 0:
-            raise ValueError(
-                "behavior_synapse_rank must be non-negative"
-            )
         if (
-            (
-                self.behavior_adapter_rank
-                or self.behavior_gate_bias
-                or self.behavior_synapse_rank
-            )
+            self.behavior_adapter_rank
             and self.behavior_adapter_morphology_id is None
         ):
             raise ValueError(
@@ -95,23 +84,17 @@ class NeuronBehaviorAdapter(nn.Module):
         self,
         *,
         branches: int,
-        synapses_per_branch: int,
         width: int,
         outputs: int,
         morphology_index: int,
         rank: int = 0,
-        gate_bias: bool = False,
-        synapse_rank: int = 0,
-        adapt_gru_recurrent: bool = True,
     ) -> None:
         super().__init__()
         self.branches = branches
         self.width = width
-        self.synapses_per_branch = synapses_per_branch
         self.outputs = outputs
         self.morphology_index = morphology_index
         self.rank = rank
-        self.synapse_rank = synapse_rank
         self.branch_log_gain = nn.Parameter(torch.zeros(branches))
         self.branch_bias = nn.Parameter(torch.zeros(branches))
         self.latent_gain = nn.Parameter(torch.zeros(width))
@@ -132,23 +115,16 @@ class NeuronBehaviorAdapter(nn.Module):
             self.gru_input_up = nn.Parameter(
                 torch.zeros(3 * width, rank)
             )
-            if adapt_gru_recurrent:
-                self.gru_recurrent_down = nn.Parameter(
-                    torch.empty(rank, width)
-                )
-                self.gru_recurrent_up = nn.Parameter(
-                    torch.zeros(3 * width, rank)
-                )
-            else:
-                self.gru_recurrent_down = None
-                self.gru_recurrent_up = None
+            self.gru_recurrent_down = nn.Parameter(
+                torch.empty(rank, width)
+            )
+            self.gru_recurrent_up = nn.Parameter(
+                torch.zeros(3 * width, rank)
+            )
             for parameter in (
                 self.branch_projection_down,
                 self.gru_input_down,
-            ) + (
-                ()
-                if self.gru_recurrent_down is None
-                else (self.gru_recurrent_down,)
+                self.gru_recurrent_down,
             ):
                 nn.init.kaiming_uniform_(parameter, a=5**0.5)
         else:
@@ -158,25 +134,6 @@ class NeuronBehaviorAdapter(nn.Module):
             self.gru_input_up = None
             self.gru_recurrent_down = None
             self.gru_recurrent_up = None
-        self.gru_gate_bias = (
-            nn.Parameter(torch.zeros(3 * width))
-            if gate_bias
-            else None
-        )
-        if synapse_rank:
-            self.synapse_gain_branch = nn.Parameter(
-                torch.empty(synapse_rank, branches)
-            )
-            self.synapse_gain_slot = nn.Parameter(
-                torch.zeros(synapse_rank, synapses_per_branch)
-            )
-            nn.init.kaiming_uniform_(
-                self.synapse_gain_branch,
-                a=5**0.5,
-            )
-        else:
-            self.synapse_gain_branch = None
-            self.synapse_gain_slot = None
 
     @property
     def parameter_counts(self) -> dict[str, int]:
@@ -210,20 +167,11 @@ class NeuronBehaviorAdapter(nn.Module):
                     ),
                 }
             )
-            if self.gru_recurrent_down is not None:
-                assert self.gru_recurrent_up is not None
-                counts["gru_recurrent_low_rank"] = (
-                    self.gru_recurrent_down.numel()
-                    + self.gru_recurrent_up.numel()
-                )
-        if self.gru_gate_bias is not None:
-            counts["gru_gate_bias"] = self.gru_gate_bias.numel()
-        if self.synapse_rank:
-            assert self.synapse_gain_branch is not None
-            assert self.synapse_gain_slot is not None
-            counts["synapse_gain_low_rank"] = (
-                self.synapse_gain_branch.numel()
-                + self.synapse_gain_slot.numel()
+            assert self.gru_recurrent_down is not None
+            assert self.gru_recurrent_up is not None
+            counts["gru_recurrent_low_rank"] = (
+                self.gru_recurrent_down.numel()
+                + self.gru_recurrent_up.numel()
             )
         return counts
 
@@ -270,14 +218,12 @@ class ResidualGRUTemporalCore(nn.Module):
         *,
         weight_ih_delta: torch.Tensor | None = None,
         weight_hh_delta: torch.Tensor | None = None,
-        gate_bias_delta: torch.Tensor | None = None,
         adapter_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         return hidden + self.temporal_correction(
             hidden,
             weight_ih_delta=weight_ih_delta,
             weight_hh_delta=weight_hh_delta,
-            gate_bias_delta=gate_bias_delta,
             adapter_mask=adapter_mask,
         )
 
@@ -287,7 +233,6 @@ class ResidualGRUTemporalCore(nn.Module):
         *,
         weight_ih_delta: torch.Tensor | None = None,
         weight_hh_delta: torch.Tensor | None = None,
-        gate_bias_delta: torch.Tensor | None = None,
         adapter_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         normalized = self.pre_norm(hidden)
@@ -295,7 +240,6 @@ class ResidualGRUTemporalCore(nn.Module):
         if (
             weight_ih_delta is not None
             or weight_hh_delta is not None
-            or gate_bias_delta is not None
         ):
             if adapter_mask is None:
                 raise ValueError(
@@ -305,7 +249,6 @@ class ResidualGRUTemporalCore(nn.Module):
                 normalized,
                 weight_ih_delta=weight_ih_delta,
                 weight_hh_delta=weight_hh_delta,
-                gate_bias_delta=gate_bias_delta,
             )
             mask = adapter_mask.to(
                 dtype=recurrent.dtype,
@@ -323,7 +266,6 @@ class ResidualGRUTemporalCore(nn.Module):
         *,
         weight_ih_delta: torch.Tensor | None,
         weight_hh_delta: torch.Tensor | None,
-        gate_bias_delta: torch.Tensor | None,
     ) -> torch.Tensor:
         state = hidden.new_zeros(
             1,
@@ -344,11 +286,7 @@ class ResidualGRUTemporalCore(nn.Module):
                     if weight_hh_delta is None
                     else self.gru.weight_hh_l0 + weight_hh_delta
                 ),
-                (
-                    self.gru.bias_ih_l0
-                    if gate_bias_delta is None
-                    else self.gru.bias_ih_l0 + gate_bias_delta
-                ),
+                self.gru.bias_ih_l0,
                 self.gru.bias_hh_l0,
             ],
             True,
@@ -549,18 +487,10 @@ class AxoTemporalModel(nn.Module):
                 )
             self.behavior_adapter = NeuronBehaviorAdapter(
                 branches=self.num_branch,
-                synapses_per_branch=(
-                    self.backbone.num_synapse_per_branch
-                ),
                 width=width,
                 outputs=self.num_output,
                 morphology_index=morphology_ids.index(behavior_id),
                 rank=temporal_config.behavior_adapter_rank,
-                gate_bias=temporal_config.behavior_gate_bias,
-                synapse_rank=temporal_config.behavior_synapse_rank,
-                adapt_gru_recurrent=(
-                    temporal_config.behavior_adapt_gru_recurrent
-                ),
             )
 
     @property
@@ -595,7 +525,6 @@ class AxoTemporalModel(nn.Module):
         branch_bias = None
         branch_projection_down = None
         branch_projection_up = None
-        synapse_log_gain_delta = None
         if adapter is not None:
             if morphology_indices is None:
                 raise ValueError(
@@ -615,13 +544,6 @@ class AxoTemporalModel(nn.Module):
                 adapter.branch_projection_down
             )
             branch_projection_up = adapter.branch_projection_up
-            if adapter.synapse_rank:
-                assert adapter.synapse_gain_branch is not None
-                assert adapter.synapse_gain_slot is not None
-                synapse_log_gain_delta = (
-                    adapter.synapse_gain_branch.transpose(0, 1)
-                    @ adapter.synapse_gain_slot
-                )
         hidden, local_source, highpass_features = (
             self.backbone._encode_sequence(
                 x,
@@ -631,8 +553,6 @@ class AxoTemporalModel(nn.Module):
                 branch_projection_down=branch_projection_down,
                 branch_projection_up=branch_projection_up,
                 branch_projection_adapter_mask=adapter_mask,
-                synapse_log_gain_delta=synapse_log_gain_delta,
-                synapse_gain_adapter_mask=adapter_mask,
             )
         )
         temporal_input = hidden
@@ -652,24 +572,20 @@ class AxoTemporalModel(nn.Module):
             local_source = hidden
             temporal_input = hidden
         temporal_kwargs = {}
-        if adapter is not None and (
-            adapter.rank or adapter.gru_gate_bias is not None
-        ):
+        if adapter is not None and adapter.rank:
             assert adapter.gru_input_up is not None
             assert adapter.gru_input_down is not None
+            assert adapter.gru_recurrent_up is not None
+            assert adapter.gru_recurrent_down is not None
             temporal_kwargs = {
                 "weight_ih_delta": (
                     adapter.gru_input_up @ adapter.gru_input_down
                 ),
                 "weight_hh_delta": (
-                    None
-                    if adapter.gru_recurrent_up is None
-                    or adapter.gru_recurrent_down is None
-                    else adapter.gru_recurrent_up
+                    adapter.gru_recurrent_up
                     @ adapter.gru_recurrent_down
                 ),
                 "adapter_mask": adapter_mask,
-                "gate_bias_delta": adapter.gru_gate_bias,
             }
         hidden = self.backbone._run_temporal_sequence_with_core(
             hidden,

@@ -130,6 +130,7 @@ class PopulationDeploymentMeasurement:
     routing_feeds_model: bool
     model_latency_ms: float
     routing_latency_ms: float | None
+    complete_stack_latency_ms: float | None
     model_peak_bytes: int
     routing_peak_bytes: int | None
     complete_stack_peak_bytes: int | None
@@ -208,16 +209,18 @@ class PopulationDeploymentTarget:
             raise ValueError(
                 "measurement omits complete-stack peak memory"
             )
-
-        routing_latency = measurement.routing_latency_ms or 0.0
-        complete_latency = (
-            measurement.model_latency_ms + routing_latency
-        )
+        if measurement.complete_stack_latency_ms is None:
+            raise ValueError(
+                "measurement omits direct complete-stack latency"
+            )
         return {
             "population": measurement.population,
-            "complete_step_latency_ms": complete_latency,
+            "complete_step_latency_ms": (
+                measurement.complete_stack_latency_ms
+            ),
             "real_time_target_met": (
-                complete_latency <= self.biological_step_ms
+                measurement.complete_stack_latency_ms
+                <= self.biological_step_ms
             ),
             "personalized_parameter_count": (
                 measurement.population

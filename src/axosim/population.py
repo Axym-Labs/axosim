@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 from torch import nn
@@ -29,13 +29,11 @@ def pack_neuron_behavior_adapter(
         or adapter.rank != personalization.matrix_rank
     ):
         raise ValueError("behavior adapter does not match personalization")
-    if adapter.gru_gate_bias is not None or adapter.synapse_rank:
+    if not personalization.adapt_recurrent:
         raise ValueError(
-            "population ABI excludes rejected gate and synapse adapters"
+            "population ABI requires recurrent behavior adaptation"
         )
-    if personalization.adapt_recurrent != (
-        adapter.gru_recurrent_down is not None
-    ):
+    if adapter.gru_recurrent_down is None:
         raise ValueError("recurrent personalization does not match layout")
 
     tensors = {
@@ -357,7 +355,7 @@ class _PersonalizedGRUBranchStep(_GRUPopulationStep):
         super().__init__(model)
         width = self.weight_hh.shape[1]
         if not isinstance(self.output_projection, nn.Identity):
-            raise ValueError(
+            raise TypeError(
                 "personalized runner requires GRU hidden width to "
                 "match model width"
             )

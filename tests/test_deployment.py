@@ -89,6 +89,7 @@ def test_one_million_target_rejects_model_only_measurement():
         routing_feeds_model=False,
         model_latency_ms=0.7,
         routing_latency_ms=None,
+        complete_stack_latency_ms=None,
         model_peak_bytes=1_000_000_000,
         routing_peak_bytes=None,
         complete_stack_peak_bytes=None,
@@ -126,6 +127,7 @@ def test_one_million_target_uses_complete_step_latency():
         routing_feeds_model=True,
         model_latency_ms=0.62,
         routing_latency_ms=0.35,
+        complete_stack_latency_ms=0.95,
         model_peak_bytes=1_000_000_000,
         routing_peak_bytes=900_000_000,
         complete_stack_peak_bytes=1_500_000_000,
@@ -133,9 +135,38 @@ def test_one_million_target_uses_complete_step_latency():
 
     result = ONE_MILLION_PERSONALIZED_TARGET.evaluate(measurement)
 
-    assert result["complete_step_latency_ms"] == pytest.approx(0.97)
+    assert result["complete_step_latency_ms"] == pytest.approx(0.95)
     assert result["real_time_target_met"]
     assert result["personalized_parameter_count"] == 1_808 * 1_048_576
+
+
+def test_one_million_target_rejects_inferred_complete_latency():
+    measurement = PopulationDeploymentMeasurement(
+        population=1_048_576,
+        personalized_parameters_per_neuron=1_808,
+        personalized_components=tuple(
+            sorted(
+                GRU_BEHAVIOR_PERSONALIZATION.personalized_components
+            )
+        ),
+        shared_components=tuple(
+            sorted(GRU_BEHAVIOR_PERSONALIZATION.shared_components)
+        ),
+        unique_adapter_per_neuron=True,
+        personalization_quality_validated=True,
+        shared_frozen_base=True,
+        output_materialized=True,
+        routing_feeds_model=True,
+        model_latency_ms=0.6,
+        routing_latency_ms=0.3,
+        complete_stack_latency_ms=None,
+        model_peak_bytes=1_000_000_000,
+        routing_peak_bytes=900_000_000,
+        complete_stack_peak_bytes=1_500_000_000,
+    )
+
+    with pytest.raises(ValueError, match="complete-stack latency"):
+        ONE_MILLION_PERSONALIZED_TARGET.evaluate(measurement)
 
 
 @pytest.mark.parametrize(
@@ -167,6 +198,7 @@ def test_one_million_target_rejects_underpersonalized_population(
         routing_feeds_model=True,
         model_latency_ms=0.4,
         routing_latency_ms=0.4,
+        complete_stack_latency_ms=0.8,
         model_peak_bytes=800_000_000,
         routing_peak_bytes=800_000_000,
         complete_stack_peak_bytes=1_200_000_000,
@@ -204,6 +236,7 @@ def test_one_million_target_rejects_disconnected_routing_benchmark():
         routing_feeds_model=False,
         model_latency_ms=0.4,
         routing_latency_ms=0.4,
+        complete_stack_latency_ms=0.8,
         model_peak_bytes=800_000_000,
         routing_peak_bytes=800_000_000,
         complete_stack_peak_bytes=1_200_000_000,

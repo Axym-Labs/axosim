@@ -681,8 +681,6 @@ class BranchOfficialMamba(nn.Module):
         branch_projection_down: torch.Tensor | None = None,
         branch_projection_up: torch.Tensor | None = None,
         branch_projection_adapter_mask: torch.Tensor | None = None,
-        synapse_log_gain_delta: torch.Tensor | None = None,
-        synapse_gain_adapter_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         if x.ndim != 3:
             raise ValueError(f"x must have shape (batch, time, channels), got {tuple(x.shape)}")
@@ -697,21 +695,6 @@ class BranchOfficialMamba(nn.Module):
             routed_events,
             morphology_indices=morphology_indices,
         )
-        if synapse_log_gain_delta is not None:
-            if synapse_gain_adapter_mask is None:
-                raise ValueError(
-                    "synapse gain adaptation requires an adapter mask"
-                )
-            gain = (
-                synapse_gain_adapter_mask.view(-1, 1, 1, 1)
-                * synapse_log_gain_delta.view(
-                    1,
-                    1,
-                    self.num_branch,
-                    self.num_synapse_per_branch,
-                )
-            ).exp()
-            routed_synapses = routed_synapses * gain
         branch_inputs = routed_synapses.sum(dim=-1)
         if self.branch_gain is not None:
             gain = self.branch_gain.to(dtype=branch_inputs.dtype, device=branch_inputs.device)
