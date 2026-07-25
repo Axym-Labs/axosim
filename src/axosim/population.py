@@ -33,6 +33,24 @@ class QuantizedNeuronBehaviorBank:
         )
 
 
+@dataclass(frozen=True)
+class MixedQuantizedNeuronBehaviorBank:
+    """Component-wise W4/W8 storage for a logical adaptation bank."""
+
+    values: torch.Tensor
+    scales: torch.Tensor
+    byte_slices: dict[str, slice]
+    component_bits: dict[str, int]
+    logical_parameters_per_neuron: int
+
+    @property
+    def storage_bytes(self) -> int:
+        return (
+            self.values.numel() * self.values.element_size()
+            + self.scales.numel() * self.scales.element_size()
+        )
+
+
 def quantize_neuron_behavior_parameters(
     parameters: torch.Tensor,
     *,
@@ -90,6 +108,81 @@ def quantize_neuron_behavior_parameters(
     )
 
 
+def quantize_mixed_neuron_behavior_parameters(
+    parameters: torch.Tensor,
+    *,
+    adaptation: NeuronBehaviorAdaptation,
+    component_bits: dict[str, int],
+) -> MixedQuantizedNeuronBehaviorBank:
+    """Quantize each adaptation component to its declared W4/W8 tier."""
+
+    if not parameters.is_floating_point():
+        raise ValueError("behavior parameters must be floating point")
+    if (
+        parameters.ndim != 2
+        or parameters.shape[1] != adaptation.parameter_count
+    ):
+        raise ValueError(
+            "behavior parameters must have shape "
+            f"(population, {adaptation.parameter_count})"
+        )
+    component_names = tuple(adaptation.tensor_shapes)
+    if set(component_bits) != set(component_names):
+        raise ValueError(
+            "component_bits must cover every adaptation component"
+        )
+
+    pieces = []
+    scales = []
+    byte_slices = {}
+    offset = 0
+    for name, selection in adaptation.tensor_slices.items():
+        bits = component_bits[name]
+        if bits not in (4, 8):
+            raise ValueError(
+                "mixed behavior bank components support W8 or W4"
+            )
+        component = parameters[:, selection]
+        if bits == 4 and component.shape[1] % 2:
+            raise ValueError(
+                f"W4 component {name!r} requires an even value count"
+            )
+        qmax = 2 ** (bits - 1) - 1
+        maximum = component.abs().amax()
+        scale = torch.where(
+            maximum > 0,
+            maximum / qmax,
+            torch.ones_like(maximum),
+        )
+        quantized = torch.clamp(
+            torch.round(component / scale),
+            -qmax,
+            qmax,
+        ).to(dtype=torch.int8)
+        scales.append(scale)
+        if bits == 4:
+            encoded = torch.bitwise_and(
+                quantized.to(dtype=torch.int16),
+                15,
+            ).to(dtype=torch.uint8)
+            piece = (
+                encoded[:, 0::2] | (encoded[:, 1::2] << 4)
+            ).to(dtype=torch.int8)
+        else:
+            piece = quantized
+        width = piece.shape[1]
+        pieces.append(piece)
+        byte_slices[name] = slice(offset, offset + width)
+        offset += width
+    return MixedQuantizedNeuronBehaviorBank(
+        values=torch.cat(pieces, dim=1),
+        scales=torch.stack(scales).to(dtype=parameters.dtype),
+        byte_slices=byte_slices,
+        component_bits=dict(component_bits),
+        logical_parameters_per_neuron=adaptation.parameter_count,
+    )
+
+
 def dequantize_neuron_behavior_parameters(
     bank: QuantizedNeuronBehaviorBank,
     *,
@@ -118,6 +211,42 @@ def dequantize_neuron_behavior_parameters(
         result[:, selection] = (
             flat[:, selection].to(dtype=result.dtype)
             * bank.scales[index]
+        )
+    return result
+
+
+def dequantize_mixed_neuron_behavior_parameters(
+    bank: MixedQuantizedNeuronBehaviorBank,
+    *,
+    adaptation: NeuronBehaviorAdaptation,
+) -> torch.Tensor:
+    """Materialize a component-wise W4/W8 adaptation bank."""
+
+    _validate_mixed_quantized_behavior_bank(
+        bank,
+        adaptation=adaptation,
+    )
+    result = torch.empty(
+        bank.values.shape[0],
+        adaptation.parameter_count,
+        device=bank.values.device,
+        dtype=bank.scales.dtype,
+    )
+    for index, (name, destination) in enumerate(
+        adaptation.tensor_slices.items()
+    ):
+        values = bank.values[:, bank.byte_slices[name]]
+        if bank.component_bits[name] == 4:
+            packed = values.to(dtype=torch.int16)
+            low = torch.bitwise_and(packed, 15)
+            high = torch.bitwise_and(
+                torch.bitwise_right_shift(packed, 4),
+                15,
+            )
+            values = torch.stack((low, high), dim=-1).flatten(1)
+            values = torch.where(values >= 8, values - 16, values)
+        result[:, destination] = (
+            values.to(dtype=result.dtype) * bank.scales[index]
         )
     return result
 
@@ -151,6 +280,62 @@ def _validate_quantized_behavior_bank(
         )
     if not bank.scales.is_floating_point():
         raise ValueError("quantized behavior scales must be floating point")
+
+
+def _validate_mixed_quantized_behavior_bank(
+    bank: MixedQuantizedNeuronBehaviorBank,
+    *,
+    adaptation: NeuronBehaviorAdaptation,
+) -> None:
+    if bank.logical_parameters_per_neuron != adaptation.parameter_count:
+        raise ValueError("mixed quantized bank does not match adaptation")
+    names = tuple(adaptation.tensor_shapes)
+    if set(bank.component_bits) != set(names):
+        raise ValueError(
+            "mixed quantized bank must cover every adaptation component"
+        )
+    if set(bank.byte_slices) != set(names):
+        raise ValueError(
+            "mixed quantized bank requires one byte slice per component"
+        )
+    expected_offset = 0
+    for name, logical_slice in adaptation.tensor_slices.items():
+        bits = bank.component_bits[name]
+        if bits not in (4, 8):
+            raise ValueError(
+                "mixed behavior bank components support W8 or W4"
+            )
+        logical_count = logical_slice.stop - logical_slice.start
+        if bits == 4 and logical_count % 2:
+            raise ValueError(
+                f"W4 component {name!r} requires an even value count"
+            )
+        expected_width = logical_count if bits == 8 else logical_count // 2
+        byte_slice = bank.byte_slices[name]
+        if (
+            byte_slice.start != expected_offset
+            or byte_slice.stop != expected_offset + expected_width
+        ):
+            raise ValueError(
+                "mixed quantized bank byte slices must be contiguous"
+            )
+        expected_offset += expected_width
+    if (
+        bank.values.ndim != 2
+        or bank.values.shape[1] != expected_offset
+        or bank.values.dtype != torch.int8
+    ):
+        raise ValueError(
+            "mixed quantized behavior values have the wrong layout"
+        )
+    if bank.scales.shape != (len(names),):
+        raise ValueError(
+            "mixed quantized bank requires one scale per component"
+        )
+    if not bank.scales.is_floating_point():
+        raise ValueError(
+            "mixed quantized behavior scales must be floating point"
+        )
 
 
 def pack_neuron_behavior_adapter(
@@ -890,6 +1075,83 @@ class _PatchedQuantizedAdaptedGRUBranchStep(
         )
 
 
+class _MixedQuantizedAdaptedParameterMixin:
+    def _configure_mixed_quantized_parameters(
+        self,
+        *,
+        bank: MixedQuantizedNeuronBehaviorBank,
+    ) -> None:
+        self._mixed_byte_slices = bank.byte_slices
+        self._mixed_component_bits = bank.component_bits
+        self._scale_indices = {
+            name: index
+            for index, name in enumerate(self.adaptation.tensor_shapes)
+        }
+        self.register_buffer("adaptation_scales", bank.scales)
+
+    def _parameter(
+        self,
+        behavior_parameters: torch.Tensor,
+        name: str,
+    ) -> torch.Tensor:
+        values = behavior_parameters[
+            :,
+            self._mixed_byte_slices[name],
+        ]
+        if self._mixed_component_bits[name] == 4:
+            packed = values.to(dtype=torch.int16)
+            low = torch.bitwise_and(packed, 15)
+            high = torch.bitwise_and(
+                torch.bitwise_right_shift(packed, 4),
+                15,
+            )
+            values = torch.stack((low, high), dim=-1).flatten(1)
+            values = torch.where(values >= 8, values - 16, values)
+        decoded = (
+            values.to(dtype=self.weight_hh.dtype)
+            * self.adaptation_scales[self._scale_indices[name]]
+        )
+        return decoded.view(
+            behavior_parameters.shape[0],
+            *self._tensor_shapes[name],
+        )
+
+
+class _NativeMixedQuantizedAdaptedGRUBranchStep(
+    _MixedQuantizedAdaptedParameterMixin,
+    _NativeAdaptedGRUBranchStep,
+):
+    def __init__(
+        self,
+        model: AxoTemporalModel,
+        *,
+        adaptation: NeuronBehaviorAdaptation,
+        bank: MixedQuantizedNeuronBehaviorBank,
+    ) -> None:
+        super().__init__(model, adaptation=adaptation)
+        self._configure_mixed_quantized_parameters(bank=bank)
+
+
+class _PatchedMixedQuantizedAdaptedGRUBranchStep(
+    _MixedQuantizedAdaptedParameterMixin,
+    _PatchedAdaptedGRUBranchStep,
+):
+    def __init__(
+        self,
+        model: AxoTemporalModel,
+        *,
+        adaptation: NeuronBehaviorAdaptation,
+        close_patch: bool,
+        bank: MixedQuantizedNeuronBehaviorBank,
+    ) -> None:
+        super().__init__(
+            model,
+            adaptation=adaptation,
+            close_patch=close_patch,
+        )
+        self._configure_mixed_quantized_parameters(bank=bank)
+
+
 class _GroupedGRUPopulationStep(_GRUPopulationStep):
     GROUP_PARAMETER_NAMES = (
         "group_weight_ih",
@@ -1439,7 +1701,9 @@ class AdaptedGRUBranchPopulationRunner(
         population: int,
         chunk_size: int,
         behavior_parameters: (
-            torch.Tensor | QuantizedNeuronBehaviorBank
+            torch.Tensor
+            | QuantizedNeuronBehaviorBank
+            | MixedQuantizedNeuronBehaviorBank
         ),
         adaptation: NeuronBehaviorAdaptation,
         compile_step: bool = True,
@@ -1464,7 +1728,15 @@ class AdaptedGRUBranchPopulationRunner(
             )
             else None
         )
-        if quantized_bank is None:
+        mixed_quantized_bank = (
+            behavior_parameters
+            if isinstance(
+                behavior_parameters,
+                MixedQuantizedNeuronBehaviorBank,
+            )
+            else None
+        )
+        if quantized_bank is None and mixed_quantized_bank is None:
             expected_shape = (
                 population,
                 adaptation.parameter_count,
@@ -1483,7 +1755,7 @@ class AdaptedGRUBranchPopulationRunner(
                     "behavior parameters must match the model dtype"
                 )
             storage = behavior_parameters
-        else:
+        elif quantized_bank is not None:
             _validate_quantized_behavior_bank(
                 quantized_bank,
                 adaptation=adaptation,
@@ -1504,10 +1776,38 @@ class AdaptedGRUBranchPopulationRunner(
                     "quantized behavior scales must match model dtype"
                 )
             storage = quantized_bank.values
+        else:
+            assert mixed_quantized_bank is not None
+            _validate_mixed_quantized_behavior_bank(
+                mixed_quantized_bank,
+                adaptation=adaptation,
+            )
+            if mixed_quantized_bank.values.shape[0] != population:
+                raise ValueError(
+                    "mixed quantized behavior bank population does not match"
+                )
+            if (
+                mixed_quantized_bank.values.device != self.device
+                or mixed_quantized_bank.scales.device != self.device
+            ):
+                raise ValueError(
+                    "mixed quantized behavior bank must be on the model device"
+                )
+            if mixed_quantized_bank.scales.dtype != self.dtype:
+                raise ValueError(
+                    "mixed quantized behavior scales must match model dtype"
+                )
+            storage = mixed_quantized_bank.values
         self.behavior_parameters = storage
         self.quantized_behavior_bank = quantized_bank
+        self.mixed_quantized_behavior_bank = mixed_quantized_bank
         self.quantization_bits = (
             None if quantized_bank is None else quantized_bank.bits
+        )
+        self.component_quantization_bits = (
+            None
+            if mixed_quantized_bank is None
+            else dict(mixed_quantized_bank.component_bits)
         )
         self.adaptation = adaptation
         self.compile_mode = compile_mode
@@ -1534,7 +1834,13 @@ class AdaptedGRUBranchPopulationRunner(
             compile_module = lambda module: module
 
         if self.patch_size == 1:
-            if quantized_bank is None:
+            if mixed_quantized_bank is not None:
+                native = _NativeMixedQuantizedAdaptedGRUBranchStep(
+                    model,
+                    adaptation=adaptation,
+                    bank=mixed_quantized_bank,
+                )
+            elif quantized_bank is None:
                 native: nn.Module = _NativeAdaptedGRUBranchStep(
                     model,
                     adaptation=adaptation,
@@ -1551,7 +1857,24 @@ class AdaptedGRUBranchPopulationRunner(
             self._close_step = None
         else:
             self._native_step = None
-            if quantized_bank is None:
+            if mixed_quantized_bank is not None:
+                open_step = (
+                    _PatchedMixedQuantizedAdaptedGRUBranchStep(
+                        model,
+                        adaptation=adaptation,
+                        close_patch=False,
+                        bank=mixed_quantized_bank,
+                    )
+                )
+                close_step = (
+                    _PatchedMixedQuantizedAdaptedGRUBranchStep(
+                        model,
+                        adaptation=adaptation,
+                        close_patch=True,
+                        bank=mixed_quantized_bank,
+                    )
+                )
+            elif quantized_bank is None:
                 open_step: nn.Module = _PatchedAdaptedGRUBranchStep(
                     model,
                     adaptation=adaptation,

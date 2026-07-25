@@ -13,10 +13,13 @@ __all__ = [
     "AxoMambaConfig",
     "BranchELM",
     "BranchELMConfig",
+    "MixedQuantizedNeuronBehaviorBank",
     "ProceduralMorphologyConnectomeRouter",
     "compact_active_sources",
+    "dequantize_mixed_neuron_behavior_parameters",
     "LargePopulationSimulationContract",
     "MILLION_NEURON_REALTIME_CONTRACT",
+    "quantize_mixed_neuron_behavior_parameters",
 ]
 
 
@@ -60,5 +63,27 @@ def __getattr__(name: str) -> Any:
                 ProceduralMorphologyConnectomeRouter
             ),
             "compact_active_sources": compact_active_sources,
+        }[name]
+    if name in {
+        "MixedQuantizedNeuronBehaviorBank",
+        "dequantize_mixed_neuron_behavior_parameters",
+        "quantize_mixed_neuron_behavior_parameters",
+    }:
+        from axosim.population import (
+            MixedQuantizedNeuronBehaviorBank,
+            dequantize_mixed_neuron_behavior_parameters,
+            quantize_mixed_neuron_behavior_parameters,
+        )
+
+        return {
+            "MixedQuantizedNeuronBehaviorBank": (
+                MixedQuantizedNeuronBehaviorBank
+            ),
+            "dequantize_mixed_neuron_behavior_parameters": (
+                dequantize_mixed_neuron_behavior_parameters
+            ),
+            "quantize_mixed_neuron_behavior_parameters": (
+                quantize_mixed_neuron_behavior_parameters
+            ),
         }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

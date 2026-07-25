@@ -27,8 +27,10 @@ from axosim.population import (
     GroupedGRUPopulationRunner,
     GRUBranchPopulationRunner,
     GRUPopulationRunner,
+    dequantize_mixed_neuron_behavior_parameters,
     dequantize_neuron_behavior_parameters,
     pack_neuron_behavior_adapter,
+    quantize_mixed_neuron_behavior_parameters,
     quantize_neuron_behavior_parameters,
 )
 from axosim.temporal_core import (
@@ -1121,6 +1123,87 @@ def test_quantized_adapted_runner_matches_dequantized_reference(
         else adaptation.parameter_count // 2
     )
     assert bank.values.shape == (population, expected_columns)
+
+
+@pytest.mark.parametrize("patch_size", [1, 4])
+def test_mixed_quantized_runner_matches_dequantized_reference(
+    patch_size,
+):
+    torch.manual_seed(71)
+    base = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(kind="gru", patch_size=patch_size),
+    ).eval()
+    adaptation = NeuronBehaviorAdaptation(
+        width=base.config.model_dim,
+        branches=base.num_branch,
+        outputs=base.num_output,
+        matrix_rank=2,
+        adapt_recurrent=True,
+    )
+    transition_names = {
+        "recurrent_output_gain",
+        "gru_input_down",
+        "gru_input_up",
+        "gru_recurrent_down",
+        "gru_recurrent_up",
+    }
+    component_bits = {
+        name: 8 if name in transition_names else 4
+        for name in adaptation.tensor_shapes
+    }
+    population = 4
+    parameters = torch.randn(
+        population,
+        adaptation.parameter_count,
+    ) * 0.04
+    bank = quantize_mixed_neuron_behavior_parameters(
+        parameters,
+        adaptation=adaptation,
+        component_bits=component_bits,
+    )
+    dequantized = dequantize_mixed_neuron_behavior_parameters(
+        bank,
+        adaptation=adaptation,
+    )
+    reference = AdaptedGRUBranchPopulationRunner(
+        base,
+        population=population,
+        chunk_size=2,
+        behavior_parameters=dequantized,
+        adaptation=adaptation,
+        compile_step=False,
+    )
+    candidate = AdaptedGRUBranchPopulationRunner(
+        base,
+        population=population,
+        chunk_size=2,
+        behavior_parameters=bank,
+        adaptation=adaptation,
+        compile_step=False,
+    )
+    morphology = torch.tensor([0, 1, 1, 0])
+    for _ in range(9):
+        branch_inputs = torch.randn(population, base.num_branch)
+        expected = reference.step(branch_inputs, morphology).clone()
+        actual = candidate.step(branch_inputs, morphology).clone()
+        torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(
+        candidate.recurrent_state,
+        reference.recurrent_state,
+    )
+    expected_columns = sum(
+        (
+            selection.stop - selection.start
+            if component_bits[name] == 8
+            else (selection.stop - selection.start) // 2
+        )
+        for name, selection in adaptation.tensor_slices.items()
+    )
+    assert bank.values.shape == (population, expected_columns)
+    assert bank.values.dtype == torch.int8
+    assert candidate.quantization_bits is None
+    assert candidate.component_quantization_bits == component_bits
 
 
 @pytest.mark.parametrize("patch_size", [1, 2])

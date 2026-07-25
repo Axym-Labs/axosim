@@ -151,6 +151,12 @@ default: at 1,048,576 neurons it halves adaptation storage and improves
 model/connected throughput by 26.7%/13.0% versus FP16 while clearing the
 held-out SERA and F1 gates. W4 is a memory-capacity tier; its 75% bank
 reduction does not clear the connected-runtime gate.
+`quantize_mixed_neuron_behavior_parameters` supports component-wise W4/W8
+placement. The measured capacity tier keeps the 986 transition values in W8
+and stores the remaining 822 branch, latent, and readout values in W4. It
+reduces the adaptation bank by 22.7% versus W8 without slowing the model
+cycle, but W8 remains the defensive target contract until heterogeneous
+adaptation is validated under the mixed bank.
 
 Both runners consume sparse event indices and values for one causal timestep.
 Network fanout, delay queues, and event delivery remain separate simulator
