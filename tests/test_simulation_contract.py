@@ -11,9 +11,9 @@ def test_million_neuron_contract_preserves_defensive_adaptation() -> None:
     contract = MILLION_NEURON_REALTIME_CONTRACT
 
     assert contract.every_neuron_has_custom_adaptation
-    assert contract.logical_adaptation_values_per_neuron == 1_808
+    assert contract.logical_adaptation_values_per_neuron == 1_278
     assert contract.adaptation_storage_bits == 8
-    assert contract.adaptation_bank_bytes == 1_895_825_408
+    assert contract.adaptation_bank_bytes == 1_340_080_128
 
 
 def test_million_neuron_contract_includes_network_work() -> None:

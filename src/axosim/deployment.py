@@ -12,29 +12,45 @@ class NeuronBehaviorAdaptation:
     outputs: int
     matrix_rank: int
     adapt_recurrent: bool
+    branch_token_offset: bool = False
 
     @property
     def tensor_shapes(self) -> dict[str, tuple[int, ...]]:
-        shapes = {
-            "branch_log_gain": (self.branches,),
-            "branch_bias": (self.branches,),
-            "latent_gain": (self.width,),
-            "latent_offset": (self.width,),
-            "recurrent_output_gain": (self.width,),
-            "readout_weight": (self.outputs, self.width),
-            "readout_bias": (self.outputs,),
-        }
-        if self.matrix_rank:
+        shapes: dict[str, tuple[int, ...]] = {}
+        if self.branch_token_offset:
+            shapes["branch_token_offset"] = (self.width,)
+        else:
             shapes.update(
                 {
-                    "branch_projection_down": (
-                        self.matrix_rank,
-                        self.branches,
-                    ),
-                    "branch_projection_up": (
-                        self.width,
-                        self.matrix_rank,
-                    ),
+                    "branch_log_gain": (self.branches,),
+                    "branch_bias": (self.branches,),
+                }
+            )
+        shapes.update(
+            {
+                "latent_gain": (self.width,),
+                "latent_offset": (self.width,),
+                "recurrent_output_gain": (self.width,),
+                "readout_weight": (self.outputs, self.width),
+                "readout_bias": (self.outputs,),
+            }
+        )
+        if self.matrix_rank:
+            if not self.branch_token_offset:
+                shapes.update(
+                    {
+                        "branch_projection_down": (
+                            self.matrix_rank,
+                            self.branches,
+                        ),
+                        "branch_projection_up": (
+                            self.width,
+                            self.matrix_rank,
+                        ),
+                    }
+                )
+            shapes.update(
+                {
                     "gru_input_down": (
                         self.matrix_rank,
                         self.width,
@@ -75,17 +91,21 @@ class NeuronBehaviorAdaptation:
     @property
     def parameter_counts(self) -> dict[str, int]:
         counts = {
-            "branch_gain": self.branches,
-            "branch_bias": self.branches,
             "latent_gain": self.width,
             "latent_offset": self.width,
             "recurrent_output_gain": self.width,
             "readout": self.outputs * (self.width + 1),
         }
+        if self.branch_token_offset:
+            counts["branch_token_offset"] = self.width
+        else:
+            counts["branch_gain"] = self.branches
+            counts["branch_bias"] = self.branches
         if self.matrix_rank:
-            counts["branch_projection_low_rank"] = (
-                self.matrix_rank * (self.branches + self.width)
-            )
+            if not self.branch_token_offset:
+                counts["branch_projection_low_rank"] = (
+                    self.matrix_rank * (self.branches + self.width)
+                )
             counts["gru_input_low_rank"] = (
                 self.matrix_rank * (4 * self.width)
             )
@@ -356,12 +376,22 @@ class PopulationDeploymentTarget:
         }
 
 
+GRU_DIRECT_BRANCH_ADAPTATION = NeuronBehaviorAdaptation(
+    width=58,
+    branches=118,
+    outputs=2,
+    matrix_rank=2,
+    adapt_recurrent=True,
+)
+
+
 GRU_BEHAVIOR_ADAPTATION = NeuronBehaviorAdaptation(
     width=58,
     branches=118,
     outputs=2,
     matrix_rank=2,
     adapt_recurrent=True,
+    branch_token_offset=True,
 )
 
 

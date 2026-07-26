@@ -6,6 +6,7 @@ import pytest
 
 from axosim.deployment import (
     GRU_BEHAVIOR_ADAPTATION,
+    GRU_DIRECT_BRANCH_ADAPTATION,
     ONE_MILLION_ADAPTED_TARGET,
     PopulationDeploymentMeasurement,
 )
@@ -14,7 +15,7 @@ from axosim.deployment import (
 def _valid_measurement() -> PopulationDeploymentMeasurement:
     return PopulationDeploymentMeasurement(
         population=1_048_576,
-        adapted_parameters_per_neuron=1_808,
+        adapted_parameters_per_neuron=1_278,
         adapted_components=tuple(
             sorted(GRU_BEHAVIOR_ADAPTATION.adapted_components)
         ),
@@ -50,28 +51,23 @@ def test_one_million_target_requires_adaptation_and_routing():
     assert target.headline_population == 1_000_000
     assert target.benchmark_population >= target.headline_population
     assert target.adaptation == GRU_BEHAVIOR_ADAPTATION
-    assert target.adapted_parameters_per_neuron == 1_808
+    assert target.adapted_parameters_per_neuron == 1_278
     assert target.adaptation.parameter_counts == {
-        "branch_gain": 118,
-        "branch_bias": 118,
+        "branch_token_offset": 58,
         "latent_gain": 58,
         "latent_offset": 58,
         "recurrent_output_gain": 58,
         "readout": 118,
-        "branch_projection_low_rank": 352,
         "gru_input_low_rank": 464,
         "gru_recurrent_low_rank": 464,
     }
     assert target.adaptation.tensor_shapes == {
-        "branch_log_gain": (118,),
-        "branch_bias": (118,),
+        "branch_token_offset": (58,),
         "latent_gain": (58,),
         "latent_offset": (58,),
         "recurrent_output_gain": (58,),
         "readout_weight": (2, 58),
         "readout_bias": (2,),
-        "branch_projection_down": (2, 118),
-        "branch_projection_up": (58, 2),
         "gru_input_down": (2, 58),
         "gru_input_up": (174, 2),
         "gru_recurrent_down": (2, 58),
@@ -79,7 +75,7 @@ def test_one_million_target_requires_adaptation_and_routing():
     }
     assert (
         target.adaptation.tensor_slices["gru_recurrent_up"].stop
-        == 1_808
+        == 1_278
     )
     assert target.adaptation.shared_components == frozenset(
         {
@@ -102,14 +98,21 @@ def test_one_million_target_requires_adaptation_and_routing():
     assert target.fanout == 1_278
 
 
+def test_direct_branch_adaptation_remains_an_explicit_reference():
+    assert GRU_DIRECT_BRANCH_ADAPTATION.parameter_count == 1_808
+    assert not GRU_DIRECT_BRANCH_ADAPTATION.branch_token_offset
+    assert (
+        "branch_projection_low_rank"
+        in GRU_DIRECT_BRANCH_ADAPTATION.adapted_components
+    )
+
+
 def test_one_million_target_rejects_model_only_measurement():
     measurement = PopulationDeploymentMeasurement(
         population=1_048_576,
-        adapted_parameters_per_neuron=1_808,
+        adapted_parameters_per_neuron=1_278,
         adapted_components=(
-            "branch_gain",
-            "branch_bias",
-            "branch_projection_low_rank",
+            "branch_token_offset",
             "gru_input_low_rank",
             "gru_recurrent_low_rank",
             "latent_gain",
@@ -149,7 +152,7 @@ def test_one_million_target_uses_complete_step_latency():
     assert result["complete_block_latency_ms"] == pytest.approx(3.8)
     assert result["forecast_block_size"] == 4
     assert result["real_time_target_met"]
-    assert result["adapted_parameter_count"] == 1_808 * 1_048_576
+    assert result["adapted_parameter_count"] == 1_278 * 1_048_576
 
 
 @pytest.mark.parametrize(
@@ -217,7 +220,7 @@ def test_target_reports_all_provisional_headline_violations():
 def test_one_million_target_rejects_inferred_complete_latency():
     measurement = PopulationDeploymentMeasurement(
         population=1_048_576,
-        adapted_parameters_per_neuron=1_808,
+        adapted_parameters_per_neuron=1_278,
         adapted_components=tuple(
             sorted(
                 GRU_BEHAVIOR_ADAPTATION.adapted_components
@@ -285,11 +288,9 @@ def test_one_million_target_rejects_underadapted_population(
 def test_one_million_target_rejects_disconnected_routing_benchmark():
     measurement = PopulationDeploymentMeasurement(
         population=1_048_576,
-        adapted_parameters_per_neuron=1_808,
+        adapted_parameters_per_neuron=1_278,
         adapted_components=(
-            "branch_gain",
-            "branch_bias",
-            "branch_projection_low_rank",
+            "branch_token_offset",
             "gru_input_low_rank",
             "gru_recurrent_low_rank",
             "latent_gain",

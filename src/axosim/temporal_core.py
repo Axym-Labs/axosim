@@ -39,6 +39,7 @@ class AxoTemporalCoreConfig:
     patch_size: int = 1
     behavior_adapter_morphology_id: str | None = None
     behavior_adapter_rank: int = 0
+    behavior_adapter_branch_token_offset: bool = False
 
     def __post_init__(self) -> None:
         if self.kind not in {"mamba", "gru", "branch_rnn"}:
@@ -75,6 +76,13 @@ class AxoTemporalCoreConfig:
             raise ValueError(
                 "low-rank behavior adaptation requires a target morphology"
             )
+        if (
+            self.behavior_adapter_branch_token_offset
+            and self.behavior_adapter_morphology_id is None
+        ):
+            raise ValueError(
+                "branch token adaptation requires a target morphology"
+            )
 
 
 class NeuronBehaviorAdapter(nn.Module):
@@ -88,6 +96,7 @@ class NeuronBehaviorAdapter(nn.Module):
         outputs: int,
         morphology_index: int,
         rank: int = 0,
+        branch_token_offset: bool = False,
     ) -> None:
         super().__init__()
         self.branches = branches
@@ -95,20 +104,32 @@ class NeuronBehaviorAdapter(nn.Module):
         self.outputs = outputs
         self.morphology_index = morphology_index
         self.rank = rank
-        self.branch_log_gain = nn.Parameter(torch.zeros(branches))
-        self.branch_bias = nn.Parameter(torch.zeros(branches))
+        if branch_token_offset:
+            self.register_parameter("branch_log_gain", None)
+            self.register_parameter("branch_bias", None)
+        else:
+            self.branch_log_gain = nn.Parameter(torch.zeros(branches))
+            self.branch_bias = nn.Parameter(torch.zeros(branches))
         self.latent_gain = nn.Parameter(torch.zeros(width))
         self.latent_offset = nn.Parameter(torch.zeros(width))
         self.recurrent_output_gain = nn.Parameter(torch.zeros(width))
         self.readout_weight = nn.Parameter(torch.zeros(outputs, width))
         self.readout_bias = nn.Parameter(torch.zeros(outputs))
+        if branch_token_offset:
+            self.branch_token_offset = nn.Parameter(torch.zeros(width))
+        else:
+            self.register_parameter("branch_token_offset", None)
         if rank:
-            self.branch_projection_down = nn.Parameter(
-                torch.empty(rank, branches)
-            )
-            self.branch_projection_up = nn.Parameter(
-                torch.zeros(width, rank)
-            )
+            if branch_token_offset:
+                self.register_parameter("branch_projection_down", None)
+                self.register_parameter("branch_projection_up", None)
+            else:
+                self.branch_projection_down = nn.Parameter(
+                    torch.empty(rank, branches)
+                )
+                self.branch_projection_up = nn.Parameter(
+                    torch.zeros(width, rank)
+                )
             self.gru_input_down = nn.Parameter(
                 torch.empty(rank, width)
             )
@@ -121,11 +142,13 @@ class NeuronBehaviorAdapter(nn.Module):
             self.gru_recurrent_up = nn.Parameter(
                 torch.zeros(3 * width, rank)
             )
-            for parameter in (
-                self.branch_projection_down,
+            down_parameters = [
                 self.gru_input_down,
                 self.gru_recurrent_down,
-            ):
+            ]
+            if self.branch_projection_down is not None:
+                down_parameters.append(self.branch_projection_down)
+            for parameter in down_parameters:
                 nn.init.kaiming_uniform_(parameter, a=5**0.5)
         else:
             self.branch_projection_down = None
@@ -138,8 +161,6 @@ class NeuronBehaviorAdapter(nn.Module):
     @property
     def parameter_counts(self) -> dict[str, int]:
         counts = {
-            "branch_gain": self.branch_log_gain.numel(),
-            "branch_bias": self.branch_bias.numel(),
             "latent_gain": self.latent_gain.numel(),
             "latent_offset": self.latent_offset.numel(),
             "recurrent_output_gain": (
@@ -150,22 +171,26 @@ class NeuronBehaviorAdapter(nn.Module):
                 + self.readout_bias.numel()
             ),
         }
+        if self.branch_log_gain is not None:
+            assert self.branch_bias is not None
+            counts["branch_gain"] = self.branch_log_gain.numel()
+            counts["branch_bias"] = self.branch_bias.numel()
+        if self.branch_token_offset is not None:
+            counts["branch_token_offset"] = (
+                self.branch_token_offset.numel()
+            )
         if self.rank:
-            assert self.branch_projection_down is not None
-            assert self.branch_projection_up is not None
             assert self.gru_input_down is not None
             assert self.gru_input_up is not None
-            counts.update(
-                {
-                    "branch_projection_low_rank": (
-                        self.branch_projection_down.numel()
-                        + self.branch_projection_up.numel()
-                    ),
-                    "gru_input_low_rank": (
-                        self.gru_input_down.numel()
-                        + self.gru_input_up.numel()
-                    ),
-                }
+            if self.branch_projection_down is not None:
+                assert self.branch_projection_up is not None
+                counts["branch_projection_low_rank"] = (
+                    self.branch_projection_down.numel()
+                    + self.branch_projection_up.numel()
+                )
+            counts["gru_input_low_rank"] = (
+                self.gru_input_down.numel()
+                + self.gru_input_up.numel()
             )
             assert self.gru_recurrent_down is not None
             assert self.gru_recurrent_up is not None
@@ -491,6 +516,9 @@ class AxoTemporalModel(nn.Module):
                 outputs=self.num_output,
                 morphology_index=morphology_ids.index(behavior_id),
                 rank=temporal_config.behavior_adapter_rank,
+                branch_token_offset=(
+                    temporal_config.behavior_adapter_branch_token_offset
+                ),
             )
 
     @property
@@ -534,16 +562,19 @@ class AxoTemporalModel(nn.Module):
             adapter_mask = (
                 morphology_indices == adapter.morphology_index
             ).to(dtype=x.dtype, device=x.device)
-            branch_log_gain = (
-                adapter_mask.unsqueeze(1) * adapter.branch_log_gain
-            )
-            branch_bias = (
-                adapter_mask.unsqueeze(1) * adapter.branch_bias
-            )
-            branch_projection_down = (
-                adapter.branch_projection_down
-            )
-            branch_projection_up = adapter.branch_projection_up
+            if adapter.branch_log_gain is not None:
+                assert adapter.branch_bias is not None
+                branch_log_gain = (
+                    adapter_mask.unsqueeze(1)
+                    * adapter.branch_log_gain
+                )
+                branch_bias = (
+                    adapter_mask.unsqueeze(1) * adapter.branch_bias
+                )
+                branch_projection_down = (
+                    adapter.branch_projection_down
+                )
+                branch_projection_up = adapter.branch_projection_up
         hidden, local_source, highpass_features = (
             self.backbone._encode_sequence(
                 x,
@@ -569,6 +600,12 @@ class AxoTemporalModel(nn.Module):
                 + latent_mask
                 * adapter.latent_offset.view(1, 1, -1)
             )
+            if adapter.branch_token_offset is not None:
+                hidden = (
+                    hidden
+                    + latent_mask
+                    * adapter.branch_token_offset.view(1, 1, -1)
+                )
             local_source = hidden
             temporal_input = hidden
         temporal_kwargs = {}

@@ -350,6 +350,10 @@ def pack_neuron_behavior_adapter(
         or adapter.width != adaptation.width
         or adapter.outputs != adaptation.outputs
         or adapter.rank != adaptation.matrix_rank
+        or (
+            (adapter.branch_token_offset is not None)
+            != adaptation.branch_token_offset
+        )
     ):
         raise ValueError("behavior adapter does not match adaptation")
     if not adaptation.adapt_recurrent:
@@ -362,6 +366,7 @@ def pack_neuron_behavior_adapter(
     tensors = {
         "branch_log_gain": adapter.branch_log_gain,
         "branch_bias": adapter.branch_bias,
+        "branch_token_offset": adapter.branch_token_offset,
         "latent_gain": adapter.latent_gain,
         "latent_offset": adapter.latent_offset,
         "recurrent_output_gain": adapter.recurrent_output_gain,
@@ -732,14 +737,15 @@ class _AdaptedGRUBranchStep(_GRUPopulationStep):
                 device=branch.device,
             )
             branch = branch * gain.view(1, 1, -1)
-        branch = branch + self._parameter(
-            behavior_parameters,
-            "branch_bias",
-        ).unsqueeze(1)
-        branch = branch * self._parameter(
-            behavior_parameters,
-            "branch_log_gain",
-        ).unsqueeze(1).exp()
+        if "branch_bias" in self._tensor_slices:
+            branch = branch + self._parameter(
+                behavior_parameters,
+                "branch_bias",
+            ).unsqueeze(1)
+            branch = branch * self._parameter(
+                behavior_parameters,
+                "branch_log_gain",
+            ).unsqueeze(1).exp()
         if self.backbone.config.branch_nonlinearity == "tanh":
             assert self.backbone.branch_nonlinearity_log_scale is not None
             assert self.backbone.branch_nonlinearity_bias is not None
@@ -760,7 +766,7 @@ class _AdaptedGRUBranchStep(_GRUPopulationStep):
             )
 
         hidden = self.backbone.branch_projection(branch)
-        if self.rank:
+        if "branch_projection_down" in self._tensor_slices:
             branch_correction = self._low_rank_correction(
                 branch.squeeze(1),
                 self._parameter(
@@ -791,7 +797,7 @@ class _AdaptedGRUBranchStep(_GRUPopulationStep):
                 * embedding.unsqueeze(1)
             )
         hidden = hidden.squeeze(1)
-        return (
+        hidden = (
             hidden
             * (
                 1.0
@@ -805,6 +811,12 @@ class _AdaptedGRUBranchStep(_GRUPopulationStep):
                 "latent_offset",
             )
         )
+        if "branch_token_offset" in self._tensor_slices:
+            hidden = hidden + self._parameter(
+                behavior_parameters,
+                "branch_token_offset",
+            )
+        return hidden
 
     def _advance_adapted(
         self,

@@ -274,6 +274,49 @@ def test_gru_low_rank_behavior_adapter_updates_shared_matrix_subspaces():
     )
 
 
+def test_gru_branch_token_offset_replaces_branch_side_adaptation():
+    torch.manual_seed(15)
+    model = create_temporal_model(
+        _source_model(),
+        AxoTemporalCoreConfig(
+            kind="gru",
+            patch_size=2,
+            behavior_adapter_morphology_id="morph-b",
+            behavior_adapter_rank=2,
+            behavior_adapter_branch_token_offset=True,
+        ),
+    ).eval()
+    adapter = model.behavior_adapter
+    assert adapter is not None
+    assert adapter.parameter_counts["branch_token_offset"] == 6
+    assert adapter.parameter_count == 134
+    assert adapter.branch_log_gain is None
+    assert adapter.branch_bias is None
+    assert adapter.branch_projection_down is None
+    assert adapter.branch_projection_up is None
+
+    x = torch.randn(2, 8, 8)
+    morphology = torch.tensor([0, 1])
+    baseline = model(x, morphology_indices=morphology)
+    assert adapter.branch_token_offset is not None
+    with torch.no_grad():
+        adapter.branch_token_offset.normal_(mean=0.0, std=0.1)
+    adapted = model(x, morphology_indices=morphology)
+
+    torch.testing.assert_close(adapted[0], baseline[0])
+    assert not torch.allclose(adapted[1], baseline[1])
+    adapted[1].square().mean().backward()
+    assert adapter.branch_token_offset.grad is not None
+
+
+def test_branch_token_offset_requires_behavior_adapter():
+    with pytest.raises(ValueError, match="target morphology"):
+        AxoTemporalCoreConfig(
+            kind="gru",
+            behavior_adapter_branch_token_offset=True,
+        )
+
+
 def test_gru_behavior_adapter_checkpoint_round_trips(tmp_path):
     torch.manual_seed(13)
     model = create_temporal_model(
@@ -932,9 +975,11 @@ def test_gru_branch_population_runner_matches_sparse_events(patch_size):
         )
 
 
+@pytest.mark.parametrize("branch_token_offset", [False, True])
 @pytest.mark.parametrize("patch_size", [1, 4])
 def test_adapted_gru_branch_runner_matches_individual_models(
     patch_size,
+    branch_token_offset,
 ):
     torch.manual_seed(61)
     base = create_temporal_model(
@@ -947,6 +992,7 @@ def test_adapted_gru_branch_runner_matches_individual_models(
         outputs=base.num_output,
         matrix_rank=2,
         adapt_recurrent=True,
+        branch_token_offset=branch_token_offset,
     )
     population = 4
     steps = 9
@@ -961,6 +1007,9 @@ def test_adapted_gru_branch_runner_matches_individual_models(
                 morphology_ids[morphology[neuron]]
             ),
             behavior_adapter_rank=2,
+            behavior_adapter_branch_token_offset=(
+                branch_token_offset
+            ),
         )
         reference = AxoTemporalModel(base.backbone, config).eval()
         incompatible = reference.load_state_dict(
@@ -1030,18 +1079,30 @@ def test_adapted_gru_branch_runner_matches_individual_models(
     actual = torch.cat(actual_steps, dim=1)
 
     torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-5)
-    assert runner.adapted_parameters_per_neuron == 156
-    assert runner.adapted_components == (
-        "branch_bias",
-        "branch_gain",
-        "branch_projection_low_rank",
-        "gru_input_low_rank",
-        "gru_recurrent_low_rank",
-        "latent_gain",
-        "latent_offset",
-        "readout",
-        "recurrent_output_gain",
-    )
+    if branch_token_offset:
+        assert runner.adapted_parameters_per_neuron == 134
+        assert runner.adapted_components == (
+            "branch_token_offset",
+            "gru_input_low_rank",
+            "gru_recurrent_low_rank",
+            "latent_gain",
+            "latent_offset",
+            "readout",
+            "recurrent_output_gain",
+        )
+    else:
+        assert runner.adapted_parameters_per_neuron == 156
+        assert runner.adapted_components == (
+            "branch_bias",
+            "branch_gain",
+            "branch_projection_low_rank",
+            "gru_input_low_rank",
+            "gru_recurrent_low_rank",
+            "latent_gain",
+            "latent_offset",
+            "readout",
+            "recurrent_output_gain",
+        )
 
 
 def test_adapted_gru_branch_runner_rejects_incomplete_parameter_bank():
