@@ -203,6 +203,15 @@ class AdaptiveSupportP4Surrogate(nn.Module):
         self,
         cache: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
+        return tuple(
+            cache[:, selection]
+            for selection in self.runtime_coefficient_slices.values()
+        )
+
+    @property
+    def runtime_coefficient_slices(self) -> dict[str, slice]:
+        """Name the direct deployed coefficients in their packed order."""
+
         token = self.config.token_dim
         state = self.config.state_dim
         outputs = self.config.patch_size * self.config.output_dim
@@ -216,14 +225,27 @@ class AdaptiveSupportP4Surrogate(nn.Module):
             2 * token + 3 * state + outputs,
             self.cache_width,
         )
-        return tuple(
-            cache[:, start:stop]
-            for start, stop in zip(
+        names = (
+            "token_offset",
+            "token_gain",
+            "decay_delta",
+            "state_gain",
+            "state_offset",
+            "output_gain",
+            "output_offset",
+        )
+        return {
+            name: slice(start, stop)
+            for name, (start, stop) in zip(
+                names,
+                zip(
                 boundaries[:-1],
                 boundaries[1:],
                 strict=True,
+                ),
+                strict=True,
             )
-        )
+        }
 
     def step_token(
         self,
@@ -442,6 +464,26 @@ class AdaptiveSupportP4Surrogate(nn.Module):
         output, _ = self._rollout_feature_summaries(
             summaries,
             adaptation_cache=cache,
+            capture_gate_features=False,
+        )
+        return output
+
+    def forward_runtime_coefficients(
+        self,
+        summaries: torch.Tensor,
+        *,
+        runtime_coefficients: torch.Tensor,
+    ) -> torch.Tensor:
+        """Run with direct deployed coefficients instead of a compiler."""
+
+        expected = (summaries.shape[0], self.cache_width)
+        if tuple(runtime_coefficients.shape) != expected:
+            raise ValueError(
+                f"runtime_coefficients must have shape {expected}"
+            )
+        output, _ = self._rollout_feature_summaries(
+            summaries,
+            adaptation_cache=runtime_coefficients,
             capture_gate_features=False,
         )
         return output

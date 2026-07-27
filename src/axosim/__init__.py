@@ -14,6 +14,10 @@ __all__ = [
     "MILLION_NEURON_REALTIME_CONTRACT",
     "AxoMamba",
     "AxoMambaConfig",
+    "AxoSimGRU",
+    "AxoSimLite",
+    "AxoSimMamba",
+    "AxoSimPopulation",
     "BranchELM",
     "BranchELMConfig",
     "LargePopulationSimulationContract",
@@ -30,6 +34,25 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
+    if name in {
+        "AxoSimGRU",
+        "AxoSimLite",
+        "AxoSimMamba",
+        "AxoSimPopulation",
+    }:
+        from axosim.interfaces import (
+            AxoSimGRU,
+            AxoSimLite,
+            AxoSimMamba,
+            AxoSimPopulation,
+        )
+
+        return {
+            "AxoSimGRU": AxoSimGRU,
+            "AxoSimLite": AxoSimLite,
+            "AxoSimMamba": AxoSimMamba,
+            "AxoSimPopulation": AxoSimPopulation,
+        }[name]
     if name in {"AxoMamba", "AxoMambaConfig"}:
         from axosim.axomamba import AxoMamba, AxoMambaConfig
 

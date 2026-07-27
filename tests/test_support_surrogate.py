@@ -50,6 +50,28 @@ def test_support_adaptation_compiler_reaches_every_behavior_value():
     assert torch.all(behavior.grad != 0)
 
 
+def test_runtime_coefficient_slices_partition_the_deployed_adapter():
+    model = _model()
+
+    slices = model.runtime_coefficient_slices
+
+    assert tuple(slices) == (
+        "token_offset",
+        "token_gain",
+        "decay_delta",
+        "state_gain",
+        "state_offset",
+        "output_gain",
+        "output_offset",
+    )
+    covered = [
+        index
+        for selection in slices.values()
+        for index in range(selection.start, selection.stop)
+    ]
+    assert covered == list(range(model.cache_width))
+
+
 def test_support_runtime_cache_matches_direct_behavior_compilation():
     model = _model()
     features = torch.randn(2, 4, 6)
