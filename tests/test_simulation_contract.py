@@ -79,13 +79,24 @@ def test_million_neuron_inference_profiles_are_explicit() -> None:
     throughput = MILLION_NEURON_MAX_THROUGHPUT_PROFILE
     quality = MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE
 
+    assert throughput.support_model_id == "support_t24_s8_distilled_i600"
+    assert throughput.support_token_width == 24
+    assert throughput.support_state_width == 8
     assert throughput.support_block_rows == 32
+    assert throughput.compiled_adaptation_values_per_neuron == 88
+    assert not throughput.population_adaptation_individually_fitted
     assert not throughput.correction_enabled
     assert throughput.primary_metric == "neuron_steps_per_second"
+    assert throughput.measured_p90_neuron_steps_per_second > 1_490_000_000
+    assert quality.support_model_id == "support_t58_s32_distilled_i600"
+    assert quality.support_token_width == 58
+    assert quality.support_state_width == 32
     assert quality.support_block_rows == 32
-    assert quality.correction_enabled
-    assert quality.correction_fraction == 0.0175
-    assert quality.primary_metric == "spike_f1_area_0_5ms"
+    assert quality.compiled_adaptation_values_per_neuron == 228
+    assert not quality.correction_enabled
+    assert quality.primary_metric == "voltage_sera_mv"
+    assert quality.measured_voltage_sera_mv < throughput.measured_voltage_sera_mv
+    assert quality.measured_p90_neuron_steps_per_second > 1_260_000_000
     assert (
         quality.minimum_neuron_steps_per_second
         == throughput.minimum_neuron_steps_per_second
@@ -97,12 +108,26 @@ def test_inference_profile_rejects_ambiguous_correction_mode() -> None:
     with pytest.raises(ValueError, match="disabled correction"):
         PopulationInferenceProfile(
             name="ambiguous",
+            support_model_id="test",
+            support_token_width=58,
             support_state_width=32,
             support_block_rows=32,
+            support_block_token=64,
+            support_block_state=32,
+            external_block_width=64,
+            project_block_width=64,
+            compiled_adaptation_values_per_neuron=228,
             correction_fraction=0.01,
             correction_selection="disabled",
             primary_metric="voltage_sera_mv",
             minimum_neuron_steps_per_second=1_000_000_000.0,
+            measured_median_neuron_steps_per_second=1_100_000_000.0,
+            measured_p90_neuron_steps_per_second=1_050_000_000.0,
+            measured_voltage_sera_mv=16.0,
+            measured_spike_f1_area=0.4,
+            measured_population_firing_rate_hz=4.0,
+            population_adaptation_initialization="test_rows",
+            population_adaptation_individually_fitted=False,
         )
 
 

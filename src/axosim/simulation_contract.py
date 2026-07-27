@@ -277,22 +277,63 @@ class PopulationInferenceProfile:
     """Named operating point within the million-neuron contract."""
 
     name: str
+    support_model_id: str
+    support_token_width: int
     support_state_width: int
     support_block_rows: int
+    support_block_token: int
+    support_block_state: int
+    external_block_width: int
+    project_block_width: int
+    compiled_adaptation_values_per_neuron: int
     correction_fraction: float
     correction_selection: str
     primary_metric: str
     minimum_neuron_steps_per_second: float
+    measured_median_neuron_steps_per_second: float
+    measured_p90_neuron_steps_per_second: float
+    measured_voltage_sera_mv: float
+    measured_spike_f1_area: float
+    measured_population_firing_rate_hz: float
+    population_adaptation_initialization: str
+    population_adaptation_individually_fitted: bool
 
     def __post_init__(self) -> None:
-        if self.support_state_width <= 0:
-            raise ValueError("support state width must be positive")
+        if not self.support_model_id:
+            raise ValueError("support model id must be explicit")
+        if self.support_token_width <= 0 or self.support_state_width <= 0:
+            raise ValueError("support widths must be positive")
         if self.support_block_rows not in {16, 32}:
             raise ValueError("support block rows must be 16 or 32")
+        launch_widths = (
+            self.support_block_token,
+            self.support_block_state,
+            self.external_block_width,
+            self.project_block_width,
+        )
+        if any(width <= 0 for width in launch_widths):
+            raise ValueError("launch widths must be positive")
+        if self.compiled_adaptation_values_per_neuron <= 0:
+            raise ValueError("compiled adaptation width must be positive")
         if not 0.0 <= self.correction_fraction <= 0.05:
             raise ValueError("correction fraction must be in [0, 0.05]")
         if self.minimum_neuron_steps_per_second <= 0:
             raise ValueError("minimum throughput must be positive")
+        if (
+            self.measured_median_neuron_steps_per_second
+            < self.minimum_neuron_steps_per_second
+            or self.measured_p90_neuron_steps_per_second
+            < self.minimum_neuron_steps_per_second
+        ):
+            raise ValueError("measured throughput must clear the profile floor")
+        if self.measured_voltage_sera_mv <= 0:
+            raise ValueError("measured voltage SERA must be positive")
+        if not 0.0 <= self.measured_spike_f1_area <= 1.0:
+            raise ValueError("measured spike F1 area must be in [0, 1]")
+        if self.measured_population_firing_rate_hz <= 0:
+            raise ValueError("measured population firing rate must be positive")
+        if not self.population_adaptation_initialization:
+            raise ValueError("population adaptation initialization is required")
         correction_disabled = self.correction_selection == "disabled"
         if correction_disabled != (self.correction_fraction == 0.0):
             raise ValueError(
@@ -351,20 +392,52 @@ MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
 
 MILLION_NEURON_MAX_THROUGHPUT_PROFILE = PopulationInferenceProfile(
     name="million-neuron-max-throughput",
-    support_state_width=32,
+    support_model_id="support_t24_s8_distilled_i600",
+    support_token_width=24,
+    support_state_width=8,
     support_block_rows=32,
+    support_block_token=32,
+    support_block_state=16,
+    external_block_width=32,
+    project_block_width=32,
+    compiled_adaptation_values_per_neuron=88,
     correction_fraction=0.0,
     correction_selection="disabled",
     primary_metric="neuron_steps_per_second",
     minimum_neuron_steps_per_second=1_000_000_000.0,
+    measured_median_neuron_steps_per_second=1_539_361_324.4471567,
+    measured_p90_neuron_steps_per_second=1_497_241_855.0603168,
+    measured_voltage_sera_mv=15.941871291550644,
+    measured_spike_f1_area=0.35957193816884664,
+    measured_population_firing_rate_hz=4.374947547912598,
+    population_adaptation_initialization=(
+        "five_fitted_morphology_rows_plus_deterministic_w8_jitter"
+    ),
+    population_adaptation_individually_fitted=False,
 )
 
 MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE = PopulationInferenceProfile(
     name="million-neuron-best-quality-realtime",
+    support_model_id="support_t58_s32_distilled_i600",
+    support_token_width=58,
     support_state_width=32,
     support_block_rows=32,
-    correction_fraction=0.0175,
-    correction_selection="internal_state_f1_exact_fraction",
-    primary_metric="spike_f1_area_0_5ms",
+    support_block_token=64,
+    support_block_state=32,
+    external_block_width=64,
+    project_block_width=64,
+    compiled_adaptation_values_per_neuron=228,
+    correction_fraction=0.0,
+    correction_selection="disabled",
+    primary_metric="voltage_sera_mv",
     minimum_neuron_steps_per_second=1_000_000_000.0,
+    measured_median_neuron_steps_per_second=1_280_975_730.59542,
+    measured_p90_neuron_steps_per_second=1_263_653_958.7475076,
+    measured_voltage_sera_mv=15.742358639083188,
+    measured_spike_f1_area=0.3855450236966825,
+    measured_population_firing_rate_hz=3.9670121669769287,
+    population_adaptation_initialization=(
+        "five_fitted_morphology_rows_plus_deterministic_w8_jitter"
+    ),
+    population_adaptation_individually_fitted=False,
 )
