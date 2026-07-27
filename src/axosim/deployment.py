@@ -409,6 +409,6 @@ ONE_MILLION_ADAPTED_TARGET = PopulationDeploymentTarget(
     activity_dynamics_validation_required=True,
     quota_activity_allowed=False,
     forecast_block_size=4,
-    firing_rate=0.01,
+    firing_rate=0.003869090909090909,
     fanout=1_278,
 )

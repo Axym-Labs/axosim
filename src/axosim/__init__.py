@@ -9,16 +9,19 @@ from __future__ import annotations
 from typing import Any
 
 __all__ = [
+    "MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE",
+    "MILLION_NEURON_MAX_THROUGHPUT_PROFILE",
+    "MILLION_NEURON_REALTIME_CONTRACT",
     "AxoMamba",
     "AxoMambaConfig",
     "BranchELM",
     "BranchELMConfig",
+    "LargePopulationSimulationContract",
     "MixedQuantizedNeuronBehaviorBank",
+    "PopulationInferenceProfile",
     "ProceduralMorphologyConnectomeRouter",
     "compact_active_sources",
     "dequantize_mixed_neuron_behavior_parameters",
-    "LargePopulationSimulationContract",
-    "MILLION_NEURON_REALTIME_CONTRACT",
     "quantize_mixed_neuron_behavior_parameters",
 ]
 
@@ -34,16 +37,29 @@ def __getattr__(name: str) -> Any:
         return {"BranchELM": BranchELM, "BranchELMConfig": BranchELMConfig}[name]
     if name in {
         "LargePopulationSimulationContract",
+        "MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE",
+        "MILLION_NEURON_MAX_THROUGHPUT_PROFILE",
         "MILLION_NEURON_REALTIME_CONTRACT",
+        "PopulationInferenceProfile",
     }:
         from axosim.simulation_contract import (
-            LargePopulationSimulationContract,
+            MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE,
+            MILLION_NEURON_MAX_THROUGHPUT_PROFILE,
             MILLION_NEURON_REALTIME_CONTRACT,
+            LargePopulationSimulationContract,
+            PopulationInferenceProfile,
         )
 
         return {
             "LargePopulationSimulationContract": (
                 LargePopulationSimulationContract
+            ),
+            "PopulationInferenceProfile": PopulationInferenceProfile,
+            "MILLION_NEURON_MAX_THROUGHPUT_PROFILE": (
+                MILLION_NEURON_MAX_THROUGHPUT_PROFILE
+            ),
+            "MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE": (
+                MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE
             ),
             "MILLION_NEURON_REALTIME_CONTRACT": (
                 MILLION_NEURON_REALTIME_CONTRACT

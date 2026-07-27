@@ -9,6 +9,10 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from axosim.deployment import (
+    GRU_BEHAVIOR_ADAPTATION,
+    NeuronBehaviorAdaptation,
+)
 from axosim.temporal_core import ResidualGRUTemporalCore
 
 BlockForecastCore = Literal["gru", "mamba"]
@@ -30,6 +34,7 @@ class BlockForecastConfig:
     event_template_center_init: float = 0.9208316802978516
     event_template_temperature: float = 0.25
     event_template_hard: bool = False
+    behavior_adaptation: bool = False
 
     def __post_init__(self) -> None:
         if self.core_kind not in {"gru", "mamba"}:
@@ -52,6 +57,10 @@ class BlockForecastConfig:
                 raise ValueError("event_template must include bias and weights")
         if self.event_template_temperature <= 0:
             raise ValueError("event_template_temperature must be positive")
+        if self.behavior_adaptation and self.core_kind != "gru":
+            raise ValueError(
+                "behavior adaptation requires a GRU macro core"
+            )
 
 
 class CausalBlockForecastModel(nn.Module):
@@ -96,6 +105,26 @@ class CausalBlockForecastModel(nn.Module):
             )
         else:
             self.temporal_core = None
+        self.behavior_adaptation = (
+            GRU_BEHAVIOR_ADAPTATION
+            if forecast_config.behavior_adaptation
+            else None
+        )
+        morphology_count = len(self.backbone.config.morphology_ids or ())
+        if self.behavior_adaptation is not None:
+            if morphology_count <= 0:
+                raise ValueError(
+                    "behavior adaptation requires configured morphologies"
+                )
+            self.behavior_adaptation_bank: nn.Parameter | None = nn.Parameter(
+                torch.zeros(
+                    morphology_count,
+                    self.behavior_adaptation.parameter_count,
+                )
+            )
+            self._initialize_behavior_adaptation_bank()
+        else:
+            self.register_parameter("behavior_adaptation_bank", None)
         if not forecast_config.keep_local_tcn:
             self.backbone.local_tcn_blocks = nn.ModuleList()
             self.backbone.local_tcn_out = None
@@ -200,6 +229,53 @@ class CausalBlockForecastModel(nn.Module):
     def sparse_voltage_output(self) -> bool:
         return self.forecast_config.voltage_anchor_count is not None
 
+    @property
+    def behavior_parameter_count(self) -> int:
+        return (
+            0
+            if self.behavior_adaptation is None
+            else self.behavior_adaptation.parameter_count
+        )
+
+    def _initialize_behavior_adaptation_bank(self) -> None:
+        if (
+            self.behavior_adaptation is None
+            or self.behavior_adaptation_bank is None
+        ):
+            return
+        slices = self.behavior_adaptation.tensor_slices
+        shapes = self.behavior_adaptation.tensor_shapes
+        with torch.no_grad():
+            for name in ("gru_input_down", "gru_recurrent_down"):
+                selection = slices[name]
+                values = self.behavior_adaptation_bank[:, selection].view(
+                    self.behavior_adaptation_bank.shape[0],
+                    *shapes[name],
+                )
+                nn.init.kaiming_uniform_(values, a=math.sqrt(5))
+
+    def _behavior_parameter(
+        self,
+        behavior_parameters: torch.Tensor,
+        name: str,
+    ) -> torch.Tensor:
+        if self.behavior_adaptation is None:
+            raise RuntimeError("behavior adaptation is not configured")
+        selection = self.behavior_adaptation.tensor_slices[name]
+        return behavior_parameters[:, selection].view(
+            behavior_parameters.shape[0],
+            *self.behavior_adaptation.tensor_shapes[name],
+        )
+
+    @staticmethod
+    def _low_rank_correction(
+        values: torch.Tensor,
+        down: torch.Tensor,
+        up: torch.Tensor,
+    ) -> torch.Tensor:
+        compressed = torch.bmm(down, values.unsqueeze(-1))
+        return torch.bmm(up, compressed).squeeze(-1)
+
     def _initialize_patch_input(self, width: int) -> None:
         with torch.no_grad():
             self.patch_input.weight.zero_()
@@ -242,22 +318,119 @@ class CausalBlockForecastModel(nn.Module):
         )
         return self.patch_input(reduced.flatten(start_dim=-2))
 
-    def _run_block_core(self, tokens: torch.Tensor) -> torch.Tensor:
+    def _run_block_core(
+        self,
+        tokens: torch.Tensor,
+        behavior_parameters: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if behavior_parameters is not None:
+            return self._run_adaptive_gru(tokens, behavior_parameters)
         return self.backbone._run_temporal_sequence_with_core(
             tokens,
             tokens,
             temporal_core=self.temporal_core,
         )
 
+    def _run_adaptive_gru(
+        self,
+        tokens: torch.Tensor,
+        behavior_parameters: torch.Tensor,
+    ) -> torch.Tensor:
+        if not isinstance(self.temporal_core, ResidualGRUTemporalCore):
+            raise RuntimeError("adaptive macro core is not a GRU")
+        core = self.temporal_core
+        if core.hidden_units != tokens.shape[-1]:
+            raise ValueError(
+                "behavior adaptation requires GRU state width to match "
+                "the macro token width"
+            )
+        state = tokens.new_zeros(tokens.shape[0], core.hidden_units)
+        corrections = []
+        input_down = self._behavior_parameter(
+            behavior_parameters,
+            "gru_input_down",
+        )
+        input_up = self._behavior_parameter(
+            behavior_parameters,
+            "gru_input_up",
+        )
+        recurrent_down = self._behavior_parameter(
+            behavior_parameters,
+            "gru_recurrent_down",
+        )
+        recurrent_up = self._behavior_parameter(
+            behavior_parameters,
+            "gru_recurrent_up",
+        )
+        recurrent_gain = self._behavior_parameter(
+            behavior_parameters,
+            "recurrent_output_gain",
+        )
+        for step in range(tokens.shape[1]):
+            cell_input = core.pre_norm(tokens[:, step])
+            input_gates = F.linear(
+                cell_input,
+                core.gru.weight_ih_l0,
+                core.gru.bias_ih_l0,
+            )
+            hidden_gates = F.linear(
+                state,
+                core.gru.weight_hh_l0,
+                core.gru.bias_hh_l0,
+            )
+            input_gates = input_gates + self._low_rank_correction(
+                cell_input,
+                input_down,
+                input_up,
+            )
+            hidden_gates = hidden_gates + self._low_rank_correction(
+                state,
+                recurrent_down,
+                recurrent_up,
+            )
+            ir, iz, inn = input_gates.chunk(3, dim=-1)
+            hr, hz, hn = hidden_gates.chunk(3, dim=-1)
+            reset = torch.sigmoid(ir + hr)
+            update = torch.sigmoid(iz + hz)
+            candidate = torch.tanh(inn + reset * hn)
+            state = (1.0 - update) * candidate + update * state
+            correction = core.residual_scale.view(1, -1) * state
+            corrections.append(correction * (1.0 + recurrent_gain))
+        corrected = tokens + torch.stack(corrections, dim=1)
+        if self.backbone.integrative_post is not None:
+            corrected = self.backbone.integrative_post(corrected)
+        if self.backbone.temporal_refine is not None:
+            corrected = self.backbone.temporal_refine(corrected)
+        return corrected
+
+    def _encode_input(
+        self,
+        x: torch.Tensor,
+        *,
+        morphology_indices: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """Encode native inputs before causal block packing."""
+
+        return self.backbone._encode_sequence(
+            x,
+            morphology_indices=morphology_indices,
+        )
+
     def _decode_trajectory(
         self,
         block_state: torch.Tensor,
+        behavior_parameters: torch.Tensor | None = None,
     ) -> torch.Tensor:
         anchor = self.backbone._decode_sequence(
             block_state,
             None,
         )
         features = self.backbone.norm(block_state)
+        anchor = self._apply_adaptive_readout(
+            anchor,
+            features,
+            behavior_parameters,
+        )
         coefficients = self.trajectory_head(features).view(
             block_state.shape[0],
             block_state.shape[1],
@@ -271,14 +444,84 @@ class CausalBlockForecastModel(nn.Module):
         )
         return anchor.unsqueeze(2) + trajectory
 
+    def block_state_sequence(
+        self,
+        x: torch.Tensor,
+        *,
+        morphology_indices: torch.Tensor | None = None,
+        behavior_parameters: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Encode a native sequence and return each causal macro state."""
+
+        if x.ndim != 3 or x.shape[-1] != self.num_input or x.shape[1] <= 0:
+            raise ValueError(
+                f"block forecast input must have shape (batch, time, {self.num_input})"
+            )
+        behavior_parameters = self._resolve_behavior_parameters(
+            x,
+            morphology_indices=morphology_indices,
+            behavior_parameters=behavior_parameters,
+        )
+        full_steps = x.shape[1] - x.shape[1] % self.patch_size
+        if full_steps < self.patch_size:
+            return x.new_empty(
+                x.shape[0],
+                0,
+                self.config.model_dim,
+            )
+        active_input = x[:, :full_steps]
+        if not active_input.is_contiguous():
+            active_input = active_input.contiguous()
+        hidden, _, _ = self._encode_input(
+            active_input,
+            morphology_indices=morphology_indices,
+        )
+        if behavior_parameters is not None:
+            hidden = self._apply_adaptive_hidden(
+                hidden,
+                behavior_parameters,
+            )
+        tokens = self._pack_hidden(hidden)
+        return self._run_block_core(tokens, behavior_parameters)
+
+    def decode_block_state_sequence(
+        self,
+        block_state: torch.Tensor,
+        *,
+        behavior_parameters: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Decode dense native-rate trajectories from causal macro states."""
+
+        if (
+            block_state.ndim != 3
+            or block_state.shape[-1] != self.config.model_dim
+        ):
+            raise ValueError(
+                "block_state must have shape (batch, blocks, model_dim)"
+            )
+        if self.sparse_voltage_output:
+            raise RuntimeError(
+                "standalone state decoding is unavailable for sparse voltage"
+            )
+        return self._decode_trajectory(
+            block_state,
+            behavior_parameters,
+        )
+
     def _decode_sparse_trajectory(
         self,
         block_state: torch.Tensor,
+        behavior_parameters: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if self.voltage_anchor_head is None:
             raise RuntimeError("sparse voltage head is not configured")
         anchor = self.backbone._decode_sequence(block_state, None)
         features = self.backbone.norm(block_state)
+        anchor = self._apply_adaptive_readout(
+            anchor,
+            features,
+            behavior_parameters,
+        )
         spike_coefficients = self.trajectory_head(features)
         spike_trajectory = torch.einsum(
             "bnr,pr->bnp",
@@ -290,6 +533,25 @@ class CausalBlockForecastModel(nn.Module):
             features
         )
         return spike, voltage_anchors
+
+    def _apply_adaptive_readout(
+        self,
+        anchor: torch.Tensor,
+        features: torch.Tensor,
+        behavior_parameters: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if behavior_parameters is None:
+            return anchor
+        weight = self._behavior_parameter(
+            behavior_parameters,
+            "readout_weight",
+        )
+        bias = self._behavior_parameter(
+            behavior_parameters,
+            "readout_bias",
+        )
+        adapted = torch.einsum("bow,bnw->bno", weight, features)
+        return anchor + adapted + bias.unsqueeze(1)
 
     def _event_template_voltage(
         self,
@@ -351,12 +613,18 @@ class CausalBlockForecastModel(nn.Module):
         x: torch.Tensor,
         *,
         morphology_indices: torch.Tensor | None = None,
+        behavior_parameters: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if x.ndim != 3 or x.shape[-1] != self.num_input or x.shape[1] <= 0:
             raise ValueError(
                 f"block forecast input must have shape (batch, time, {self.num_input})"
             )
         batch, steps, _ = x.shape
+        behavior_parameters = self._resolve_behavior_parameters(
+            x,
+            morphology_indices=morphology_indices,
+            behavior_parameters=behavior_parameters,
+        )
         full_steps = steps - steps % self.patch_size
         if full_steps < self.patch_size:
             output = x.new_zeros(batch, steps, self.num_output)
@@ -366,15 +634,23 @@ class CausalBlockForecastModel(nn.Module):
         active_input = x[:, :full_steps]
         if not active_input.is_contiguous():
             active_input = active_input.contiguous()
-        hidden, _, _ = self.backbone._encode_sequence(
+        hidden, _, _ = self._encode_input(
             active_input,
             morphology_indices=morphology_indices,
         )
+        if behavior_parameters is not None:
+            hidden = self._apply_adaptive_hidden(
+                hidden,
+                behavior_parameters,
+            )
         tokens = self._pack_hidden(hidden)
-        block_state = self._run_block_core(tokens)
+        block_state = self._run_block_core(tokens, behavior_parameters)
         available_steps = max(steps - self.patch_size, 0)
         if self.sparse_voltage_output:
-            spike_blocks, voltage_anchors = self._decode_sparse_trajectory(block_state)
+            spike_blocks, voltage_anchors = self._decode_sparse_trajectory(
+                block_state,
+                behavior_parameters,
+            )
             spike_forecast = spike_blocks.flatten(start_dim=1)
             cold_spike = spike_forecast.new_zeros(
                 batch,
@@ -417,7 +693,10 @@ class CausalBlockForecastModel(nn.Module):
                 dim=-1,
             )
         else:
-            forecast = self._decode_trajectory(block_state).flatten(
+            forecast = self._decode_trajectory(
+                block_state,
+                behavior_parameters,
+            ).flatten(
                 start_dim=1,
                 end_dim=2,
             )
@@ -436,8 +715,72 @@ class CausalBlockForecastModel(nn.Module):
         self.base_soma_prediction = output[..., 1:2]
         return output
 
+    def _resolve_behavior_parameters(
+        self,
+        x: torch.Tensor,
+        *,
+        morphology_indices: torch.Tensor | None,
+        behavior_parameters: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        if self.behavior_adaptation is None:
+            if behavior_parameters is not None:
+                raise ValueError(
+                    "runtime behavior parameters require configured "
+                    "behavior adaptation"
+                )
+            return None
+        if behavior_parameters is None:
+            if (
+                morphology_indices is None
+                or self.behavior_adaptation_bank is None
+            ):
+                raise ValueError(
+                    "adaptive forecasts require morphology indices or "
+                    "runtime behavior parameters"
+                )
+            behavior_parameters = self.behavior_adaptation_bank.index_select(
+                0,
+                morphology_indices.to(
+                    device=self.behavior_adaptation_bank.device,
+                    dtype=torch.long,
+                ),
+            )
+        expected = (x.shape[0], self.behavior_adaptation.parameter_count)
+        if behavior_parameters.shape != expected:
+            raise ValueError(
+                f"behavior_parameters must have shape {expected}"
+            )
+        if behavior_parameters.device != x.device:
+            raise ValueError(
+                "behavior_parameters must be on the input device"
+            )
+        return behavior_parameters
+
+    def _apply_adaptive_hidden(
+        self,
+        hidden: torch.Tensor,
+        behavior_parameters: torch.Tensor,
+    ) -> torch.Tensor:
+        latent_gain = self._behavior_parameter(
+            behavior_parameters,
+            "latent_gain",
+        )
+        latent_offset = self._behavior_parameter(
+            behavior_parameters,
+            "latent_offset",
+        )
+        branch_token = self._behavior_parameter(
+            behavior_parameters,
+            "branch_token_offset",
+        )
+        return (
+            hidden * (1.0 + latent_gain.unsqueeze(1))
+            + latent_offset.unsqueeze(1)
+            + branch_token.unsqueeze(1)
+        )
+
     def component_manifest(self) -> dict[str, object]:
-        return {
+        manifest = {
             "temporal_core": self.forecast_config.core_kind,
             "causal_block_forecast": True,
             "patch_size": self.patch_size,
@@ -456,6 +799,16 @@ class CausalBlockForecastModel(nn.Module):
             "shared_axomamba_front_end": True,
             "shared_axomamba_heads": True,
         }
+        if self.behavior_adaptation is not None:
+            manifest["behavior_adaptation"] = {
+                "parameter_count_per_neuron": (
+                    self.behavior_adaptation.parameter_count
+                ),
+                "matrix_rank": self.behavior_adaptation.matrix_rank,
+                "trainable": True,
+                "runtime_parameters_supported": True,
+            }
+        return manifest
 
 
 def _temporal_basis(steps: int, rank: int) -> torch.Tensor:

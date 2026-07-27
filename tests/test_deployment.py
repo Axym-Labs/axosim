@@ -94,7 +94,7 @@ def test_one_million_target_requires_adaptation_and_routing():
     assert target.activity_dynamics_validation_required
     assert not target.quota_activity_allowed
     assert target.forecast_block_size == 4
-    assert target.firing_rate == 0.01
+    assert target.firing_rate == 0.003869090909090909
     assert target.fanout == 1_278
 
 

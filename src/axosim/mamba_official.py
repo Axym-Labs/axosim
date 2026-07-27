@@ -298,6 +298,7 @@ class BranchOfficialMamba(nn.Module):
         self.num_output = config.num_output
         self.num_branch = config.num_branch
         self.num_synapse_per_branch = config.num_synapse_per_branch
+        self.inference_branch_storage_dtype: torch.dtype | None = None
         self.input_to_synapse_routing = config.input_to_synapse_routing
         self.branch_trace_taus = tuple(float(tau) for tau in (config.branch_trace_taus or ()))
         self.hidden_trace_taus = tuple(float(tau) for tau in (config.hidden_trace_taus or ()))
@@ -707,6 +708,9 @@ class BranchOfficialMamba(nn.Module):
             branch_inputs = branch_inputs * (
                 branch_log_gain_delta.unsqueeze(1).exp()
             )
+        branch_inputs = self._apply_inference_branch_storage(
+            branch_inputs
+        )
         if self.config.branch_nonlinearity == "tanh":
             assert self.branch_nonlinearity_log_scale is not None
             assert self.branch_nonlinearity_bias is not None
@@ -1076,6 +1080,9 @@ class BranchOfficialMamba(nn.Module):
                 device=branch_inputs.device,
             )
             branch_inputs = branch_inputs * gain.view(1, 1, -1)
+        branch_inputs = self._apply_inference_branch_storage(
+            branch_inputs
+        )
         if self.config.branch_nonlinearity == "tanh":
             assert self.branch_nonlinearity_log_scale is not None
             assert self.branch_nonlinearity_bias is not None
@@ -1095,6 +1102,27 @@ class BranchOfficialMamba(nn.Module):
                 torch.finfo(branch_inputs.dtype).eps
             )
         return branch_inputs
+
+    def _apply_inference_branch_storage(
+        self,
+        branch_inputs: torch.Tensor,
+    ) -> torch.Tensor:
+        storage_dtype = self.inference_branch_storage_dtype
+        if storage_dtype is None:
+            return branch_inputs
+        if self.training:
+            raise RuntimeError(
+                "inference branch storage quantization is disabled in "
+                "training mode"
+            )
+        if storage_dtype not in {
+            torch.float8_e4m3fn,
+            torch.float8_e5m2,
+        }:
+            raise ValueError("unsupported inference branch storage dtype")
+        return branch_inputs.to(dtype=storage_dtype).to(
+            dtype=branch_inputs.dtype
+        )
 
     def _streaming_step_from_branch_inputs(
         self,

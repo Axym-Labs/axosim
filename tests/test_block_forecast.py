@@ -13,6 +13,7 @@ from axosim.block_forecast import (
     CausalBlockForecastModel,
 )
 from axosim.checkpoint import load_checkpoint, save_checkpoint
+from axosim.deployment import GRU_BEHAVIOR_ADAPTATION
 
 
 def _source_model() -> AxoPyTorchMamba:
@@ -41,13 +42,26 @@ def _source_model() -> AxoPyTorchMamba:
     )
 
 
+def _adaptive_source_model() -> AxoPyTorchMamba:
+    source = _source_model()
+    config = source.config
+    return AxoPyTorchMamba(
+        AxoMambaConfig(
+            **{
+                **config.__dict__,
+                "model_dim": 58,
+            }
+        )
+    )
+
+
 @pytest.mark.parametrize("core_kind", ["gru", "mamba"])
 def test_block_forecaster_predicts_native_shape_and_trains(
     core_kind,
 ):
     torch.manual_seed(4)
     model = CausalBlockForecastModel(
-        _source_model(),
+        _adaptive_source_model(),
         BlockForecastConfig(
             core_kind=core_kind,
             patch_size=4,
@@ -76,6 +90,102 @@ def test_block_forecaster_predicts_native_shape_and_trains(
             parameter.grad is not None and parameter.grad.abs().sum() > 0
             for parameter in model.backbone.blocks.parameters()
         )
+
+
+@pytest.mark.parametrize("core_kind", ["gru", "mamba"])
+def test_block_state_sequence_reconstructs_dense_forecast(core_kind):
+    model = CausalBlockForecastModel(
+        _adaptive_source_model(),
+        BlockForecastConfig(
+            core_kind=core_kind,
+            patch_size=4,
+            keep_local_tcn=core_kind == "mamba",
+        ),
+    ).eval()
+    inputs = torch.randn(2, 16, 8)
+    morphology = torch.tensor([0, 1])
+
+    with torch.inference_mode():
+        states = model.block_state_sequence(
+            inputs,
+            morphology_indices=morphology,
+        )
+        decoded = model.decode_block_state_sequence(states)
+        output = model(
+            inputs,
+            morphology_indices=morphology,
+        )
+
+    assert states.shape == (2, 4, model.config.model_dim)
+    torch.testing.assert_close(
+        output[:, 4:],
+        decoded.flatten(start_dim=1, end_dim=2)[:, :12],
+    )
+
+
+def test_block_forecaster_uses_overridable_input_encoder():
+    source = _source_model()
+
+    class ConstantInputEncoder(CausalBlockForecastModel):
+        def __init__(self):
+            super().__init__(
+                source,
+                BlockForecastConfig(
+                    core_kind="gru",
+                    patch_size=4,
+                ),
+            )
+            self.encoder_called = False
+
+        def _encode_input(self, x, *, morphology_indices):
+            self.encoder_called = True
+            hidden = x.new_ones(
+                x.shape[0],
+                x.shape[1],
+                self.config.model_dim,
+            )
+            return hidden, hidden, None
+
+    model = ConstantInputEncoder()
+    inputs = torch.zeros(2, 8, model.num_input)
+    model(inputs)
+
+    assert model.encoder_called
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="FP8 branch storage requires CUDA",
+)
+def test_block_forecaster_supports_inference_only_fp8_branch_storage():
+    torch.manual_seed(9)
+    model = CausalBlockForecastModel(
+        _source_model(),
+        BlockForecastConfig(
+            core_kind="gru",
+            patch_size=4,
+            keep_local_tcn=False,
+        ),
+    ).cuda()
+    inputs = torch.randn(2, 12, 8, device="cuda")
+    morphology = torch.tensor([0, 1], device="cuda")
+    model.eval()
+    with torch.inference_mode():
+        fp32 = model(inputs, morphology_indices=morphology)
+        model.backbone.inference_branch_storage_dtype = (
+            torch.float8_e4m3fn
+        )
+        fp8 = model(inputs, morphology_indices=morphology)
+
+    assert fp8.shape == fp32.shape
+    assert torch.isfinite(fp8).all()
+    assert not torch.equal(fp8, fp32)
+
+    model.train()
+    with pytest.raises(
+        RuntimeError, match="disabled in training mode"
+    ):
+        model(inputs, morphology_indices=morphology)
 
 
 @pytest.mark.parametrize("core_kind", ["gru", "mamba"])
@@ -353,6 +463,189 @@ def test_block_forecast_checkpoint_ignores_retired_config_fields(
     loaded, _ = load_checkpoint(path)
 
     assert isinstance(loaded, CausalBlockForecastModel)
+
+
+def test_adaptive_block_forecaster_exposes_defensive_population_abi():
+    model = CausalBlockForecastModel(
+        _source_model(),
+        BlockForecastConfig(
+            core_kind="gru",
+            patch_size=8,
+            behavior_adaptation=True,
+        ),
+    )
+
+    assert model.behavior_parameter_count == 1_278
+    assert model.behavior_adaptation_bank is not None
+    assert model.behavior_adaptation_bank.shape == (2, 1_278)
+    assert model.component_manifest()["behavior_adaptation"] == {
+        "parameter_count_per_neuron": 1_278,
+        "matrix_rank": 2,
+        "trainable": True,
+        "runtime_parameters_supported": True,
+    }
+
+
+def test_adaptive_block_forecaster_requires_gru_core():
+    with pytest.raises(
+        ValueError,
+        match="behavior adaptation requires a GRU macro core",
+    ):
+            CausalBlockForecastModel(
+                _adaptive_source_model(),
+            BlockForecastConfig(
+                core_kind="mamba",
+                patch_size=8,
+                behavior_adaptation=True,
+            ),
+        )
+
+
+def test_runtime_behavior_parameters_change_forecast_and_receive_gradients():
+    torch.manual_seed(12)
+    model = CausalBlockForecastModel(
+        _adaptive_source_model(),
+        BlockForecastConfig(
+            core_kind="gru",
+            patch_size=4,
+            behavior_adaptation=True,
+        ),
+    )
+    inputs = torch.randn(2, 16, 8)
+    morphology = torch.tensor([0, 0])
+    parameters = torch.zeros(
+        2,
+        GRU_BEHAVIOR_ADAPTATION.parameter_count,
+        requires_grad=True,
+    )
+    slices = GRU_BEHAVIOR_ADAPTATION.tensor_slices
+    parameters.data[1, slices["branch_token_offset"]] = 0.25
+    parameters.data[1, slices["latent_gain"]] = 0.1
+    parameters.data[1, slices["readout_bias"]] = torch.tensor(
+        [0.5, -1.0]
+    )
+    parameters.data[:, slices["gru_input_down"]] = torch.randn(
+        2,
+        slices["gru_input_down"].stop - slices["gru_input_down"].start,
+    )
+    parameters.data[:, slices["gru_recurrent_down"]] = torch.randn(
+        2,
+        (
+            slices["gru_recurrent_down"].stop
+            - slices["gru_recurrent_down"].start
+        ),
+    )
+
+    output = model(
+        inputs,
+        morphology_indices=morphology,
+        behavior_parameters=parameters,
+    )
+
+    assert not torch.allclose(output[0, 4:], output[1, 4:])
+    output[:, 4:].square().mean().backward()
+    assert parameters.grad is not None
+    assert parameters.grad[:, slices["branch_token_offset"]].abs().sum() > 0
+    assert parameters.grad[:, slices["latent_gain"]].abs().sum() > 0
+    assert parameters.grad[:, slices["gru_input_up"]].abs().sum() > 0
+    assert parameters.grad[:, slices["gru_recurrent_up"]].abs().sum() > 0
+    assert parameters.grad[:, slices["readout_weight"]].abs().sum() > 0
+    assert parameters.grad[:, slices["readout_bias"]].abs().sum() > 0
+
+
+def test_morphology_adaptation_bank_is_trainable_by_default():
+    torch.manual_seed(13)
+    model = CausalBlockForecastModel(
+        _adaptive_source_model(),
+        BlockForecastConfig(
+            core_kind="gru",
+            patch_size=4,
+            behavior_adaptation=True,
+        ),
+    )
+    inputs = torch.randn(2, 16, 8)
+
+    output = model(
+        inputs,
+        morphology_indices=torch.tensor([0, 1]),
+    )
+    output[:, 4:].square().mean().backward()
+
+    assert model.behavior_adaptation_bank is not None
+    assert model.behavior_adaptation_bank.grad is not None
+    assert model.behavior_adaptation_bank.grad[0].abs().sum() > 0
+    assert model.behavior_adaptation_bank.grad[1].abs().sum() > 0
+
+
+def test_zero_adaptation_matches_shared_gru_forecast():
+    torch.manual_seed(15)
+    source = _adaptive_source_model()
+    shared = CausalBlockForecastModel(
+        source,
+        BlockForecastConfig(
+            core_kind="gru",
+            patch_size=4,
+        ),
+    ).eval()
+    adaptive = CausalBlockForecastModel(
+        source,
+        BlockForecastConfig(
+            core_kind="gru",
+            patch_size=4,
+            behavior_adaptation=True,
+        ),
+    ).eval()
+    incompatible = adaptive.load_state_dict(
+        shared.state_dict(),
+        strict=False,
+    )
+    assert incompatible.unexpected_keys == []
+    assert incompatible.missing_keys == ["behavior_adaptation_bank"]
+    inputs = torch.randn(2, 16, 8)
+    morphology = torch.tensor([0, 1])
+
+    with torch.inference_mode():
+        shared_output = shared(
+            inputs,
+            morphology_indices=morphology,
+        )
+        adaptive_output = adaptive(
+            inputs,
+            morphology_indices=morphology,
+        )
+
+    torch.testing.assert_close(
+        adaptive_output,
+        shared_output,
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
+def test_adaptive_block_forecast_checkpoint_round_trips(tmp_path):
+    torch.manual_seed(14)
+    model = CausalBlockForecastModel(
+        _adaptive_source_model(),
+        BlockForecastConfig(
+            core_kind="gru",
+            patch_size=4,
+            behavior_adaptation=True,
+        ),
+    )
+    path = tmp_path / "adaptive.pt"
+    inputs = torch.randn(2, 12, 8)
+    morphology = torch.tensor([0, 1])
+    with torch.inference_mode():
+        expected = model(inputs, morphology_indices=morphology)
+
+    save_checkpoint(model, path)
+    loaded, _ = load_checkpoint(path)
+    with torch.inference_mode():
+        actual = loaded(inputs, morphology_indices=morphology)
+
+    assert loaded.forecast_config.behavior_adaptation
+    assert loaded.behavior_parameter_count == 1_278
+    torch.testing.assert_close(actual, expected)
     assert loaded.forecast_config == model.forecast_config
 
 
