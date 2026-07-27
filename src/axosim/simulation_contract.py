@@ -24,7 +24,7 @@ class LargePopulationSimulationContract:
     lossless_ordered_temporal_io: bool
     causal_block_feedback_required: bool
     minimum_routing_delay_steps: int
-    logical_adaptation_values_per_neuron: int
+    synaptic_efficacy_values_per_neuron: int
     adaptation_storage_bits: int
     activation_storage_bits: int
     recurrent_state_storage_bits: int
@@ -66,8 +66,8 @@ class LargePopulationSimulationContract:
             "target_latency_ms": self.target_latency_ms,
             "patch_size": self.patch_size,
             "minimum_routing_delay_steps": (self.minimum_routing_delay_steps),
-            "logical_adaptation_values_per_neuron": (
-                self.logical_adaptation_values_per_neuron
+            "synaptic_efficacy_values_per_neuron": (
+                self.synaptic_efficacy_values_per_neuron
             ),
             "adaptation_storage_bits": self.adaptation_storage_bits,
             "activation_storage_bits": self.activation_storage_bits,
@@ -239,10 +239,10 @@ class LargePopulationSimulationContract:
         )
 
     @property
-    def adaptation_bank_bytes(self) -> int:
+    def synaptic_efficacy_bank_bytes(self) -> int:
         return (
             self.population_size
-            * self.logical_adaptation_values_per_neuron
+            * self.synaptic_efficacy_values_per_neuron
             * self.adaptation_storage_bits
             // 8
         )
@@ -286,6 +286,8 @@ class PopulationInferenceProfile:
     external_block_width: int
     project_block_width: int
     compiled_adaptation_values_per_neuron: int
+    morphology_adapter_values_per_class: int
+    output_export_fraction: float
     correction_fraction: float
     correction_selection: str
     primary_metric: str
@@ -297,6 +299,8 @@ class PopulationInferenceProfile:
     measured_population_firing_rate_hz: float
     population_adaptation_initialization: str
     population_adaptation_individually_fitted: bool
+    individual_behavior_adaptation_supported: bool
+    individual_synaptic_adaptation_supported: bool
 
     def __post_init__(self) -> None:
         if not self.support_model_id:
@@ -315,6 +319,10 @@ class PopulationInferenceProfile:
             raise ValueError("launch widths must be positive")
         if self.compiled_adaptation_values_per_neuron <= 0:
             raise ValueError("compiled adaptation width must be positive")
+        if self.morphology_adapter_values_per_class <= 0:
+            raise ValueError("morphology adapter width must be positive")
+        if not 0.0 <= self.output_export_fraction <= 1.0:
+            raise ValueError("output export fraction must be in [0, 1]")
         if not 0.0 <= self.correction_fraction <= 0.05:
             raise ValueError("correction fraction must be in [0, 0.05]")
         if self.minimum_neuron_steps_per_second <= 0:
@@ -334,6 +342,14 @@ class PopulationInferenceProfile:
             raise ValueError("measured population firing rate must be positive")
         if not self.population_adaptation_initialization:
             raise ValueError("population adaptation initialization is required")
+        if not self.individual_behavior_adaptation_supported:
+            raise ValueError(
+                "population profiles require individual behavior adaptation"
+            )
+        if not self.individual_synaptic_adaptation_supported:
+            raise ValueError(
+                "population profiles require individual synaptic adaptation"
+            )
         correction_disabled = self.correction_selection == "disabled"
         if correction_disabled != (self.correction_fraction == 0.0):
             raise ValueError(
@@ -352,7 +368,7 @@ MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
     input_step_ms=1.0,
     output_step_ms=1.0,
     target_latency_ms=1.0,
-    model_family="adapted-causal-block-gru-regression",
+    model_family="axosim-lite-causal-block-gru-regression",
     patch_size=4,
     temporal_execution_mode="causal_next_block_forecast",
     patch_phase_mode="staggered",
@@ -361,7 +377,7 @@ MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
     lossless_ordered_temporal_io=True,
     causal_block_feedback_required=True,
     minimum_routing_delay_steps=4,
-    logical_adaptation_values_per_neuron=1_278,
+    synaptic_efficacy_values_per_neuron=320,
     adaptation_storage_bits=8,
     activation_storage_bits=16,
     recurrent_state_storage_bits=16,
@@ -391,7 +407,7 @@ MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
 )
 
 MILLION_NEURON_MAX_THROUGHPUT_PROFILE = PopulationInferenceProfile(
-    name="million-neuron-max-throughput",
+    name="axosim-population-throughput",
     support_model_id="support_t24_s8_distilled_i600",
     support_token_width=24,
     support_state_width=8,
@@ -401,23 +417,27 @@ MILLION_NEURON_MAX_THROUGHPUT_PROFILE = PopulationInferenceProfile(
     external_block_width=32,
     project_block_width=32,
     compiled_adaptation_values_per_neuron=88,
+    morphology_adapter_values_per_class=88,
+    output_export_fraction=0.1,
     correction_fraction=0.0,
     correction_selection="disabled",
     primary_metric="neuron_steps_per_second",
     minimum_neuron_steps_per_second=1_000_000_000.0,
-    measured_median_neuron_steps_per_second=1_539_361_324.4471567,
-    measured_p90_neuron_steps_per_second=1_497_241_855.0603168,
+    measured_median_neuron_steps_per_second=1_388_886_526.116763,
+    measured_p90_neuron_steps_per_second=1_357_852_377.9081175,
     measured_voltage_sera_mv=15.941871291550644,
     measured_spike_f1_area=0.35957193816884664,
     measured_population_firing_rate_hz=4.374947547912598,
     population_adaptation_initialization=(
-        "five_fitted_morphology_rows_plus_deterministic_w8_jitter"
+        "five_fitted_morphology_rows_plus_direct_w8_behavior_residuals"
     ),
     population_adaptation_individually_fitted=False,
+    individual_behavior_adaptation_supported=True,
+    individual_synaptic_adaptation_supported=True,
 )
 
 MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE = PopulationInferenceProfile(
-    name="million-neuron-best-quality-realtime",
+    name="axosim-population-accurate",
     support_model_id="support_t58_s32_distilled_i600",
     support_token_width=58,
     support_state_width=32,
@@ -427,17 +447,21 @@ MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE = PopulationInferenceProfile(
     external_block_width=64,
     project_block_width=64,
     compiled_adaptation_values_per_neuron=228,
+    morphology_adapter_values_per_class=228,
+    output_export_fraction=0.1,
     correction_fraction=0.0,
     correction_selection="disabled",
     primary_metric="voltage_sera_mv",
     minimum_neuron_steps_per_second=1_000_000_000.0,
-    measured_median_neuron_steps_per_second=1_280_975_730.59542,
-    measured_p90_neuron_steps_per_second=1_263_653_958.7475076,
+    measured_median_neuron_steps_per_second=1_151_360_258.6224139,
+    measured_p90_neuron_steps_per_second=1_135_219_532.4622762,
     measured_voltage_sera_mv=15.742358639083188,
     measured_spike_f1_area=0.3855450236966825,
     measured_population_firing_rate_hz=3.9670121669769287,
     population_adaptation_initialization=(
-        "five_fitted_morphology_rows_plus_deterministic_w8_jitter"
+        "five_fitted_morphology_rows_plus_direct_w8_behavior_residuals"
     ),
     population_adaptation_individually_fitted=False,
+    individual_behavior_adaptation_supported=True,
+    individual_synaptic_adaptation_supported=True,
 )

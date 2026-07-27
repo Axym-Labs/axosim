@@ -7,6 +7,10 @@ from dataclasses import dataclass
 import torch
 
 from axosim.simulation_contract import LargePopulationSimulationContract
+from axosim.synapse import (
+    QuantizedSynapticEfficacyBank,
+    _validate_synaptic_efficacy_bank,
+)
 
 try:
     import triton
@@ -861,6 +865,8 @@ if triton is not None:
         morphology,
         morphology_gain,
         feature_gain,
+        synaptic_efficacy_values,
+        synaptic_efficacy_scale,
         external_trajectories,
         branch_queue,
         touched_offsets,
@@ -888,6 +894,8 @@ if triton is not None:
         branches: tl.constexpr,
         synapses_per_branch: tl.constexpr,
         slot_count: tl.constexpr,
+        synaptic_efficacies_per_neuron: tl.constexpr,
+        synaptic_efficacy_baseline: tl.constexpr,
         trajectory_count: tl.constexpr,
         trajectory_steps: tl.constexpr,
         max_external_event_count: tl.constexpr,
@@ -1074,6 +1082,27 @@ if triton is not None:
             mask=deliver,
             other=0.0,
         ).to(tl.float32)
+        if synaptic_efficacies_per_neuron > 0:
+            retained_per_role = (
+                synaptic_efficacies_per_neuron // 2
+            )
+            efficacy_offset = (
+                physical_target * synaptic_efficacies_per_neuron
+                + source_role * retained_per_role
+                + relative_channel // recurrent_stride
+            )
+            efficacy = tl.load(
+                synaptic_efficacy_values + efficacy_offset,
+                mask=deliver,
+                other=0,
+            ).to(tl.float32)
+            efficacy_scale = tl.load(
+                synaptic_efficacy_scale
+            ).to(tl.float32)
+            gains *= (
+                synaptic_efficacy_baseline
+                + efficacy * efficacy_scale
+            )
         gains *= tl.where(source_role != 0, -1.0, 1.0)
         branch = slots // synapses_per_branch
         output_slot = (
@@ -2579,6 +2608,9 @@ class ProceduralUniqueChannelConnectomeRouter(
     def __init__(
         self,
         *args,
+        synaptic_efficacy_bank: (
+            QuantizedSynapticEfficacyBank | None
+        ) = None,
         external_trajectories: torch.Tensor | None = None,
         external_seed: int = 0,
         external_excitatory_gain: float = 1.0,
@@ -2679,6 +2711,22 @@ class ProceduralUniqueChannelConnectomeRouter(
         self.max_external_event_count = int(
             max_external_event_count
         )
+        if synaptic_efficacy_bank is not None:
+            _validate_synaptic_efficacy_bank(synaptic_efficacy_bank)
+            if (
+                synaptic_efficacy_bank.population_size
+                != self.contract.population_size
+                or synaptic_efficacy_bank.channels_per_role
+                != self.channels_per_type
+                or synaptic_efficacy_bank.recurrent_stride
+                != self.recurrent_stride
+                or synaptic_efficacy_bank.values.device != self.device
+            ):
+                raise ValueError(
+                    "synaptic efficacy bank must match population, channel, "
+                    "stride, and device of the router"
+                )
+        self.synaptic_efficacy_bank = synaptic_efficacy_bank
 
     @property
     def queue_bytes(self) -> int:
@@ -2832,6 +2880,16 @@ class ProceduralUniqueChannelConnectomeRouter(
                 self.morphology_gain,
                 self.feature_gain,
                 (
+                    self.synaptic_efficacy_bank.values
+                    if self.synaptic_efficacy_bank is not None
+                    else self.source_is_inhibitory
+                ),
+                (
+                    self.synaptic_efficacy_bank.scale
+                    if self.synaptic_efficacy_bank is not None
+                    else self.morphology_gain
+                ),
+                (
                     self.external_trajectories
                     if self.external_trajectories is not None
                     else self.delay_queue
@@ -2882,6 +2940,16 @@ class ProceduralUniqueChannelConnectomeRouter(
                 branches=self.contract.branch_count,
                 synapses_per_branch=self.synapses_per_branch,
                 slot_count=self.slot_count,
+                synaptic_efficacies_per_neuron=(
+                    0
+                    if self.synaptic_efficacy_bank is None
+                    else self.synaptic_efficacy_bank.values_per_neuron
+                ),
+                synaptic_efficacy_baseline=(
+                    1.0
+                    if self.synaptic_efficacy_bank is None
+                    else self.synaptic_efficacy_bank.baseline
+                ),
                 trajectory_count=(
                     1
                     if self.external_trajectories is None

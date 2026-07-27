@@ -589,11 +589,18 @@ def test_exact_router_prefilters_future_external_channel_collisions() -> None:
     reason="Triton unique-channel router requires CUDA",
 )
 @pytest.mark.parametrize("contact_fraction", [0.25, 0.0625])
+@pytest.mark.parametrize("adapted_synapses", [False, True])
 def test_unique_channel_router_matches_invertible_typed_fanin_reference(
     contact_fraction: float,
+    adapted_synapses: bool,
 ) -> None:
     from axosim.connectome import (
         ProceduralUniqueChannelConnectomeRouter,
+    )
+    from axosim.synapse import (
+        dequantize_synaptic_efficacies,
+        quantize_synaptic_efficacies,
+        retained_synaptic_efficacies_per_neuron,
     )
 
     contract = replace(
@@ -624,6 +631,35 @@ def test_unique_channel_router_matches_invertible_typed_fanin_reference(
     feature_gain = torch.stack(
         (torch.ones(8), torch.linspace(0.7, 1.3, 8))
     ).to(device="cuda", dtype=torch.float16)
+    recurrent_stride = round(1.0 / contact_fraction)
+    efficacy_width = retained_synaptic_efficacies_per_neuron(
+        channels_per_role=4,
+        recurrent_stride=recurrent_stride,
+    )
+    efficacy = (
+        0.85
+        + torch.arange(
+            64 * efficacy_width,
+            device="cuda",
+            dtype=torch.float16,
+        ).reshape(64, efficacy_width)
+        / (64 * efficacy_width)
+        * 0.3
+    )
+    efficacy_bank = (
+        quantize_synaptic_efficacies(
+            efficacy,
+            channels_per_role=4,
+            recurrent_stride=recurrent_stride,
+        )
+        if adapted_synapses
+        else None
+    )
+    dequantized_efficacy = (
+        dequantize_synaptic_efficacies(efficacy_bank).cpu()
+        if efficacy_bank is not None
+        else None
+    )
     router = ProceduralUniqueChannelConnectomeRouter(
         contract,
         slot_map=slot_map,
@@ -632,6 +668,7 @@ def test_unique_channel_router_matches_invertible_typed_fanin_reference(
         morphology_gain=morphology_gain,
         feature_gain=feature_gain,
         synapses_per_branch=2,
+        synaptic_efficacy_bank=efficacy_bank,
     )
 
     router.clear_and_route(
@@ -684,6 +721,15 @@ def test_unique_channel_router_matches_invertible_typed_fanin_reference(
                     morphology_gain[slot]
                     * feature_gain[int(morphology[target]), slot]
                 )
+                if dequantized_efficacy is not None:
+                    retained_per_role = efficacy_width // 2
+                    efficacy_index = (
+                        source_role * retained_per_role
+                        + relative_channel // router.recurrent_stride
+                    )
+                    value *= dequantized_efficacy[
+                        target, efficacy_index
+                    ]
                 if source_role:
                     value = -value
                 expected[delay, target, slot // 2] += value

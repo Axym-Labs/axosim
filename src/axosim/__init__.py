@@ -20,8 +20,11 @@ __all__ = [
     "MixedQuantizedNeuronBehaviorBank",
     "PopulationInferenceProfile",
     "ProceduralMorphologyConnectomeRouter",
+    "QuantizedSynapticEfficacyBank",
     "compact_active_sources",
+    "dequantize_synaptic_efficacies",
     "dequantize_mixed_neuron_behavior_parameters",
+    "quantize_synaptic_efficacies",
     "quantize_mixed_neuron_behavior_parameters",
 ]
 
@@ -63,6 +66,28 @@ def __getattr__(name: str) -> Any:
             ),
             "MILLION_NEURON_REALTIME_CONTRACT": (
                 MILLION_NEURON_REALTIME_CONTRACT
+            ),
+        }[name]
+    if name in {
+        "QuantizedSynapticEfficacyBank",
+        "dequantize_synaptic_efficacies",
+        "quantize_synaptic_efficacies",
+    }:
+        from axosim.synapse import (
+            QuantizedSynapticEfficacyBank,
+            dequantize_synaptic_efficacies,
+            quantize_synaptic_efficacies,
+        )
+
+        return {
+            "QuantizedSynapticEfficacyBank": (
+                QuantizedSynapticEfficacyBank
+            ),
+            "dequantize_synaptic_efficacies": (
+                dequantize_synaptic_efficacies
+            ),
+            "quantize_synaptic_efficacies": (
+                quantize_synaptic_efficacies
             ),
         }[name]
     if name in {

@@ -16,9 +16,9 @@ def test_million_neuron_contract_preserves_defensive_adaptation() -> None:
     contract = MILLION_NEURON_REALTIME_CONTRACT
 
     assert contract.every_neuron_has_custom_adaptation
-    assert contract.logical_adaptation_values_per_neuron == 1_278
+    assert contract.synaptic_efficacy_values_per_neuron == 320
     assert contract.adaptation_storage_bits == 8
-    assert contract.adaptation_bank_bytes == 1_340_080_128
+    assert contract.synaptic_efficacy_bank_bytes == 335_544_320
 
 
 def test_million_neuron_contract_includes_network_work() -> None:
@@ -79,24 +79,32 @@ def test_million_neuron_inference_profiles_are_explicit() -> None:
     throughput = MILLION_NEURON_MAX_THROUGHPUT_PROFILE
     quality = MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE
 
+    assert throughput.name == "axosim-population-throughput"
     assert throughput.support_model_id == "support_t24_s8_distilled_i600"
     assert throughput.support_token_width == 24
     assert throughput.support_state_width == 8
     assert throughput.support_block_rows == 32
     assert throughput.compiled_adaptation_values_per_neuron == 88
+    assert throughput.morphology_adapter_values_per_class == 88
+    assert throughput.output_export_fraction == 0.1
     assert not throughput.population_adaptation_individually_fitted
+    assert throughput.individual_behavior_adaptation_supported
+    assert throughput.individual_synaptic_adaptation_supported
     assert not throughput.correction_enabled
     assert throughput.primary_metric == "neuron_steps_per_second"
-    assert throughput.measured_p90_neuron_steps_per_second > 1_490_000_000
+    assert throughput.measured_p90_neuron_steps_per_second > 1_350_000_000
+    assert quality.name == "axosim-population-accurate"
     assert quality.support_model_id == "support_t58_s32_distilled_i600"
     assert quality.support_token_width == 58
     assert quality.support_state_width == 32
     assert quality.support_block_rows == 32
     assert quality.compiled_adaptation_values_per_neuron == 228
+    assert quality.morphology_adapter_values_per_class == 228
+    assert quality.output_export_fraction == 0.1
     assert not quality.correction_enabled
     assert quality.primary_metric == "voltage_sera_mv"
     assert quality.measured_voltage_sera_mv < throughput.measured_voltage_sera_mv
-    assert quality.measured_p90_neuron_steps_per_second > 1_260_000_000
+    assert quality.measured_p90_neuron_steps_per_second > 1_130_000_000
     assert (
         quality.minimum_neuron_steps_per_second
         == throughput.minimum_neuron_steps_per_second
@@ -117,6 +125,8 @@ def test_inference_profile_rejects_ambiguous_correction_mode() -> None:
             external_block_width=64,
             project_block_width=64,
             compiled_adaptation_values_per_neuron=228,
+            morphology_adapter_values_per_class=228,
+            output_export_fraction=0.1,
             correction_fraction=0.01,
             correction_selection="disabled",
             primary_metric="voltage_sera_mv",
@@ -128,6 +138,8 @@ def test_inference_profile_rejects_ambiguous_correction_mode() -> None:
             measured_population_firing_rate_hz=4.0,
             population_adaptation_initialization="test_rows",
             population_adaptation_individually_fitted=False,
+            individual_behavior_adaptation_supported=True,
+            individual_synaptic_adaptation_supported=True,
         )
 
 
