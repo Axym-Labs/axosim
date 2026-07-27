@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import Any
 
 __all__ = [
+    "AXOSIM_POPULATION_ACCURATE_PROFILE",
+    "AXOSIM_POPULATION_THROUGHPUT_PROFILE",
     "MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE",
     "MILLION_NEURON_MAX_THROUGHPUT_PROFILE",
     "MILLION_NEURON_REALTIME_CONTRACT",
@@ -62,6 +64,8 @@ def __getattr__(name: str) -> Any:
 
         return {"BranchELM": BranchELM, "BranchELMConfig": BranchELMConfig}[name]
     if name in {
+        "AXOSIM_POPULATION_ACCURATE_PROFILE",
+        "AXOSIM_POPULATION_THROUGHPUT_PROFILE",
         "LargePopulationSimulationContract",
         "MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE",
         "MILLION_NEURON_MAX_THROUGHPUT_PROFILE",
@@ -69,6 +73,8 @@ def __getattr__(name: str) -> Any:
         "PopulationInferenceProfile",
     }:
         from axosim.simulation_contract import (
+            AXOSIM_POPULATION_ACCURATE_PROFILE,
+            AXOSIM_POPULATION_THROUGHPUT_PROFILE,
             MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE,
             MILLION_NEURON_MAX_THROUGHPUT_PROFILE,
             MILLION_NEURON_REALTIME_CONTRACT,
@@ -77,6 +83,12 @@ def __getattr__(name: str) -> Any:
         )
 
         return {
+            "AXOSIM_POPULATION_ACCURATE_PROFILE": (
+                AXOSIM_POPULATION_ACCURATE_PROFILE
+            ),
+            "AXOSIM_POPULATION_THROUGHPUT_PROFILE": (
+                AXOSIM_POPULATION_THROUGHPUT_PROFILE
+            ),
             "LargePopulationSimulationContract": (
                 LargePopulationSimulationContract
             ),

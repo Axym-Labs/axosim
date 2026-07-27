@@ -20,7 +20,6 @@ dev = [
 
 [project.scripts]
 axosim = "axosim.cli:main"
-bnn-sim = "axosim.cli:main"
 axosim-evaluate-model = "axosim.axobench_iteration:main"
 
 [tool.setuptools.packages.find]

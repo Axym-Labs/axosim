@@ -296,22 +296,6 @@ def load_checkpoint(
         config = SupportP4Config(**payload["config"])
         route_features = payload["state_dict"]["route_features"]
         model = AdaptiveSupportP4Surrogate(config, route_features)
-    elif model_kind == "compact-correction-mamba":
-        from axosim.correction_mamba import (
-            CompactCorrectionMamba,
-            CorrectionMambaConfig,
-        )
-
-        config = CorrectionMambaConfig(**payload["config"])
-        model = CompactCorrectionMamba(config)
-    elif model_kind == "compact-correction-gru":
-        from axosim.correction_rnn import (
-            CompactCorrectionGRU,
-            CorrectionGRUConfig,
-        )
-
-        config = CorrectionGRUConfig(**payload["config"])
-        model = CompactCorrectionGRU(config)
     elif model_kind == "mamba-official":
         from axosim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
 
@@ -349,8 +333,6 @@ def _active_axomamba_config(config: dict[str, Any]) -> dict[str, Any]:
 
 def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]]:
     from axosim.block_forecast import CausalBlockForecastModel
-    from axosim.correction_mamba import CompactCorrectionMamba
-    from axosim.correction_rnn import CompactCorrectionGRU
     from axosim.p4_surrogate import AdaptiveP4Surrogate
     from axosim.support_surrogate import AdaptiveSupportP4Surrogate
     from axosim.temporal_core import AxoTemporalModel
@@ -359,10 +341,6 @@ def _serialize_model_config(model: torch.nn.Module) -> tuple[str, dict[str, Any]
         return "adaptive-p4-surrogate", asdict(model.config)
     if isinstance(model, AdaptiveSupportP4Surrogate):
         return "adaptive-support-p4-surrogate", asdict(model.config)
-    if isinstance(model, CompactCorrectionMamba):
-        return "compact-correction-mamba", asdict(model.config)
-    if isinstance(model, CompactCorrectionGRU):
-        return "compact-correction-gru", asdict(model.config)
     if isinstance(model, CausalBlockForecastModel):
         pytorch_backbone = model.backbone.__class__.__name__ == "AxoPyTorchMamba"
         return (

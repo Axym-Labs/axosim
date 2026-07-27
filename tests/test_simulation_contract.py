@@ -5,6 +5,8 @@ from dataclasses import replace
 import pytest
 
 from axosim.simulation_contract import (
+    AXOSIM_POPULATION_ACCURATE_PROFILE,
+    AXOSIM_POPULATION_THROUGHPUT_PROFILE,
     MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE,
     MILLION_NEURON_MAX_THROUGHPUT_PROFILE,
     MILLION_NEURON_REALTIME_CONTRACT,
@@ -76,8 +78,11 @@ def test_million_neuron_contract_keeps_native_temporal_io() -> None:
 
 
 def test_million_neuron_inference_profiles_are_explicit() -> None:
-    throughput = MILLION_NEURON_MAX_THROUGHPUT_PROFILE
-    quality = MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE
+    throughput = AXOSIM_POPULATION_THROUGHPUT_PROFILE
+    quality = AXOSIM_POPULATION_ACCURATE_PROFILE
+
+    assert MILLION_NEURON_MAX_THROUGHPUT_PROFILE is throughput
+    assert MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE is quality
 
     assert throughput.name == "axosim-population-throughput"
     assert throughput.support_model_id == "support_t24_s8_distilled_i600"
@@ -90,7 +95,6 @@ def test_million_neuron_inference_profiles_are_explicit() -> None:
     assert not throughput.population_adaptation_individually_fitted
     assert throughput.individual_behavior_adaptation_supported
     assert throughput.individual_synaptic_adaptation_supported
-    assert not throughput.correction_enabled
     assert throughput.primary_metric == "neuron_steps_per_second"
     assert throughput.measured_p90_neuron_steps_per_second > 1_350_000_000
     assert quality.name == "axosim-population-accurate"
@@ -101,7 +105,6 @@ def test_million_neuron_inference_profiles_are_explicit() -> None:
     assert quality.compiled_adaptation_values_per_neuron == 228
     assert quality.morphology_adapter_values_per_class == 228
     assert quality.output_export_fraction == 0.1
-    assert not quality.correction_enabled
     assert quality.primary_metric == "voltage_sera_mv"
     assert quality.measured_voltage_sera_mv < throughput.measured_voltage_sera_mv
     assert quality.measured_p90_neuron_steps_per_second > 1_130_000_000
@@ -110,38 +113,6 @@ def test_million_neuron_inference_profiles_are_explicit() -> None:
         == throughput.minimum_neuron_steps_per_second
         == 1_000_000_000.0
     )
-
-
-def test_inference_profile_rejects_ambiguous_correction_mode() -> None:
-    with pytest.raises(ValueError, match="disabled correction"):
-        PopulationInferenceProfile(
-            name="ambiguous",
-            support_model_id="test",
-            support_token_width=58,
-            support_state_width=32,
-            support_block_rows=32,
-            support_block_token=64,
-            support_block_state=32,
-            external_block_width=64,
-            project_block_width=64,
-            compiled_adaptation_values_per_neuron=228,
-            morphology_adapter_values_per_class=228,
-            output_export_fraction=0.1,
-            correction_fraction=0.01,
-            correction_selection="disabled",
-            primary_metric="voltage_sera_mv",
-            minimum_neuron_steps_per_second=1_000_000_000.0,
-            measured_median_neuron_steps_per_second=1_100_000_000.0,
-            measured_p90_neuron_steps_per_second=1_050_000_000.0,
-            measured_voltage_sera_mv=16.0,
-            measured_spike_f1_area=0.4,
-            measured_population_firing_rate_hz=4.0,
-            population_adaptation_initialization="test_rows",
-            population_adaptation_individually_fitted=False,
-            individual_behavior_adaptation_supported=True,
-            individual_synaptic_adaptation_supported=True,
-        )
-
 
 @pytest.mark.parametrize(
     ("field", "value", "message"),

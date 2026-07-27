@@ -288,8 +288,6 @@ class PopulationInferenceProfile:
     compiled_adaptation_values_per_neuron: int
     morphology_adapter_values_per_class: int
     output_export_fraction: float
-    correction_fraction: float
-    correction_selection: str
     primary_metric: str
     minimum_neuron_steps_per_second: float
     measured_median_neuron_steps_per_second: float
@@ -323,8 +321,6 @@ class PopulationInferenceProfile:
             raise ValueError("morphology adapter width must be positive")
         if not 0.0 <= self.output_export_fraction <= 1.0:
             raise ValueError("output export fraction must be in [0, 1]")
-        if not 0.0 <= self.correction_fraction <= 0.05:
-            raise ValueError("correction fraction must be in [0, 0.05]")
         if self.minimum_neuron_steps_per_second <= 0:
             raise ValueError("minimum throughput must be positive")
         if (
@@ -350,17 +346,6 @@ class PopulationInferenceProfile:
             raise ValueError(
                 "population profiles require individual synaptic adaptation"
             )
-        correction_disabled = self.correction_selection == "disabled"
-        if correction_disabled != (self.correction_fraction == 0.0):
-            raise ValueError(
-                "disabled correction must use a zero correction fraction"
-            )
-
-    @property
-    def correction_enabled(self) -> bool:
-        return self.correction_fraction > 0.0
-
-
 MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
     name="million-neuron-realtime-rtx5090",
     population_size=1_048_576,
@@ -406,7 +391,7 @@ MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
     adaptation_reference_envelope_validation_required=True,
 )
 
-MILLION_NEURON_MAX_THROUGHPUT_PROFILE = PopulationInferenceProfile(
+AXOSIM_POPULATION_THROUGHPUT_PROFILE = PopulationInferenceProfile(
     name="axosim-population-throughput",
     support_model_id="support_t24_s8_distilled_i600",
     support_token_width=24,
@@ -419,8 +404,6 @@ MILLION_NEURON_MAX_THROUGHPUT_PROFILE = PopulationInferenceProfile(
     compiled_adaptation_values_per_neuron=88,
     morphology_adapter_values_per_class=88,
     output_export_fraction=0.1,
-    correction_fraction=0.0,
-    correction_selection="disabled",
     primary_metric="neuron_steps_per_second",
     minimum_neuron_steps_per_second=1_000_000_000.0,
     measured_median_neuron_steps_per_second=1_388_886_526.116763,
@@ -436,7 +419,7 @@ MILLION_NEURON_MAX_THROUGHPUT_PROFILE = PopulationInferenceProfile(
     individual_synaptic_adaptation_supported=True,
 )
 
-MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE = PopulationInferenceProfile(
+AXOSIM_POPULATION_ACCURATE_PROFILE = PopulationInferenceProfile(
     name="axosim-population-accurate",
     support_model_id="support_t58_s32_distilled_i600",
     support_token_width=58,
@@ -449,8 +432,6 @@ MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE = PopulationInferenceProfile(
     compiled_adaptation_values_per_neuron=228,
     morphology_adapter_values_per_class=228,
     output_export_fraction=0.1,
-    correction_fraction=0.0,
-    correction_selection="disabled",
     primary_metric="voltage_sera_mv",
     minimum_neuron_steps_per_second=1_000_000_000.0,
     measured_median_neuron_steps_per_second=1_151_360_258.6224139,
@@ -464,4 +445,13 @@ MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE = PopulationInferenceProfile(
     population_adaptation_individually_fitted=False,
     individual_behavior_adaptation_supported=True,
     individual_synaptic_adaptation_supported=True,
+)
+
+# Compatibility aliases for experiment scripts and serialized reports created
+# before the public profile names were fixed.
+MILLION_NEURON_MAX_THROUGHPUT_PROFILE = (
+    AXOSIM_POPULATION_THROUGHPUT_PROFILE
+)
+MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE = (
+    AXOSIM_POPULATION_ACCURATE_PROFILE
 )

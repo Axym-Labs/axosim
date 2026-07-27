@@ -1,10 +1,17 @@
 # AxoSim
 
-AxoSim is a deterministic NeuronIO training and evaluation harness for
-biologically inspired surrogate models, including the official ELM /
-Branch-ELM family, recurrent comparison cells, and the promoted `AxoMamba`
-sequence surrogate. The small legacy BranchELM path remains available for
-toy-data smoke tests.
+AxoSim trains and executes feed-forward surrogates of biological neurons, from
+single-neuron AxoBench evaluation to connected million-neuron populations. The
+project has three public neuron models:
+
+- **AxoSim-Mamba** is the accuracy-oriented sequence model.
+- **AxoSim-GRU** is the recurrent full model.
+- **AxoSim-Lite** is the compact adaptive P4 model used by large populations.
+
+**AxoSim Population** combines neuron execution, threshold firing, delayed
+connectome routing, external drive, and population state. **AxoRuntime** is the
+lower-level compute layer: fused kernels, sparse event rings, delay queues,
+quantization, memory layouts, and scheduling.
 
 ## Install
 
@@ -12,31 +19,92 @@ toy-data smoke tests.
 python -m pip install -e .[dev]
 ```
 
-For a new machine, use the setup script. The default creates local directories
-and installs the package without downloading the large public datasets:
+The setup script creates local directories without downloading the large
+public datasets:
 
 ```bash
 python scripts/setup.py
 ```
 
-To inspect the full public-data workflow before running it:
+Inspect the complete public-data setup before running it:
 
 ```bash
 python scripts/setup.py --dry-run --install-kaggle --download-data --convert-raw
 ```
 
-To download the public NeuronIO Kaggle data, configure Kaggle credentials first
-with `~/.kaggle/kaggle.json` or `KAGGLE_USERNAME` / `KAGGLE_KEY`, then run:
+## Python Interface
 
-```bash
-python scripts/setup.py --install-kaggle --download-data
+The public imports use the stable model names. Historical internal class names
+remain checkpoint-compatible.
+
+```python
+from axosim import (
+    AXOSIM_POPULATION_ACCURATE_PROFILE,
+    AXOSIM_POPULATION_THROUGHPUT_PROFILE,
+    AxoSimGRU,
+    AxoSimLite,
+    AxoSimMamba,
+    AxoSimPopulation,
+)
 ```
 
-The dataset download uses a resumable `.zip.part` file. If a large transfer is
-interrupted, rerun the same command and it will continue from the partial file
-when Kaggle's server honors byte ranges.
+`AxoSimPopulation` is an ordinary `torch.nn.Module`. It keeps three adaptation
+mechanisms separate:
 
-## Recommended Workflow
+- a direct behavior adapter for each neuron;
+- a morphology adapter shared only within a morphology class; and
+- a positive efficacy for every retained incoming contact.
+
+```python
+population = AxoSimPopulation(
+    lite_neuron,
+    morphology_indices=morphology_indices,
+    contact_branch_indices=contact_branch_indices,
+)
+population.enable_adaptation_training(
+    behavior=True,
+    morphology=False,
+    synaptic=True,
+)
+
+prediction = population(contact_inputs)
+loss = objective(prediction, target)
+loss.backward()
+```
+
+The forward path preserves full temporal gradients. `forward_tokens()` exposes
+the pre-encoded P4 path for full-BPTT adaptation without rebuilding exact
+contact inputs.
+
+## Population Profiles
+
+The authoritative workload is `MILLION_NEURON_REALTIME_CONTRACT`. It fixes
+1,048,576 neurons, exact native 1 ms inputs and outputs, causal P4 forecasting,
+threshold firing without a quota or top-k, 80/20 E/I roles, delayed
+morphology-aware routing, and complete-stack timing on an RTX 5090.
+
+| Profile | Behavior values / neuron | Synaptic efficacies / neuron | p90 neuron-steps/s | Voltage SERA | F1 area |
+|---|---:|---:|---:|---:|---:|
+| AxoSim Population-Throughput | 88 W8 | 320 W8 | 1.358B | 15.942 mV | 0.360 |
+| AxoSim Population-Accurate | 228 W8 | 320 W8 | 1.135B | 15.742 mV | 0.386 |
+
+These measurements include exact synaptic efficacy and 10% native-voltage
+telemetry to pinned host memory. Full GPU-resident output remains available.
+Durably recording every FP16 voltage to the measured local NVMe device is
+outside the real-time contract because its bandwidth is insufficient.
+
+The benchmark initializes five fitted morphology classes and deterministic
+per-neuron behavior residuals. It proves that unique adaptation rows execute;
+it does not claim that one million neurons were fitted independently. The
+population connectome is procedural and biologically structured, not an
+empirical connectome.
+
+The compatibility constants
+`MILLION_NEURON_MAX_THROUGHPUT_PROFILE` and
+`MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE` refer to the same profile
+objects as the stable public names.
+
+## Train And Evaluate
 
 List the named presets:
 
@@ -44,21 +112,7 @@ List the named presets:
 axosim list-presets
 ```
 
-Train with the current recommended setup:
-
-```bash
-axosim train \
-  --preset paper-random-fulltrace \
-  --data data/full-trace-shards/nmda-train \
-  --val-data data/full-trace-shards/nmda-val \
-  --epochs 10 \
-  --epoch-samples 80000 \
-  --shard-reuse-batches 58 \
-  --checkpoint runs/paper-like.pt \
-  --metrics runs/paper-like-metrics.json
-```
-
-Train the promoted AxoMamba configuration:
+Train AxoSim-Mamba on full-trace shards:
 
 ```bash
 axosim train \
@@ -68,47 +122,29 @@ axosim train \
   --epochs 10 \
   --epoch-samples 80000 \
   --shard-reuse-batches 58 \
-  --checkpoint runs/axomamba.pt \
-  --metrics runs/axomamba-metrics.json
+  --checkpoint runs/axosim-mamba.pt \
+  --metrics runs/axosim-mamba-metrics.json
 ```
 
-Evaluate with the corrected full-trace metric path:
+Evaluate with the AxoBench full-trace metric path:
 
 ```bash
 axosim evaluate \
   --preset fulltrace-paper-metric \
   --data data/full-trace-shards/nmda-val \
-  --checkpoint runs/paper-like.pt \
-  --output runs/paper-like-val.json
+  --checkpoint runs/axosim-mamba.pt \
+  --output runs/axosim-mamba-val.json
 ```
 
-Each `train` and `evaluate` run writes a tiny `experiment-registry.jsonl` next
-to the metrics file by default. Disable that with `--no-registry`.
-
-For model iteration, print the bounded AxoBench core metrics and 24-row
-attention panel directly in the terminal:
+Run the bounded AxoBench diagnostic panel:
 
 ```bash
-axosim-evaluate-model runs/paper-like.pt \
+axosim-evaluate-model runs/axosim-mamba.pt \
   --dataset-root data/v1-neuronio-like-gpu-20260611 \
   --device cuda
 ```
 
-The command works with every checkpoint written by AxoSim's standard
-checkpoint loader. AxoBench remains responsible for metric and diagnostic
-definitions; this repository supplies only checkpoint loading and GPU
-prediction. Install the current AxoBench package in the same environment
-before using the command.
-
-The measured default evaluates one morphology with 120 ordinary traces, 40
-paired traces per intervention, GPU batches of 128, and four concurrent CPU
-intervention loaders. Add `--multiple-morphologies` to distribute the same
-120/40 profile across the five morphologies, or use
-`--morphology-id specimen_...` to select a specific morphology. The command
-only prints to the terminal unless `--output report.json` or
-`--output report.csv` is supplied.
-
-Compare a candidate against a frozen baseline on exactly paired traces:
+Compare a candidate and frozen baseline on exactly paired traces:
 
 ```bash
 axosim-evaluate-model runs/candidate.pt \
@@ -118,87 +154,38 @@ axosim-evaluate-model runs/candidate.pt \
   --output runs/candidate-vs-baseline.json
 ```
 
-The command prints the candidate attention panel followed by six paired
-metric deltas, 95% bootstrap intervals, and per-metric statistical evidence.
-Use `--bootstrap-replicates` and `--bootstrap-seed` to change the default
-250-replicate deterministic comparison.
+AxoBench owns metric and diagnostic definitions. AxoSim supplies checkpoint
+loading, training, adaptation, and GPU prediction.
 
-## Population Inference
+## Data
 
-The task-specialized GRU models have reusable persistent-state population
-runners in `axosim.population`. `GRUPopulationRunner` compiles the sparse
-biological front end, explicit GRU update, heads, state writeback, and output
-materialization as one step for a shared-weight population.
-`GroupedGRUPopulationRunner` uses one recurrent parameter set per contiguous
-neuron group, providing a measured tradeoff between individual behavior and
-resident weight memory without a Python loop over groups.
-`AdaptedGRUBranchPopulationRunner` is the defensive custom-neuron path:
-it keeps one shared frozen biological dynamics base while executing 1,278
-unique adaptation values per neuron. A directly trained 58-value branch-token
-correction replaces 588 branch gains, biases, and projection residual values;
-the remaining 1,220 values control latent state, rank-2 input and recurrent
-GRU residuals, recurrent output gain, and readout. The original 1,808-value
-direct-branch interface remains available as a controlled reference, while a
-1,220-value deletion remains an ablation and does not satisfy the deployment
-contract in `axosim.deployment`.
-
-CUDA execution defaults to `max-autotune-no-cudagraphs`. CUDA graphs stage
-dynamic inputs in static buffers; for the packed adaptation bank that would
-copy every neuron's 1,278-value row on every timestep. The no-graph autotuned
-path consumes the bank in place and is the measured large-population default.
-`quantize_neuron_behavior_parameters` provides physical W8 or packed W4
-storage with one scale per adaptation component, and the same adapted runner
-decodes those values inside the compiled step. W8 remains the target storage
-tier: on the former direct-branch interface it halved adaptation storage and
-improved model/connected throughput by 26.7%/13.0% versus FP16 while clearing
-the held-out SERA and F1 gates. The compact interface's exact 530 MiB bank
-saving is independent of that result, but its complete-stack runtime must be
-remeasured. W4 remains a memory-capacity tier rather than the default.
-`quantize_mixed_neuron_behavior_parameters` supports component-wise W4/W8
-placement. Under the 1,278-value interface, a prospective capacity tier keeps
-the 986 transition values in W8 and stores the remaining 292 branch-token,
-latent, and readout values in W4. Its quality and complete-stack runtime must
-be remeasured before it can replace the W8 defensive target.
-
-Both runners consume sparse event indices and values for one causal timestep.
-Network fanout, delay queues, and event delivery remain separate simulator
-responsibilities; population-runner throughput alone is not an end-to-end
-network-simulation rate.
-
-### One-million-neuron target contract
-
-`MILLION_NEURON_REALTIME_CONTRACT` fixes the workload used for RTX 5090
-systems claims. Every one of 1,048,576 neurons retains the full 1,278-value
-adaptation interface, stored as W8 while activations and recurrent state
-remain FP16. The bank occupies 1.248 GiB, 530 MiB less than the former direct
-branch interface. A complete 1 ms population step includes dense spike
-discovery, 13,401,108 synaptic events at 1% firing and fanout 1,278,
-morphology- and source-type-aware branch targeting, and a four-slot delay
-queue.
-
-The current scalable connectome control uses five morphology classes, an
-80/20 excitatory/inhibitory split, and 90% spatially local connectivity within
-4,096-neuron tiles. It is a procedural biologically structured workload, not
-an empirical connectome. The uniform global hash remains the adversarial
-routing control, and empirical SONATA circuits must be labeled separately.
-`ProceduralMorphologyConnectomeRouter` implements this control with one
-contiguous write per delay class and a persistent delay-major ring. Read
-`current_inputs(slot)` before calling `clear_and_route(..., current_slot=slot)`;
-the latter clears the consumed slot and schedules new events. Use
-`compact_active_sources` to turn dense scalar model outputs into the
-source-sorted int32 vector that exposes spatial locality.
-
-## Smoke Workflow
-
-Create deterministic demo NeuronIO-style shards:
+Public NeuronIO assets are not included. Configure Kaggle credentials through
+its standard credential file or environment variables, then run:
 
 ```bash
-axosim make-demo-data --output runs/demo-data --samples 8 --time-steps 32 --input-dim 64
+python scripts/setup.py --install-kaggle --download-data
 ```
 
-Train the small legacy smoke path on toy data:
+Raw NeuronIO files matching the upstream `*sim__*` naming convention can be
+converted into deterministic AxoSim shards:
 
 ```bash
+axosim convert-neuronio \
+  --input path/to/raw-neuronio-folder \
+  --output runs/neuronio-shards
+```
+
+## Smoke Test
+
+Create toy data, train the small compatibility baseline, and evaluate it:
+
+```bash
+axosim make-demo-data \
+  --output runs/demo-data \
+  --samples 8 \
+  --time-steps 32 \
+  --input-dim 64
+
 axosim train \
   --preset legacy-baseline-smoke \
   --data runs/demo-data \
@@ -208,29 +195,7 @@ axosim train \
   --epochs 1 \
   --checkpoint runs/branch-elm.pt \
   --metrics runs/train-metrics.json
-```
 
-Train the official paper-repo ELM shape on toy data:
-
-```bash
-axosim make-demo-data --output runs/official-demo-data --samples 2 --time-steps 8 --input-dim 1278
-
-axosim train \
-  --preset paper-random-fulltrace \
-  --data runs/official-demo-data \
-  --model-config configs/branch_elm_30_official.json \
-  --window-size 8 \
-  --ignore-start 0 \
-  --burn-in 0 \
-  --epoch-samples 2 \
-  --epochs 1 \
-  --checkpoint runs/official-elm.pt \
-  --metrics runs/official-train-metrics.json
-```
-
-Evaluate a checkpoint:
-
-```bash
 axosim evaluate \
   --preset legacy-baseline-smoke \
   --data runs/demo-data \
@@ -238,89 +203,5 @@ axosim evaluate \
   --output runs/eval-metrics.json
 ```
 
-Evaluate a raw upstream official checkpoint state dict by pairing it with its
-model config:
-
-```bash
-axosim evaluate \
-  --preset fulltrace-paper-metric \
-  --data runs/neuronio-shards \
-  --model-config configs/branch_elm_30_official.json \
-  --checkpoint .external/elmneuron/models/num_memory_30/neuronio_best_model_state.pt \
-  --output runs/official-eval-metrics.json
-```
-
-Benchmark recurrent forward latency:
-
-```bash
-axosim benchmark \
-  --input-dim 1278 \
-  --memory-units 30 \
-  --branches 32 \
-  --batch-size 1 \
-  --time-steps 500 \
-  --runs 10 \
-  --output runs/benchmark.json
-```
-
-## Implemented From The Report
-
-- Deterministic pre-sharded loader for NeuronIO-style `(samples, time, channels)` inputs and two-output spike/soma targets.
-- Official paper-repo ELM / Branch-ELM runtime, routing, synaptic trace state, memory state, and spike/soma readout.
-- `AxoMamba`, the reusable 88,858-parameter promoted Mamba surrogate
-  configuration. Its separate readouts retain route occupancy, morphology-
-  conditioned synaptic efficacy, branch saturation, and the post-Mamba local
-  TCN; a practical-gate 300k ablation removed shared synaptic efficacy, the
-  recoverable soma gate, and bilinear branch interaction, reducing repeated
-  inference latency by 13% without a material core-metric regression.
-- `configs/axomamba-compact.json` and the local
-  `checkpoints/axomamba-compact.pt` preserve the 48,722-parameter compact
-  variant. Balanced state-order transfer reduces parameters by another 14.6%
-  over rank-16/state-23, with 13.2% faster training steps and 12.2% faster
-  inference while remaining below every practical task-regression gate.
-- The promoted AxoMamba training objective uses the raw soma-voltage trace
-  scored by AxoBench; the legacy `targets[..., 1]` channel clips action
-  potentials above -55 mV and is retained only for controlled comparisons.
-- Legacy simplified BranchELM path kept for smoke tests.
-- BCE + MSE training loop with burn-in support.
-- Checkpoint save/load with model config metadata.
-- Iteration evaluation through AxoBench: Voltage SERA, exact and 5 ms spike F1,
-  F1 area over 0--5 ms, Response SERA, compatibility RMSE/AUC, and 24 bounded
-  attention diagnostics.
-- Benchmark command with optional `torch.compile`.
-- Named train/evaluate presets and tiny JSONL experiment registry.
-
-## Not Included
-
-The public NeuronIO Kaggle assets are large and are not downloaded by this
-scaffold. Convert those files into `.npz` shards containing `inputs`, `targets`,
-and optionally `sample_ids`, then point `train` or `evaluate` at that directory.
-
-Raw NeuronIO pickle files matching the upstream `*sim__*` naming pattern can be
-converted directly:
-
-```bash
-axosim convert-neuronio --input path/to/raw-neuronio-folder --output runs/neuronio-shards
-```
-
-The recommended training path is the preset-based full-trace workflow above. If
-you need the older fixed-window path for a compatibility check:
-
-```bash
-axosim train \
-  --data runs/neuronio-shards \
-  --model-kind official \
-  --model-config configs/branch_elm_30_official.json \
-  --window-size 500 \
-  --window-stride 350 \
-  --ignore-start 500 \
-  --burn-in 150 \
-  --shuffle-mode shard \
-  --cache-shards 1 \
-  --checkpoint runs/branch-elm-30.pt \
-  --metrics runs/branch-elm-30-train.json
-```
-
-`--shuffle-mode shard` keeps training deterministic while shuffling shard order
-and within-shard sample order. Pair it with `--cache-shards 1` for compressed
-NeuronIO shards so each shard is inflated once while its local samples are used.
+The Branch-ELM implementation remains as a baseline and checkpoint-compatibility
+path. It is not one of the AxoSim deployment models.
