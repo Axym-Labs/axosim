@@ -19,7 +19,9 @@ __all__ = [
     "AxoSimGRU",
     "AxoSimLite",
     "AxoSimMamba",
+    "AxoSimModelProfile",
     "AxoSimPopulation",
+    "AXOSIM_MODEL_PROFILES",
     "BranchELM",
     "BranchELMConfig",
     "LargePopulationSimulationContract",
@@ -32,6 +34,7 @@ __all__ = [
     "dequantize_mixed_neuron_behavior_parameters",
     "quantize_synaptic_efficacies",
     "quantize_mixed_neuron_behavior_parameters",
+    "create_axosim_profile",
 ]
 
 
@@ -59,6 +62,22 @@ def __getattr__(name: str) -> Any:
         from axosim.axomamba import AxoMamba, AxoMambaConfig
 
         return {"AxoMamba": AxoMamba, "AxoMambaConfig": AxoMambaConfig}[name]
+    if name in {
+        "AXOSIM_MODEL_PROFILES",
+        "AxoSimModelProfile",
+        "create_axosim_profile",
+    }:
+        from axosim.model_family import (
+            AXOSIM_MODEL_PROFILES,
+            AxoSimModelProfile,
+            create_axosim_profile,
+        )
+
+        return {
+            "AXOSIM_MODEL_PROFILES": AXOSIM_MODEL_PROFILES,
+            "AxoSimModelProfile": AxoSimModelProfile,
+            "create_axosim_profile": create_axosim_profile,
+        }[name]
     if name in {"BranchELM", "BranchELMConfig"}:
         from axosim.model import BranchELM, BranchELMConfig
 
