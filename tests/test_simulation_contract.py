@@ -98,7 +98,10 @@ def test_million_neuron_inference_profiles_are_explicit() -> None:
     assert throughput.primary_metric == "neuron_steps_per_second"
     assert (
         throughput.measured_p90_neuron_steps_per_second
-        == pytest.approx(1_380_735_741.3712778)
+        == pytest.approx(1_361_378_268.2786045)
+    )
+    assert throughput.measured_spike_mean_f1 == pytest.approx(
+        0.35383167978104685
     )
     assert quality.name == "axosim-population-accurate"
     assert quality.support_model_id == "support_t58_s32_distilled_i600"
@@ -123,7 +126,10 @@ def test_million_neuron_inference_profiles_are_explicit() -> None:
     )
     assert (
         quality.measured_p90_neuron_steps_per_second
-        == pytest.approx(1_147_564_005.7241912)
+        == pytest.approx(1_145_868_452.1765864)
+    )
+    assert quality.measured_spike_mean_f1 == pytest.approx(
+        0.3789423022478908
     )
     assert (
         quality.minimum_neuron_steps_per_second
