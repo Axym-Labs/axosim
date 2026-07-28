@@ -56,6 +56,7 @@ from axosim import (
     AxoSimMamba,
     AxoSimPopulation,
     CudaGraphAdaptationStep,
+    HomeostaticThresholdController,
 )
 ```
 
@@ -117,6 +118,30 @@ loss = step(next_inputs, next_targets, synchronize=True)
 Capture does not consume an optimizer update. Replays require the same tensor
 shapes and dtypes as the examples used for capture.
 
+Connected simulations can also apply causal firing-rate homeostasis without
+changing the shared neuron model. The controller observes thresholded events
+and returns one bounded threshold offset per declared population group:
+
+```python
+controller = HomeostaticThresholdController(
+    group_ids=role_morphology_group_ids,
+    target_rates_hz=role_morphology_target_rates_hz,
+    dt_ms=1.0,
+    update_interval_ms=100.0,
+    time_constant_ms=500.0,
+    learning_rate=0.07,
+    max_abs_offset=3.0,
+)
+if controller.observe(firing):
+    effective_thresholds = (
+        fixed_thresholds + controller.threshold_offsets_per_neuron()
+    )
+```
+
+The update is causal, group-stratified, and bounded. Its response time is a
+simulation setting; compressed validation settings are not biological
+timescale estimates.
+
 ## Population Profiles
 
 The authoritative workload is `MILLION_NEURON_REALTIME_CONTRACT`. It fixes
@@ -124,10 +149,10 @@ The authoritative workload is `MILLION_NEURON_REALTIME_CONTRACT`. It fixes
 threshold firing without a quota or top-k, 80/20 E/I roles, delayed
 morphology-aware routing, and complete-stack timing on an RTX 5090.
 
-| Profile | Behavior values / neuron | Synaptic efficacies / neuron | p90 neuron-steps/s | Squared SERA | Root-SERA | F1 area (compat.) |
+| Profile | Behavior values / neuron | Synaptic efficacies / neuron | p90 neuron-steps/s | Squared SERA | Root-SERA | Mean F1 |
 |---|---:|---:|---:|---:|---:|---:|
-| AxoSim Population-Throughput | 88 W8 | 320 W8 | 1.381B | 254.143 mV² | 15.942 mV | 0.360 |
-| AxoSim Population-Accurate | 228 W8 | 320 W8 | 1.148B | 247.822 mV² | 15.742 mV | 0.386 |
+| AxoSim Population-Throughput | 88 W8 | 320 W8 | 1.361B | 225.828 mV² | 15.028 mV | 0.354 |
+| AxoSim Population-Accurate | 228 W8 | 320 W8 | 1.146B | 219.129 mV² | 14.803 mV | 0.379 |
 
 These measurements include exact synaptic efficacy and native-voltage telemetry
 for 0.1% of neurons to pinned host memory. Full GPU-resident output remains

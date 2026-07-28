@@ -106,6 +106,153 @@ class FixedBlockActivityThresholds:
         )
 
 
+class HomeostaticThresholdController:
+    """Adapt group thresholds to oppose sustained firing-rate errors.
+
+    The controller preserves per-neuron model scores and baseline thresholds.
+    It adds one bounded offset per declared population group, estimated from
+    causal spike counts over fixed non-overlapping windows.
+    """
+
+    def __init__(
+        self,
+        *,
+        group_ids: torch.Tensor,
+        target_rates_hz: torch.Tensor,
+        dt_ms: float,
+        update_interval_ms: float,
+        time_constant_ms: float,
+        learning_rate: float,
+        max_abs_offset: float,
+    ) -> None:
+        if group_ids.ndim != 1:
+            raise ValueError("group_ids must be one-dimensional")
+        if group_ids.dtype == torch.bool or group_ids.is_floating_point():
+            raise TypeError("group_ids must use an integer dtype")
+        if target_rates_hz.ndim != 1 or not target_rates_hz.numel():
+            raise ValueError(
+                "target_rates_hz must contain one value per group"
+            )
+        if not target_rates_hz.is_floating_point():
+            raise TypeError("target_rates_hz must use a floating dtype")
+        if group_ids.device != target_rates_hz.device:
+            raise ValueError(
+                "group_ids and target_rates_hz must share a device"
+            )
+        if group_ids.numel():
+            minimum = int(group_ids.min())
+            maximum = int(group_ids.max())
+            expected = torch.arange(
+                target_rates_hz.numel(),
+                device=group_ids.device,
+                dtype=group_ids.dtype,
+            )
+            observed = torch.unique(group_ids, sorted=True)
+            if (
+                minimum != 0
+                or maximum >= target_rates_hz.numel()
+                or not torch.equal(observed, expected)
+            ):
+                raise ValueError(
+                    "group_ids must be contiguous and cover every target group"
+                )
+        elif target_rates_hz.numel():
+            raise ValueError("group_ids must cover every target group")
+        if not bool(torch.isfinite(target_rates_hz).all()):
+            raise ValueError("target_rates_hz must be finite")
+        if bool((target_rates_hz <= 0).any()):
+            raise ValueError("target_rates_hz must be positive")
+
+        parameters = {
+            "dt_ms": dt_ms,
+            "update_interval_ms": update_interval_ms,
+            "time_constant_ms": time_constant_ms,
+            "learning_rate": learning_rate,
+            "max_abs_offset": max_abs_offset,
+        }
+        for name, value in parameters.items():
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        steps_per_update_float = update_interval_ms / dt_ms
+        steps_per_update = round(steps_per_update_float)
+        if not math.isclose(
+            steps_per_update_float,
+            steps_per_update,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                "update_interval_ms must be an integer multiple of dt_ms"
+            )
+
+        self.group_ids = group_ids.long()
+        self.target_rates_hz = target_rates_hz
+        self.dt_ms = float(dt_ms)
+        self.update_interval_ms = float(update_interval_ms)
+        self.time_constant_ms = float(time_constant_ms)
+        self.learning_rate = float(learning_rate)
+        self.max_abs_offset = float(max_abs_offset)
+        self.steps_per_update = int(steps_per_update)
+        self.group_sizes = torch.bincount(
+            self.group_ids,
+            minlength=target_rates_hz.numel(),
+        ).to(dtype=target_rates_hz.dtype)
+        self.threshold_offsets = torch.zeros_like(target_rates_hz)
+        self.ema_rates_hz = target_rates_hz.clone()
+        self.last_window_rates_hz = target_rates_hz.clone()
+        self._spike_counts = torch.zeros_like(target_rates_hz)
+        self._steps_observed = 0
+
+    @torch.no_grad()
+    def observe(self, activity: torch.Tensor) -> bool:
+        """Observe one simulation step and update at the window boundary."""
+
+        if activity.shape != self.group_ids.shape:
+            raise ValueError("activity must match group_ids")
+        if activity.dtype != torch.bool:
+            raise TypeError("activity must use bool dtype")
+        if activity.device != self.group_ids.device:
+            raise ValueError("activity and group_ids must share a device")
+
+        self._spike_counts.add_(
+            torch.bincount(
+                self.group_ids,
+                weights=activity.to(dtype=self.target_rates_hz.dtype),
+                minlength=self.target_rates_hz.numel(),
+            )
+        )
+        self._steps_observed += 1
+        if self._steps_observed < self.steps_per_update:
+            return False
+
+        window_seconds = self.update_interval_ms / 1_000.0
+        self.last_window_rates_hz.copy_(
+            self._spike_counts / self.group_sizes / window_seconds
+        )
+        ema_alpha = 1.0 - math.exp(
+            -self.update_interval_ms / self.time_constant_ms
+        )
+        self.ema_rates_hz.lerp_(self.last_window_rates_hz, ema_alpha)
+        relative_error = (
+            self.ema_rates_hz - self.target_rates_hz
+        ) / self.target_rates_hz
+        self.threshold_offsets.add_(
+            relative_error,
+            alpha=self.learning_rate,
+        ).clamp_(
+            min=-self.max_abs_offset,
+            max=self.max_abs_offset,
+        )
+        self._spike_counts.zero_()
+        self._steps_observed = 0
+        return True
+
+    def threshold_offsets_per_neuron(self) -> torch.Tensor:
+        """Return the current group offset for every population member."""
+
+        return self.threshold_offsets[self.group_ids]
+
+
 def build_stratified_patch_phase_layout(
     morphology_ids: torch.Tensor,
     inhibitory: torch.Tensor,

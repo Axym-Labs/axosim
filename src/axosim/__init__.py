@@ -22,6 +22,7 @@ __all__ = [
     "AxoSimModelProfile",
     "AxoSimPopulation",
     "CudaGraphAdaptationStep",
+    "HomeostaticThresholdController",
     "AXOSIM_MODEL_PROFILES",
     "BranchELM",
     "BranchELMConfig",
@@ -44,6 +45,10 @@ def __getattr__(name: str) -> Any:
         from axosim.adaptation import CudaGraphAdaptationStep
 
         return CudaGraphAdaptationStep
+    if name == "HomeostaticThresholdController":
+        from axosim.activity import HomeostaticThresholdController
+
+        return HomeostaticThresholdController
     if name in {
         "AxoSimGRU",
         "AxoSimLite",

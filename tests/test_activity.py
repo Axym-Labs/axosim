@@ -3,9 +3,11 @@ from dataclasses import replace
 import pytest
 import torch
 
+import axosim
 from axosim.activity import (
     FixedActivityThresholds,
     FixedBlockActivityThresholds,
+    HomeostaticThresholdController,
     build_stratified_patch_phase_layout,
     threshold_block_model_activity,
     threshold_model_activity,
@@ -63,6 +65,70 @@ def test_threshold_activity_has_no_fixed_cardinality() -> None:
     )
 
     assert activity.sum(dim=-1).tolist() == [0, 2, 3]
+
+
+def test_homeostatic_threshold_controller_opposes_group_rate_errors() -> None:
+    controller = HomeostaticThresholdController(
+        group_ids=torch.tensor([0, 0, 1, 1]),
+        target_rates_hz=torch.tensor([10.0, 10.0]),
+        dt_ms=10.0,
+        update_interval_ms=100.0,
+        time_constant_ms=100.0,
+        learning_rate=0.1,
+        max_abs_offset=0.5,
+    )
+
+    for step in range(10):
+        updated = controller.observe(
+            torch.tensor([True, True, False, False])
+        )
+        assert updated is (step == 9)
+
+    assert controller.threshold_offsets[0] > 0
+    assert controller.threshold_offsets[1] < 0
+    assert controller.threshold_offsets.abs().max() <= 0.5
+    assert torch.equal(
+        controller.threshold_offsets_per_neuron(),
+        controller.threshold_offsets[torch.tensor([0, 0, 1, 1])],
+    )
+
+
+def test_homeostatic_threshold_controller_uses_population_rate() -> None:
+    controller = HomeostaticThresholdController(
+        group_ids=torch.tensor([0, 0]),
+        target_rates_hz=torch.tensor([5.0]),
+        dt_ms=100.0,
+        update_interval_ms=200.0,
+        time_constant_ms=200.0,
+        learning_rate=0.05,
+        max_abs_offset=0.2,
+    )
+
+    controller.observe(torch.tensor([True, False]))
+    controller.observe(torch.tensor([False, True]))
+
+    assert controller.last_window_rates_hz.tolist() == pytest.approx([5.0])
+    assert controller.threshold_offsets.tolist() == pytest.approx([0.0])
+
+
+def test_homeostatic_threshold_controller_rejects_missing_groups() -> None:
+    with pytest.raises(ValueError, match="contiguous"):
+        HomeostaticThresholdController(
+            group_ids=torch.tensor([0, 2]),
+            target_rates_hz=torch.tensor([5.0, 5.0, 5.0]),
+            dt_ms=1.0,
+            update_interval_ms=100.0,
+            time_constant_ms=500.0,
+            learning_rate=0.01,
+            max_abs_offset=1.0,
+        )
+
+
+def test_homeostatic_threshold_controller_is_a_public_entrypoint() -> None:
+    assert (
+        axosim.HomeostaticThresholdController
+        is HomeostaticThresholdController
+    )
 
 
 def test_block_thresholds_are_fixed_per_forecast_position() -> None:
