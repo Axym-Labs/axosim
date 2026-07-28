@@ -19,17 +19,27 @@ quantization, memory layouts, and scheduling.
 python -m pip install -e .[dev]
 ```
 
-The setup script creates local directories without downloading the large
+Released AxoSim-Mamba checkpoints require the fused official backend:
+
+```bash
+python -m pip install -e '.[mamba]'
+```
+
+The dependency-free `AxoPyTorchMamba` backend is intended for tests and smoke
+runs; official Mamba checkpoints use a different learned-timestep rank and are
+not state-dict compatible with that fallback.
+
+The setup command creates local directories without downloading the large
 public datasets:
 
 ```bash
-python scripts/setup.py
+axosim-setup
 ```
 
 Inspect the complete public-data setup before running it:
 
 ```bash
-python scripts/setup.py --dry-run --install-kaggle --download-data --convert-raw
+axosim-setup --dry-run --install-kaggle --download-data --convert-raw
 ```
 
 ## Python Interface
@@ -200,7 +210,7 @@ Public NeuronIO assets are not included. Configure Kaggle credentials through
 its standard credential file or environment variables, then run:
 
 ```bash
-python scripts/setup.py --install-kaggle --download-data
+axosim-setup --install-kaggle --download-data
 ```
 
 Raw NeuronIO files matching the upstream `*sim__*` naming convention can be

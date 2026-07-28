@@ -17,10 +17,15 @@ dependencies = [
 dev = [
   "pytest>=8",
 ]
+mamba = [
+  "causal-conv1d>=1.6.2,<2",
+  "mamba-ssm>=2.3.2,<3",
+]
 
 [project.scripts]
 axosim = "axosim.cli:main"
 axosim-evaluate-model = "axosim.axobench_iteration:main"
+axosim-setup = "axosim.setup_workflow:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

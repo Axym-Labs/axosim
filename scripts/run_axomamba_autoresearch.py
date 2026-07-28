@@ -61,9 +61,7 @@ from axosim.structured import (  # noqa: E402
 DEFAULT_DATASET_ROOT = PROJECT_ROOT / "data" / "v1-neuronio-like-gpu-20260611"
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "axomamba.json"
 DEFAULT_RUN_ROOT = PROJECT_ROOT / "runs" / "axomamba-autoresearch"
-DEFAULT_DIAGNOSTICS_ROOT = (
-    PROJECT_ROOT / "docs" / "axomamba-autoresearch" / "artifacts" / "diagnostics"
-)
+DEFAULT_DIAGNOSTICS_ROOT = DEFAULT_RUN_ROOT / "diagnostics"
 
 
 def main(argv: list[str] | None = None) -> int:
