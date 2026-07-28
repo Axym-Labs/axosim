@@ -41,6 +41,44 @@ def _population() -> AxoSimPopulation:
     )
 
 
+def test_population_initializes_pretrained_morphology_adapters() -> None:
+    torch.manual_seed(11)
+    config = SupportP4Config(
+        input_dim=6,
+        route_feature_dim=3,
+        token_dim=4,
+        state_dim=3,
+        morphology_ids=("m0", "m1"),
+        behavior_adaptation=True,
+    )
+    neuron = AdaptiveSupportP4Surrogate(
+        config,
+        torch.randn(2, 6, 3),
+    )
+    assert neuron.behavior_adaptation_bank is not None
+    expected = neuron.compile_adaptation(
+        neuron.behavior_adaptation_bank
+    ).detach()
+
+    population = AxoSimPopulation(
+        neuron,
+        morphology_indices=torch.tensor([0, 0, 1]),
+        contact_branch_indices=torch.tensor(
+            [
+                [0, 1, 2, 3],
+                [0, 1, 2, 3],
+                [2, 3, 4, 5],
+            ]
+        ),
+    )
+
+    torch.testing.assert_close(population.morphology_adapter, expected)
+    torch.testing.assert_close(
+        population.behavior_adapter,
+        torch.zeros_like(population.behavior_adapter),
+    )
+
+
 def test_public_model_names_resolve_to_their_architectures() -> None:
     assert AxoSimMamba is AxoMamba
     assert AxoSimGRU is CausalBlockForecastModel

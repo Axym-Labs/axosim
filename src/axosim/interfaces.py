@@ -72,9 +72,13 @@ class AxoSimPopulation(nn.Module):
         self.behavior_adapter = nn.Parameter(
             torch.zeros(population, runtime_width)
         )
-        self.morphology_adapter = nn.Parameter(
-            torch.zeros(morphologies, runtime_width)
-        )
+        if neuron.behavior_adaptation_bank is None:
+            morphology_adapter = torch.zeros(morphologies, runtime_width)
+        else:
+            morphology_adapter = neuron.compile_adaptation(
+                neuron.behavior_adaptation_bank
+            ).detach()
+        self.morphology_adapter = nn.Parameter(morphology_adapter.clone())
         self.synaptic_log_efficacy = nn.Parameter(
             torch.zeros(population, contacts)
         )
