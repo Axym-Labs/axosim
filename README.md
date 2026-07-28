@@ -45,6 +45,7 @@ from axosim import (
     AxoSimLite,
     AxoSimMamba,
     AxoSimPopulation,
+    CudaGraphAdaptationStep,
 )
 ```
 
@@ -72,9 +73,39 @@ loss = objective(prediction, target)
 loss.backward()
 ```
 
-The forward path preserves full temporal gradients. `forward_tokens()` exposes
-the pre-encoded P4 path for full-BPTT adaptation without rebuilding exact
-contact inputs.
+`contact_inputs` has shape `(population, time, contacts)`.
+`forward_batch()` accepts
+`(batch, persistent_population, time, contacts)` when independent examples
+share the same neuron population and adaptation parameters. Both paths
+preserve full temporal gradients. `forward_tokens()` and
+`forward_token_batch()` expose pre-encoded P4 paths for full-BPTT adaptation
+without rebuilding exact contact inputs.
+
+Fixed-shape online or test-time updates can capture the complete forward,
+loss, backward, gradient transform, and optimizer step:
+
+```python
+optimizer = torch.optim.Adam(
+    population.trainable_adaptation_parameters(),
+    lr=1e-3,
+    capturable=True,
+)
+step = CudaGraphAdaptationStep.capture(
+    population,
+    optimizer,
+    example_inputs,
+    example_targets,
+    objective,
+    gradient_transform=lambda: torch.nn.utils.clip_grad_norm_(
+        list(population.trainable_adaptation_parameters()),
+        1.0,
+    ),
+)
+loss = step(next_inputs, next_targets, synchronize=True)
+```
+
+Capture does not consume an optimizer update. Replays require the same tensor
+shapes and dtypes as the examples used for capture.
 
 ## Population Profiles
 
