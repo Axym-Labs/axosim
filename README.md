@@ -188,6 +188,12 @@ axosim-evaluate-model runs/candidate.pt \
 AxoBench owns metric and diagnostic definitions. AxoSim supplies checkpoint
 loading, training, adaptation, and GPU prediction.
 
+The role-correct population-trained AxoSim-Mamba uses
+`configs/axomamba-population.json` and
+`checkpoints/axomamba-population.pt`. It retains all six excitatory/inhibitory
+morphology IDs and is separate from the compact SERA-only and spike-focused
+checkpoints.
+
 ## Data
 
 Public NeuronIO assets are not included. Configure Kaggle credentials through

@@ -12,6 +12,7 @@ AXOMAMBA_MODEL_KIND = "axomamba"
 AXOMAMBA_DEFAULT_CONFIG = "configs/axomamba.json"
 AXOMAMBA_STRUCTURED_COMPACT_CONFIG = "configs/axomamba-structured-compact.json"
 AXOMAMBA_REGRESSION_CONFIG = "configs/axomamba-regression.json"
+AXOMAMBA_POPULATION_CONFIG = "configs/axomamba-population.json"
 AXOMAMBA_SPIKE_CONFIG = "configs/axomamba-spike.json"
 
 
@@ -105,6 +106,23 @@ def regression_axomamba_config(**overrides: Any) -> AxoMambaConfig:
     }
     values.update(overrides)
     return structured_compact_axomamba_config(**values)
+
+
+def population_axomamba_config(**overrides: Any) -> AxoMambaConfig:
+    """Return the role-correct population-trained AxoSim-Mamba recipe."""
+
+    values: dict[str, Any] = {
+        "morphology_ids": [
+            "specimen_479770916",
+            "specimen_487664663",
+            "specimen_488679042",
+            "specimen_488683425",
+            "specimen_589427435",
+            "allen_sst_specimen_482690728",
+        ],
+    }
+    values.update(overrides)
+    return default_axomamba_config(**values)
 
 
 def spike_axomamba_config(**overrides: Any) -> AxoMambaConfig:

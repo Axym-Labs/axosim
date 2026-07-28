@@ -5,6 +5,7 @@ from axosim.axomamba import (
     AxoMambaConfig,
     AxoPyTorchMamba,
     default_axomamba_config,
+    population_axomamba_config,
     regression_axomamba_config,
     spike_axomamba_config,
     structured_compact_axomamba_config,
@@ -163,6 +164,19 @@ def test_axomamba_regression_config_uses_long_gated_population_structure():
     assert config.local_tcn_pointwise_rank == 4
     assert config.local_tcn_output_rank == 4
     assert config.share_morphology_synapse_gain is True
+
+
+def test_population_axomamba_config_preserves_role_correct_teacher_capacity():
+    config = population_axomamba_config()
+
+    assert config.model_dim == 58
+    assert config.state_dim == 23
+    assert config.num_layers == 2
+    assert config.mamba_projection_rank == 0
+    assert config.share_local_tcn_pointwise is False
+    assert config.share_morphology_synapse_gain is False
+    assert config.morphology_ids[-1] == "allen_sst_specimen_482690728"
+    assert len(config.morphology_ids) == 6
 
 
 def test_axomamba_spike_config_uses_long_gated_population_structure():
