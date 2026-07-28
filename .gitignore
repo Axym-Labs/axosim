@@ -4,7 +4,7 @@ __pycache__/
 build/
 dist/
 runs/
-data/
+data
 checkpoints/
 *.pt
 .external/

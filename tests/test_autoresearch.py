@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import sys
 import threading
 
 import numpy as np
@@ -1186,7 +1187,7 @@ def test_experiment_runner_dry_run_has_small_manifest_driven_interface(tmp_path)
     project_root = Path(__file__).resolve().parents[1]
     completed = subprocess.run(
         [
-            str(project_root / ".venv" / "bin" / "python"),
+            sys.executable,
             str(project_root / "scripts" / "run_axomamba_autoresearch.py"),
             str(manifest),
             "--dry-run",
@@ -1220,7 +1221,7 @@ def test_experiment_runner_allows_only_manifest_labeled_smoke_budget(tmp_path) -
     project_root = Path(__file__).resolve().parents[1]
     completed = subprocess.run(
         [
-            str(project_root / ".venv" / "bin" / "python"),
+            sys.executable,
             str(project_root / "scripts" / "run_axomamba_autoresearch.py"),
             str(manifest),
             "--dry-run",

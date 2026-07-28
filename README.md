@@ -278,3 +278,19 @@ axosim evaluate \
 
 The Branch-ELM implementation remains as a baseline and checkpoint-compatibility
 path. It is not one of the AxoSim deployment models.
+
+## Verify the package
+
+```bash
+python -m pytest -q
+```
+
+## Evidence boundaries
+
+The million-neuron rates are hardware- and contract-specific complete-stack
+measurements, not inferred speedups over Arbor, CoreNEURON, or another
+biophysical simulator. AxoSim's trainable behavior, morphology, threshold, and
+contact-efficacy coordinates are learned operational state; they are not
+interpretable ion-channel or compartment parameters. The population-context
+dataset uses biophysical teachers on connected-model input histories rather
+than a fully biophysical closed loop.
