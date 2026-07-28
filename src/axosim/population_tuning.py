@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from typing import Mapping
 
@@ -45,6 +45,21 @@ AXOBENCH_POPULATION_CONTRACT = PopulationBiologicalContract(
 )
 
 _EPSILON = 1e-9
+
+
+def role_correct_population_contract(
+    contract: PopulationBiologicalContract = AXOBENCH_POPULATION_CONTRACT,
+) -> PopulationBiologicalContract:
+    """Return morphology targets for excitatory-only morphology groups."""
+
+    scale = contract.excitatory_firing_rate_hz / contract.firing_rate_hz
+    return replace(
+        contract,
+        morphology_firing_rate_hz={
+            morphology: rate * scale
+            for morphology, rate in contract.morphology_firing_rate_hz.items()
+        },
+    )
 
 
 def _log_ratio(observed: float, target: float) -> float:

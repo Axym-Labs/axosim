@@ -5,6 +5,7 @@ import math
 
 from axosim.population_tuning import (
     AXOBENCH_POPULATION_CONTRACT,
+    role_correct_population_contract,
     score_population_summary,
 )
 
@@ -47,6 +48,27 @@ def test_exact_contract_has_zero_loss_and_passes_gates() -> None:
     assert result["objective"] == 0.0
     assert result["passes_contract_gate"]
     assert all(result["gates"].values())
+
+
+def test_role_correct_contract_scales_excitatory_morphology_targets() -> None:
+    contract = role_correct_population_contract()
+    scale = (
+        AXOBENCH_POPULATION_CONTRACT.excitatory_firing_rate_hz
+        / AXOBENCH_POPULATION_CONTRACT.firing_rate_hz
+    )
+
+    assert contract.firing_rate_hz == (
+        AXOBENCH_POPULATION_CONTRACT.firing_rate_hz
+    )
+    assert contract.inhibitory_firing_rate_hz == (
+        AXOBENCH_POPULATION_CONTRACT.inhibitory_firing_rate_hz
+    )
+    assert contract.morphology_firing_rate_hz == {
+        morphology: rate * scale
+        for morphology, rate in (
+            AXOBENCH_POPULATION_CONTRACT.morphology_firing_rate_hz.items()
+        )
+    }
 
 
 def test_score_rejects_correct_mean_with_bursty_unstable_activity() -> None:
