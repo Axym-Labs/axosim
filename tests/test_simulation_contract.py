@@ -91,12 +91,15 @@ def test_million_neuron_inference_profiles_are_explicit() -> None:
     assert throughput.support_block_rows == 32
     assert throughput.compiled_adaptation_values_per_neuron == 88
     assert throughput.morphology_adapter_values_per_class == 88
-    assert throughput.output_export_fraction == 0.1
+    assert throughput.output_export_fraction == 0.001
     assert not throughput.population_adaptation_individually_fitted
     assert throughput.individual_behavior_adaptation_supported
     assert throughput.individual_synaptic_adaptation_supported
     assert throughput.primary_metric == "neuron_steps_per_second"
-    assert throughput.measured_p90_neuron_steps_per_second > 1_350_000_000
+    assert (
+        throughput.measured_p90_neuron_steps_per_second
+        == pytest.approx(1_380_735_741.3712778)
+    )
     assert quality.name == "axosim-population-accurate"
     assert quality.support_model_id == "support_t58_s32_distilled_i600"
     assert quality.support_token_width == 58
@@ -104,10 +107,13 @@ def test_million_neuron_inference_profiles_are_explicit() -> None:
     assert quality.support_block_rows == 32
     assert quality.compiled_adaptation_values_per_neuron == 228
     assert quality.morphology_adapter_values_per_class == 228
-    assert quality.output_export_fraction == 0.1
+    assert quality.output_export_fraction == 0.001
     assert quality.primary_metric == "voltage_sera_mv"
     assert quality.measured_voltage_sera_mv < throughput.measured_voltage_sera_mv
-    assert quality.measured_p90_neuron_steps_per_second > 1_130_000_000
+    assert (
+        quality.measured_p90_neuron_steps_per_second
+        == pytest.approx(1_147_564_005.7241912)
+    )
     assert (
         quality.minimum_neuron_steps_per_second
         == throughput.minimum_neuron_steps_per_second

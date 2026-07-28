@@ -126,11 +126,12 @@ morphology-aware routing, and complete-stack timing on an RTX 5090.
 
 | Profile | Behavior values / neuron | Synaptic efficacies / neuron | p90 neuron-steps/s | Voltage SERA | F1 area |
 |---|---:|---:|---:|---:|---:|
-| AxoSim Population-Throughput | 88 W8 | 320 W8 | 1.358B | 15.942 mV | 0.360 |
-| AxoSim Population-Accurate | 228 W8 | 320 W8 | 1.135B | 15.742 mV | 0.386 |
+| AxoSim Population-Throughput | 88 W8 | 320 W8 | 1.381B | 15.942 mV | 0.360 |
+| AxoSim Population-Accurate | 228 W8 | 320 W8 | 1.148B | 15.742 mV | 0.386 |
 
-These measurements include exact synaptic efficacy and 10% native-voltage
-telemetry to pinned host memory. Full GPU-resident output remains available.
+These measurements include exact synaptic efficacy and native-voltage telemetry
+for 0.1% of neurons to pinned host memory. Full GPU-resident output remains
+available.
 Durably recording every FP16 voltage to the measured local NVMe device is
 outside the real-time contract because its bandwidth is insufficient.
 
