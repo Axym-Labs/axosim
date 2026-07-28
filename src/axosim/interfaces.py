@@ -174,24 +174,103 @@ class AxoSimPopulation(nn.Module):
         )
         return branch_inputs.scatter_add(2, indices, weighted)
 
+    def _contact_route_features(self) -> torch.Tensor:
+        return self.neuron.route_features[
+            self.morphology_indices.unsqueeze(1),
+            self.contact_branch_indices,
+        ]
+
+    def _contact_summaries(
+        self,
+        contact_inputs: torch.Tensor,
+        *,
+        synaptic_log_efficacy: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        expected = (
+            self.population_size,
+            contact_inputs.shape[1],
+            self.synaptic_efficacies_per_neuron,
+        )
+        if tuple(contact_inputs.shape) != expected:
+            raise ValueError(f"contact_inputs must have shape {expected}")
+        weighted = contact_inputs * self.synaptic_efficacies(
+            synaptic_log_efficacy
+        ).unsqueeze(1)
+        return torch.bmm(
+            weighted,
+            self._contact_route_features(),
+        )
+
     def forward(
         self,
         contact_inputs: torch.Tensor,
         *,
         synaptic_log_efficacy: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        branch_inputs = self._branch_inputs(
+        summaries = self._contact_summaries(
             contact_inputs,
             synaptic_log_efficacy=synaptic_log_efficacy,
-        )
-        summaries = self.neuron.aggregate_inputs(
-            branch_inputs,
-            morphology_indices=self.morphology_indices,
         )
         return self.neuron.forward_runtime_coefficients(
             summaries,
             runtime_coefficients=self._runtime_coefficients(),
         )
+
+    def forward_batch(
+        self,
+        contact_inputs: torch.Tensor,
+        *,
+        synaptic_log_efficacy: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Run independent examples through one persistent population."""
+
+        if contact_inputs.ndim != 4:
+            raise ValueError(
+                "contact_inputs must have shape "
+                "(batch, population, time, contacts)"
+            )
+        batch, population, time, contacts = contact_inputs.shape
+        expected = (
+            batch,
+            self.population_size,
+            time,
+            self.synaptic_efficacies_per_neuron,
+        )
+        if tuple(contact_inputs.shape) != expected:
+            raise ValueError(f"contact_inputs must have shape {expected}")
+
+        efficacy = self.synaptic_efficacies(
+            synaptic_log_efficacy
+        ).view(1, population, 1, contacts)
+        weighted = contact_inputs * efficacy
+        route_features = self._contact_route_features()
+        summaries = torch.bmm(
+            weighted.permute(1, 0, 2, 3).reshape(
+                population,
+                batch * time,
+                contacts,
+            ),
+            route_features,
+        ).reshape(
+            population,
+            batch,
+            time,
+            self.neuron.config.route_feature_dim,
+        ).permute(1, 0, 2, 3).reshape(
+            batch * population,
+            time,
+            self.neuron.config.route_feature_dim,
+        )
+        runtime_coefficients = self._runtime_coefficients().view(
+            1,
+            population,
+            -1,
+        ).expand(batch, -1, -1).reshape(batch * population, -1)
+        output = self.neuron.forward_runtime_coefficients(
+            summaries,
+            runtime_coefficients=runtime_coefficients,
+        )
+        return output.reshape(batch, population, time, -1)
 
     def forward_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
         """Run pre-encoded P4 tokens with full temporal gradients."""
@@ -218,3 +297,51 @@ class AxoSimPopulation(nn.Module):
             )
             outputs.append(output)
         return torch.cat(outputs, dim=1)
+
+    def forward_token_batch(self, tokens: torch.Tensor) -> torch.Tensor:
+        """Run batched pre-encoded P4 tokens with full temporal gradients."""
+
+        if tokens.ndim != 4:
+            raise ValueError(
+                "tokens must have shape "
+                "(batch, population, blocks, token_dim)"
+            )
+        batch, population, blocks, token_dim = tokens.shape
+        expected = (
+            batch,
+            self.population_size,
+            blocks,
+            self.neuron.config.token_dim,
+        )
+        if tuple(tokens.shape) != expected:
+            raise ValueError(f"tokens must have shape {expected}")
+        flat_tokens = tokens.reshape(
+            batch * population,
+            blocks,
+            token_dim,
+        )
+        state = self.neuron.initial_state(
+            batch * population,
+            device=tokens.device,
+            dtype=tokens.dtype,
+        )
+        runtime_coefficients = self._runtime_coefficients().view(
+            1,
+            population,
+            -1,
+        ).expand(batch, -1, -1).reshape(batch * population, -1)
+        outputs = []
+        for block in range(blocks):
+            output, state = self.neuron.step_token(
+                flat_tokens[:, block],
+                state,
+                adaptation_cache=runtime_coefficients,
+            )
+            outputs.append(output)
+        flat_output = torch.cat(outputs, dim=1)
+        return flat_output.reshape(
+            batch,
+            population,
+            flat_output.shape[1],
+            flat_output.shape[2],
+        )

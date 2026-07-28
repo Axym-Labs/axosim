@@ -101,6 +101,24 @@ def test_population_forward_preserves_full_temporal_gradients() -> None:
     assert population.synaptic_log_efficacy.grad.abs().sum() > 0
 
 
+def test_population_contact_path_matches_dense_branch_reference() -> None:
+    population = _population()
+    contacts = torch.randn(3, 12, 4)
+    branch_inputs = population._branch_inputs(contacts)
+    summaries = population.neuron.aggregate_inputs(
+        branch_inputs,
+        morphology_indices=population.morphology_indices,
+    )
+    expected = population.neuron.forward_runtime_coefficients(
+        summaries,
+        runtime_coefficients=population._runtime_coefficients(),
+    )
+
+    actual = population(contacts)
+
+    torch.testing.assert_close(actual, expected)
+
+
 def test_population_token_path_preserves_full_temporal_gradients() -> None:
     population = _population()
     population.enable_adaptation_training()
@@ -112,6 +130,35 @@ def test_population_token_path_preserves_full_temporal_gradients() -> None:
     assert prediction.shape == (3, 16, 2)
     assert tokens.grad is not None
     assert tokens.grad[:, 0].abs().sum() > 0
+    assert population.behavior_adapter.grad is not None
+    assert population.behavior_adapter.grad.abs().sum() > 0
+
+
+def test_population_batch_path_matches_independent_examples() -> None:
+    population = _population()
+    contacts = torch.randn(2, 3, 12, 4)
+
+    batched = population.forward_batch(contacts)
+    independent = torch.stack(
+        [population(example) for example in contacts],
+        dim=0,
+    )
+
+    assert batched.shape == (2, 3, 12, 2)
+    torch.testing.assert_close(batched, independent)
+
+
+def test_population_batched_tokens_preserve_full_bptt() -> None:
+    population = _population()
+    population.enable_adaptation_training()
+    tokens = torch.randn(2, 3, 4, 4, requires_grad=True)
+
+    prediction = population.forward_token_batch(tokens)
+    prediction[:, :, -1].sum().backward()
+
+    assert prediction.shape == (2, 3, 16, 2)
+    assert tokens.grad is not None
+    assert tokens.grad[:, :, 0].abs().sum() > 0
     assert population.behavior_adapter.grad is not None
     assert population.behavior_adapter.grad.abs().sum() > 0
 

@@ -21,6 +21,7 @@ __all__ = [
     "AxoSimMamba",
     "AxoSimModelProfile",
     "AxoSimPopulation",
+    "CudaGraphAdaptationStep",
     "AXOSIM_MODEL_PROFILES",
     "BranchELM",
     "BranchELMConfig",
@@ -39,6 +40,10 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
+    if name == "CudaGraphAdaptationStep":
+        from axosim.adaptation import CudaGraphAdaptationStep
+
+        return CudaGraphAdaptationStep
     if name in {
         "AxoSimGRU",
         "AxoSimLite",
