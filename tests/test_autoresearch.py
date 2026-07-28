@@ -806,7 +806,7 @@ def test_candidate_panel_defaults_to_promoted_axomamba_recipe(tmp_path) -> None:
         "base_soma_target_mix": 1.0,
         "direct_sera_loss_weight": 0.01,
         "f1_curve_loss_weight": 0.05,
-        "f1_tolerances_steps": (0, 1, 2, 3, 4, 5, 5),
+        "f1_tolerances_steps": (0, 1, 2, 3, 4, 5),
         "near_spike_radius_steps": 5,
         "near_spike_voltage_loss_weight": 0.002,
         "raw_soma_target_mix": 1.0,
@@ -1159,7 +1159,7 @@ def test_base_soma_auxiliary_can_decompose_clipped_and_raw_targets() -> None:
     assert float(raw_base) > 0.0
 
 
-def test_promoted_axomamba_objective_duplicates_tolerant_f1_endpoint() -> None:
+def test_promoted_axomamba_objective_weights_each_f1_tolerance_once() -> None:
     objective = default_axomamba_training_objective()
 
     assert objective.direct_sera_loss_weight == 0.01
@@ -1167,7 +1167,7 @@ def test_promoted_axomamba_objective_duplicates_tolerant_f1_endpoint() -> None:
     assert objective.near_spike_voltage_loss_weight == 0.002
     assert objective.near_spike_radius_steps == 5
     assert objective.sera_threshold_count == 101
-    assert objective.f1_tolerances_steps == (0, 1, 2, 3, 4, 5, 5)
+    assert objective.f1_tolerances_steps == (0, 1, 2, 3, 4, 5)
     assert AXOMAMBA_DEFAULT_BURN_IN == 50
 
 

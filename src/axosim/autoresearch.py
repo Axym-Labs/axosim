@@ -474,7 +474,7 @@ def default_axomamba_training_objective() -> TrainingObjective:
         near_spike_radius_steps=5,
         raw_soma_target_mix=1.0,
         sera_threshold_count=101,
-        f1_tolerances_steps=(0, 1, 2, 3, 4, 5, 5),
+        f1_tolerances_steps=(0, 1, 2, 3, 4, 5),
     )
 
 
@@ -489,7 +489,7 @@ def regression_axomamba_training_objective() -> TrainingObjective:
         near_spike_radius_steps=5,
         raw_soma_target_mix=1.0,
         sera_threshold_count=101,
-        f1_tolerances_steps=(0, 1, 2, 3, 4, 5, 5),
+        f1_tolerances_steps=(0, 1, 2, 3, 4, 5),
     )
 
 
@@ -504,7 +504,7 @@ def spike_axomamba_training_objective() -> TrainingObjective:
         near_spike_radius_steps=5,
         raw_soma_target_mix=1.0,
         sera_threshold_count=101,
-        f1_tolerances_steps=(0, 1, 2, 3, 4, 5, 5),
+        f1_tolerances_steps=(0, 1, 2, 3, 4, 5),
     )
 
 

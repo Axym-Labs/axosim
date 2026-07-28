@@ -124,10 +124,10 @@ The authoritative workload is `MILLION_NEURON_REALTIME_CONTRACT`. It fixes
 threshold firing without a quota or top-k, 80/20 E/I roles, delayed
 morphology-aware routing, and complete-stack timing on an RTX 5090.
 
-| Profile | Behavior values / neuron | Synaptic efficacies / neuron | p90 neuron-steps/s | Voltage SERA | F1 area |
-|---|---:|---:|---:|---:|---:|
-| AxoSim Population-Throughput | 88 W8 | 320 W8 | 1.381B | 15.942 mV | 0.360 |
-| AxoSim Population-Accurate | 228 W8 | 320 W8 | 1.148B | 15.742 mV | 0.386 |
+| Profile | Behavior values / neuron | Synaptic efficacies / neuron | p90 neuron-steps/s | Squared SERA | Root-SERA | F1 area (compat.) |
+|---|---:|---:|---:|---:|---:|---:|
+| AxoSim Population-Throughput | 88 W8 | 320 W8 | 1.381B | 254.143 mV² | 15.942 mV | 0.360 |
+| AxoSim Population-Accurate | 228 W8 | 320 W8 | 1.148B | 247.822 mV² | 15.742 mV | 0.386 |
 
 These measurements include exact synaptic efficacy and native-voltage telemetry
 for 0.1% of neurons to pinned host memory. Full GPU-resident output remains

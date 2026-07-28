@@ -108,8 +108,19 @@ def test_million_neuron_inference_profiles_are_explicit() -> None:
     assert quality.compiled_adaptation_values_per_neuron == 228
     assert quality.morphology_adapter_values_per_class == 228
     assert quality.output_export_fraction == 0.001
-    assert quality.primary_metric == "voltage_sera_mv"
-    assert quality.measured_voltage_sera_mv < throughput.measured_voltage_sera_mv
+    assert quality.primary_metric == "voltage_sera_mv2"
+    assert (
+        quality.measured_voltage_sera_mv2
+        < throughput.measured_voltage_sera_mv2
+    )
+    assert (
+        quality.measured_voltage_sera_mv2
+        == pytest.approx(quality.measured_voltage_root_sera_mv**2)
+    )
+    assert (
+        throughput.measured_voltage_sera_mv2
+        == pytest.approx(throughput.measured_voltage_root_sera_mv**2)
+    )
     assert (
         quality.measured_p90_neuron_steps_per_second
         == pytest.approx(1_147_564_005.7241912)

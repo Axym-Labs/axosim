@@ -292,7 +292,8 @@ class PopulationInferenceProfile:
     minimum_neuron_steps_per_second: float
     measured_median_neuron_steps_per_second: float
     measured_p90_neuron_steps_per_second: float
-    measured_voltage_sera_mv: float
+    measured_voltage_sera_mv2: float
+    measured_voltage_root_sera_mv: float
     measured_spike_f1_area: float
     measured_population_firing_rate_hz: float
     population_adaptation_initialization: str
@@ -330,8 +331,17 @@ class PopulationInferenceProfile:
             < self.minimum_neuron_steps_per_second
         ):
             raise ValueError("measured throughput must clear the profile floor")
-        if self.measured_voltage_sera_mv <= 0:
-            raise ValueError("measured voltage SERA must be positive")
+        if self.measured_voltage_sera_mv2 <= 0:
+            raise ValueError("measured squared voltage SERA must be positive")
+        if self.measured_voltage_root_sera_mv <= 0:
+            raise ValueError("measured voltage Root-SERA must be positive")
+        if abs(
+            self.measured_voltage_sera_mv2
+            - self.measured_voltage_root_sera_mv**2
+        ) > max(1e-9, 1e-9 * self.measured_voltage_sera_mv2):
+            raise ValueError(
+                "measured squared SERA and Root-SERA must be consistent"
+            )
         if not 0.0 <= self.measured_spike_f1_area <= 1.0:
             raise ValueError("measured spike F1 area must be in [0, 1]")
         if self.measured_population_firing_rate_hz <= 0:
@@ -408,7 +418,8 @@ AXOSIM_POPULATION_THROUGHPUT_PROFILE = PopulationInferenceProfile(
     minimum_neuron_steps_per_second=1_000_000_000.0,
     measured_median_neuron_steps_per_second=1_413_365_688.4295125,
     measured_p90_neuron_steps_per_second=1_380_735_741.3712778,
-    measured_voltage_sera_mv=15.941871291550644,
+    measured_voltage_sera_mv2=15.941871291550644**2,
+    measured_voltage_root_sera_mv=15.941871291550644,
     measured_spike_f1_area=0.35957193816884664,
     measured_population_firing_rate_hz=4.374947547912598,
     population_adaptation_initialization=(
@@ -432,11 +443,12 @@ AXOSIM_POPULATION_ACCURATE_PROFILE = PopulationInferenceProfile(
     compiled_adaptation_values_per_neuron=228,
     morphology_adapter_values_per_class=228,
     output_export_fraction=0.001,
-    primary_metric="voltage_sera_mv",
+    primary_metric="voltage_sera_mv2",
     minimum_neuron_steps_per_second=1_000_000_000.0,
     measured_median_neuron_steps_per_second=1_164_235_826.8950787,
     measured_p90_neuron_steps_per_second=1_147_564_005.7241912,
-    measured_voltage_sera_mv=15.742358639083188,
+    measured_voltage_sera_mv2=15.742358639083188**2,
+    measured_voltage_root_sera_mv=15.742358639083188,
     measured_spike_f1_area=0.3855450236966825,
     measured_population_firing_rate_hz=3.9670121669769287,
     population_adaptation_initialization=(
