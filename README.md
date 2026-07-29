@@ -49,8 +49,7 @@ remain checkpoint-compatible.
 
 ```python
 from axosim import (
-    AXOSIM_POPULATION_ACCURATE_PROFILE,
-    AXOSIM_POPULATION_THROUGHPUT_PROFILE,
+    AXOSIM_POPULATION_PROFILE,
     AxoSimGRU,
     AxoSimLite,
     AxoSimMamba,
@@ -66,6 +65,11 @@ mechanisms separate:
 - a direct behavior adapter for each neuron;
 - a morphology adapter shared only within a morphology class; and
 - a positive efficacy for every retained incoming contact.
+
+For AxoSim-Lite, the behavior group acts at seven explicit sites: encoded-input
+offset/gain, state-decay delta, recurrent-proposal offset/gain, and native
+output offset/gain. It specializes temporal response and readout calibration;
+the separate homeostatic threshold controller regulates firing rates.
 
 ```python
 population = AxoSimPopulation(
@@ -142,21 +146,31 @@ The update is causal, group-stratified, and bounded. Its response time is a
 simulation setting; compressed validation settings are not biological
 timescale estimates.
 
-## Population Profiles
+## Population Runtime
 
 The authoritative workload is `MILLION_NEURON_REALTIME_CONTRACT`. It fixes
 1,048,576 neurons, exact native 1 ms inputs and outputs, causal P4 forecasting,
 threshold firing without a quota or top-k, 80/20 E/I roles, delayed
 morphology-aware routing, and complete-stack timing on an RTX 5090.
 
-| Profile | Behavior values / neuron | Synaptic efficacies / neuron | p90 neuron-steps/s | Squared SERA | Root-SERA | Mean F1 |
-|---|---:|---:|---:|---:|---:|---:|
-| AxoSim Population-Throughput | 88 W8 | 320 W8 | 1.361B | 225.828 mV² | 15.028 mV | 0.354 |
-| AxoSim Population-Accurate | 228 W8 | 320 W8 | 1.146B | 219.129 mV² | 14.803 mV | 0.379 |
+`AXOSIM_POPULATION_PROFILE` uses the compact 24-token, 8-state population
+model and 88 W8 behavior values per neuron. Its densest directly measured
+real-time operating point retains 362 independently mutable contact
+efficacies per neuron. Across three isolated, target-rate-valid runs, its
+median p90 throughput is 1.177B neuron-steps/s and its slowest run reaches
+1.174B. The same model provides a measured contact/throughput frontier: its
+replicated maximum-throughput point reaches a median 2.339B at 100 contacts,
+while target-rate observations at 376, 400, and 426 contacts do not establish
+a denser reproducible real-time operating point.
 
-These measurements include exact synaptic efficacy and native-voltage telemetry
-for 0.1% of neurons to pinned host memory. Full GPU-resident output remains
-available.
+For the exact 1,048,576-neuron population, real time is 1.048576B
+neuron-steps/s. The publication curve uses a monotone fit through replicated
+target-rate medians and stops at 362 contacts. It does not extrapolate an
+unmeasured crossing through the activity-unstable and resource-limited
+region; 362 contacts is the densest conservative replicated exact pass.
+
+These measurements include native-voltage telemetry for 1% of neurons to
+pinned host memory. Full GPU-resident output remains available.
 Durably recording every FP16 voltage to the measured local NVMe device is
 outside the real-time contract because its bandwidth is insufficient.
 
@@ -165,11 +179,6 @@ per-neuron behavior residuals. It proves that unique adaptation rows execute;
 it does not claim that one million neurons were fitted independently. The
 population connectome is procedural and biologically structured, not an
 empirical connectome.
-
-The compatibility constants
-`MILLION_NEURON_MAX_THROUGHPUT_PROFILE` and
-`MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE` refer to the same profile
-objects as the stable public names.
 
 ## Train And Evaluate
 
@@ -224,11 +233,12 @@ axosim-evaluate-model runs/candidate.pt \
 AxoBench owns metric and diagnostic definitions. AxoSim supplies checkpoint
 loading, training, adaptation, and GPU prediction.
 
-The role-correct population-trained AxoSim-Mamba uses
+The role-correct development-corpus AxoSim-Mamba uses
 `configs/axomamba-population.json` and
-`checkpoints/axomamba-population.pt`. It retains all six excitatory/inhibitory
-morphology IDs and is separate from the compact SERA-only and spike-focused
-checkpoints.
+`checkpoints/axomamba-population.pt`. It was trained on the 7,500-trace
+development corpus, retains all six excitatory/inhibitory morphology IDs, and
+is separate from the compact SERA-only and spike-focused checkpoints. It is
+not presented as a checkpoint trained on the completed 50,000-trace release.
 
 ## Data
 
@@ -293,4 +303,6 @@ biophysical simulator. AxoSim's trainable behavior, morphology, threshold, and
 contact-efficacy coordinates are learned operational state; they are not
 interpretable ion-channel or compartment parameters. The population-context
 dataset uses biophysical teachers on connected-model input histories rather
-than a fully biophysical closed loop.
+than a fully biophysical closed loop. A matched fixed-recipe run on the
+completed 50,000-trace corpus improved held-out trace metrics but did not
+improve the connected objective, so that checkpoint is not promoted here.

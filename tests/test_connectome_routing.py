@@ -588,7 +588,10 @@ def test_exact_router_prefilters_future_external_channel_collisions() -> None:
     not torch.cuda.is_available(),
     reason="Triton unique-channel router requires CUDA",
 )
-@pytest.mark.parametrize("contact_fraction", [0.25, 0.0625])
+@pytest.mark.parametrize(
+    "contact_fraction",
+    [0.25, 1.0 / 3.0, 0.0625],
+)
 @pytest.mark.parametrize("adapted_synapses", [False, True])
 def test_unique_channel_router_matches_invertible_typed_fanin_reference(
     contact_fraction: float,
@@ -670,6 +673,7 @@ def test_unique_channel_router_matches_invertible_typed_fanin_reference(
         synapses_per_branch=2,
         synaptic_efficacy_bank=efficacy_bank,
     )
+    assert router.routed_fanout == efficacy_width
 
     router.clear_and_route(
         torch.arange(64, device="cuda", dtype=torch.int32),
@@ -792,6 +796,124 @@ def test_unique_channel_router_matches_invertible_typed_fanin_reference(
         recorded_rows.sort().values,
         expected_rows.sort().values,
     )
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="Triton repeated-pair routing requires CUDA",
+)
+def test_repeated_pair_mode_retains_contacts_without_self_edges() -> None:
+    from axosim.connectome import (
+        ProceduralUniqueChannelConnectomeRouter,
+    )
+
+    contract = replace(
+        MILLION_NEURON_REALTIME_CONTRACT,
+        population_size=64,
+        morphology_classes=2,
+        firing_rate=1.0,
+        fanout=24,
+        recurrent_contact_fraction=1.0,
+        local_connection_fraction=0.75,
+        spatial_tile_neurons=32,
+        branch_count=4,
+    )
+    slot_map = torch.arange(24, device="cuda", dtype=torch.int32)
+    morphology = (
+        torch.arange(64, device="cuda", dtype=torch.int32) % 2
+    )
+    source_is_inhibitory = (
+        torch.arange(64, device="cuda") % 4 == 0
+    ).to(dtype=torch.uint8)
+    morphology_gain = torch.ones(
+        24, device="cuda", dtype=torch.float16
+    )
+    feature_gain = torch.ones(
+        2, 24, device="cuda", dtype=torch.float16
+    )
+    with pytest.raises(
+        ValueError,
+        match="typed channel count",
+    ):
+        ProceduralUniqueChannelConnectomeRouter(
+            contract,
+            slot_map=slot_map,
+            morphology=morphology,
+            source_is_inhibitory=source_is_inhibitory,
+            morphology_gain=morphology_gain,
+            feature_gain=feature_gain,
+            synapses_per_branch=6,
+        )
+    router = ProceduralUniqueChannelConnectomeRouter(
+        contract,
+        slot_map=slot_map,
+        morphology=morphology,
+        source_is_inhibitory=source_is_inhibitory,
+        morphology_gain=morphology_gain,
+        feature_gain=feature_gain,
+        synapses_per_branch=6,
+        allow_repeated_source_target_pairs=True,
+    )
+    active = torch.arange(64, device="cuda", dtype=torch.int32)
+    touched = torch.empty(
+        active.numel() * router.recorded_offsets_per_source,
+        device="cuda",
+        dtype=torch.int32,
+    )
+    router.clear_and_route(
+        active,
+        current_slot=0,
+        current_step=0,
+        touched_offsets=touched,
+    )
+    candidate_counts = [
+        (
+            (upper - lower + router.recurrent_stride - 1)
+            // router.recurrent_stride
+        )
+        * 2
+        * router.max_target_multiplicity
+        for lower, upper in (
+            (0, router.local_channels_per_type),
+            (
+                router.local_channels_per_type,
+                router.channels_per_type,
+            ),
+        )
+    ]
+    local_size = active.numel() * candidate_counts[0]
+    touched_by_source = torch.cat(
+        (
+            touched[:local_size].reshape(
+                active.numel(),
+                candidate_counts[0],
+            ),
+            touched[local_size:].reshape(
+                active.numel(),
+                candidate_counts[1],
+            ),
+        ),
+        dim=1,
+    )
+    repeated_pair_observed = False
+    for source, offsets in zip(
+        active.cpu().tolist(),
+        touched_by_source.cpu(),
+    ):
+        delivered = offsets[offsets >= 0]
+        targets = (
+            torch.div(
+                delivered,
+                contract.branch_count,
+                rounding_mode="floor",
+            )
+            % contract.population_size
+        )
+        assert not bool((targets == source).any())
+        repeated_pair_observed |= (
+            torch.unique(targets).numel() < targets.numel()
+        )
+    assert repeated_pair_observed
 
 
 @pytest.mark.skipif(

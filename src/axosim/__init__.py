@@ -9,10 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 __all__ = [
-    "AXOSIM_POPULATION_ACCURATE_PROFILE",
-    "AXOSIM_POPULATION_THROUGHPUT_PROFILE",
-    "MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE",
-    "MILLION_NEURON_MAX_THROUGHPUT_PROFILE",
+    "AXOSIM_POPULATION_PROFILE",
     "MILLION_NEURON_REALTIME_CONTRACT",
     "AxoMamba",
     "AxoMambaConfig",
@@ -93,41 +90,24 @@ def __getattr__(name: str) -> Any:
 
         return {"BranchELM": BranchELM, "BranchELMConfig": BranchELMConfig}[name]
     if name in {
-        "AXOSIM_POPULATION_ACCURATE_PROFILE",
-        "AXOSIM_POPULATION_THROUGHPUT_PROFILE",
+        "AXOSIM_POPULATION_PROFILE",
         "LargePopulationSimulationContract",
-        "MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE",
-        "MILLION_NEURON_MAX_THROUGHPUT_PROFILE",
         "MILLION_NEURON_REALTIME_CONTRACT",
         "PopulationInferenceProfile",
     }:
         from axosim.simulation_contract import (
-            AXOSIM_POPULATION_ACCURATE_PROFILE,
-            AXOSIM_POPULATION_THROUGHPUT_PROFILE,
-            MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE,
-            MILLION_NEURON_MAX_THROUGHPUT_PROFILE,
+            AXOSIM_POPULATION_PROFILE,
             MILLION_NEURON_REALTIME_CONTRACT,
             LargePopulationSimulationContract,
             PopulationInferenceProfile,
         )
 
         return {
-            "AXOSIM_POPULATION_ACCURATE_PROFILE": (
-                AXOSIM_POPULATION_ACCURATE_PROFILE
-            ),
-            "AXOSIM_POPULATION_THROUGHPUT_PROFILE": (
-                AXOSIM_POPULATION_THROUGHPUT_PROFILE
-            ),
+            "AXOSIM_POPULATION_PROFILE": AXOSIM_POPULATION_PROFILE,
             "LargePopulationSimulationContract": (
                 LargePopulationSimulationContract
             ),
             "PopulationInferenceProfile": PopulationInferenceProfile,
-            "MILLION_NEURON_MAX_THROUGHPUT_PROFILE": (
-                MILLION_NEURON_MAX_THROUGHPUT_PROFILE
-            ),
-            "MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE": (
-                MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE
-            ),
             "MILLION_NEURON_REALTIME_CONTRACT": (
                 MILLION_NEURON_REALTIME_CONTRACT
             ),

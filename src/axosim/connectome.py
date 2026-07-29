@@ -901,6 +901,7 @@ if triton is not None:
         max_external_event_count: tl.constexpr,
         external_channel_stride_inverse: tl.constexpr,
         external_collision_aware: tl.constexpr,
+        allow_repeated_source_target_pairs: tl.constexpr,
         touched_base,
         record_touched: tl.constexpr,
         record_unique_rows: tl.constexpr,
@@ -947,7 +948,11 @@ if triton is not None:
             candidate_remainder % max_target_multiplicity
         )
         first_channel = channel_lower + (
-            (source_rank - channel_lower) & (recurrent_stride - 1)
+            (
+                (source_rank - channel_lower) % recurrent_stride
+                + recurrent_stride
+            )
+            % recurrent_stride
         )
         relative_channel = (
             first_channel + recurrent_stride * channel_index
@@ -979,11 +984,12 @@ if triton is not None:
             other=0,
         )
         target_count = target_end - target_begin
+        if allow_repeated_source_target_pairs:
+            effective_channel = relative_channel % (source_count - 1)
+        else:
+            effective_channel = relative_channel
         target_rank_base = (
-            source_rank
-            - relative_channel
-            - 1
-            + source_count
+            source_rank - effective_channel - 1 + source_count
         ) % source_count
         target_rank = (
             target_rank_base + target_copy * source_count
@@ -2616,17 +2622,24 @@ class ProceduralUniqueChannelConnectomeRouter(
         external_excitatory_gain: float = 1.0,
         external_inhibitory_gain: float = 1.0,
         max_external_event_count: int = 32,
+        allow_repeated_source_target_pairs: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        if not _is_power_of_two(self.recurrent_stride):
-            raise ValueError(
-                "unique-channel routing requires a power-of-two recurrent "
-                "stride"
-            )
+        self.allow_repeated_source_target_pairs = bool(
+            allow_repeated_source_target_pairs
+        )
         self.channels_per_type = self.contract.fanout // 2
         if self.channels_per_type * 2 != self.contract.fanout:
             raise ValueError("typed channels require equal E/I halves")
+        self.routed_fanout = 2 * (
+            (
+                self.channels_per_type
+                + self.recurrent_stride
+                - 1
+            )
+            // self.recurrent_stride
+        )
         self.tile_count = (
             self.contract.population_size
             // self.contract.spatial_tile_neurons
@@ -2652,10 +2665,21 @@ class ProceduralUniqueChannelConnectomeRouter(
             self.typed_pool_offsets[1:]
             - self.typed_pool_offsets[:-1]
         )
-        if int(typed_counts.min()) <= self.channels_per_type:
+        if (
+            not self.allow_repeated_source_target_pairs
+            and int(typed_counts.min()) <= self.channels_per_type
+        ):
             raise ValueError(
                 "every tile/type pool must exceed the typed channel count "
                 "to guarantee self-edge-free cyclic fan-in"
+            )
+        if (
+            self.allow_repeated_source_target_pairs
+            and int(typed_counts.min()) <= 1
+        ):
+            raise ValueError(
+                "repeated-pair routing requires at least two sources in "
+                "every tile/type pool to exclude self edges"
             )
         self.max_target_multiplicity = int(
             torch.ceil(
@@ -2968,6 +2992,9 @@ class ProceduralUniqueChannelConnectomeRouter(
                 ),
                 external_collision_aware=(
                     self.external_trajectories is not None
+                ),
+                allow_repeated_source_target_pairs=(
+                    self.allow_repeated_source_target_pairs
                 ),
                 touched_base=touched_base,
                 record_touched=touched_offsets is not None,

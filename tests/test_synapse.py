@@ -12,9 +12,9 @@ from axosim.synapse import (
 
 def test_retained_synaptic_efficacy_count_matches_million_contract() -> None:
     assert retained_synaptic_efficacies_per_neuron(
-        channels_per_role=639,
+        channels_per_role=724,
         recurrent_stride=4,
-    ) == 320
+    ) == 362
 
 
 def test_synaptic_efficacy_w8_round_trip() -> None:

@@ -5,12 +5,8 @@ from dataclasses import replace
 import pytest
 
 from axosim.simulation_contract import (
-    AXOSIM_POPULATION_ACCURATE_PROFILE,
-    AXOSIM_POPULATION_THROUGHPUT_PROFILE,
-    MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE,
-    MILLION_NEURON_MAX_THROUGHPUT_PROFILE,
+    AXOSIM_POPULATION_PROFILE,
     MILLION_NEURON_REALTIME_CONTRACT,
-    PopulationInferenceProfile,
 )
 
 
@@ -18,17 +14,17 @@ def test_million_neuron_contract_preserves_defensive_adaptation() -> None:
     contract = MILLION_NEURON_REALTIME_CONTRACT
 
     assert contract.every_neuron_has_custom_adaptation
-    assert contract.synaptic_efficacy_values_per_neuron == 320
+    assert contract.synaptic_efficacy_values_per_neuron == 362
     assert contract.adaptation_storage_bits == 8
-    assert contract.synaptic_efficacy_bank_bytes == 335_544_320
+    assert contract.synaptic_efficacy_bank_bytes == 379_584_512
 
 
 def test_million_neuron_contract_includes_network_work() -> None:
     contract = MILLION_NEURON_REALTIME_CONTRACT
 
     assert contract.active_sources_per_step == 4_057
-    assert contract.recurrent_contact_fraction == 0.25
-    assert contract.events_per_step == 1_296_212
+    assert contract.recurrent_contact_fraction == pytest.approx(1.0 / 4.0)
+    assert contract.events_per_step == 1_468_634
     assert contract.target_neuron_steps_per_second == 1_048_576_000
     assert contract.source_discovery_included
     assert contract.event_delivery_included
@@ -78,63 +74,38 @@ def test_million_neuron_contract_keeps_native_temporal_io() -> None:
 
 
 def test_million_neuron_inference_profiles_are_explicit() -> None:
-    throughput = AXOSIM_POPULATION_THROUGHPUT_PROFILE
-    quality = AXOSIM_POPULATION_ACCURATE_PROFILE
+    profile = AXOSIM_POPULATION_PROFILE
 
-    assert MILLION_NEURON_MAX_THROUGHPUT_PROFILE is throughput
-    assert MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE is quality
-
-    assert throughput.name == "axosim-population-throughput"
-    assert throughput.support_model_id == "support_t24_s8_distilled_i600"
-    assert throughput.support_token_width == 24
-    assert throughput.support_state_width == 8
-    assert throughput.support_block_rows == 32
-    assert throughput.compiled_adaptation_values_per_neuron == 88
-    assert throughput.morphology_adapter_values_per_class == 88
-    assert throughput.output_export_fraction == 0.001
-    assert not throughput.population_adaptation_individually_fitted
-    assert throughput.individual_behavior_adaptation_supported
-    assert throughput.individual_synaptic_adaptation_supported
-    assert throughput.primary_metric == "neuron_steps_per_second"
+    assert profile.name == "axosim-population"
+    assert profile.support_model_id == "support_t24_s8_distilled_i600"
+    assert profile.support_token_width == 24
+    assert profile.support_state_width == 8
+    assert profile.support_block_rows == 32
+    assert profile.compiled_adaptation_values_per_neuron == 88
+    assert profile.morphology_adapter_values_per_class == 88
+    assert profile.synaptic_efficacy_values_per_neuron == 362
+    assert profile.output_export_fraction == 0.01
+    assert not profile.population_adaptation_individually_fitted
+    assert profile.individual_behavior_adaptation_supported
+    assert profile.individual_synaptic_adaptation_supported
+    assert profile.primary_metric == "neuron_steps_per_second"
     assert (
-        throughput.measured_p90_neuron_steps_per_second
-        == pytest.approx(1_361_378_268.2786045)
+        profile.measured_p90_neuron_steps_per_second
+        == pytest.approx(1_177_454_556.7997348)
     )
-    assert throughput.measured_spike_mean_f1 == pytest.approx(
+    assert profile.measured_spike_mean_f1 == pytest.approx(
         0.35383167978104685
     )
-    assert quality.name == "axosim-population-accurate"
-    assert quality.support_model_id == "support_t58_s32_distilled_i600"
-    assert quality.support_token_width == 58
-    assert quality.support_state_width == 32
-    assert quality.support_block_rows == 32
-    assert quality.compiled_adaptation_values_per_neuron == 228
-    assert quality.morphology_adapter_values_per_class == 228
-    assert quality.output_export_fraction == 0.001
-    assert quality.primary_metric == "voltage_sera_mv2"
     assert (
-        quality.measured_voltage_sera_mv2
-        < throughput.measured_voltage_sera_mv2
+        profile.measured_voltage_sera_mv2
+        == pytest.approx(profile.measured_voltage_root_sera_mv**2)
     )
     assert (
-        quality.measured_voltage_sera_mv2
-        == pytest.approx(quality.measured_voltage_root_sera_mv**2)
+        profile.minimum_neuron_steps_per_second
+        == MILLION_NEURON_REALTIME_CONTRACT.target_neuron_steps_per_second
     )
-    assert (
-        throughput.measured_voltage_sera_mv2
-        == pytest.approx(throughput.measured_voltage_root_sera_mv**2)
-    )
-    assert (
-        quality.measured_p90_neuron_steps_per_second
-        == pytest.approx(1_145_868_452.1765864)
-    )
-    assert quality.measured_spike_mean_f1 == pytest.approx(
-        0.3789423022478908
-    )
-    assert (
-        quality.minimum_neuron_steps_per_second
-        == throughput.minimum_neuron_steps_per_second
-        == 1_000_000_000.0
+    assert profile.measured_population_firing_rate_hz == pytest.approx(
+        3.956115245819092
     )
 
 @pytest.mark.parametrize(

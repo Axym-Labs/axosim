@@ -287,6 +287,7 @@ class PopulationInferenceProfile:
     project_block_width: int
     compiled_adaptation_values_per_neuron: int
     morphology_adapter_values_per_class: int
+    synaptic_efficacy_values_per_neuron: int
     output_export_fraction: float
     primary_metric: str
     minimum_neuron_steps_per_second: float
@@ -320,6 +321,8 @@ class PopulationInferenceProfile:
             raise ValueError("compiled adaptation width must be positive")
         if self.morphology_adapter_values_per_class <= 0:
             raise ValueError("morphology adapter width must be positive")
+        if self.synaptic_efficacy_values_per_neuron <= 0:
+            raise ValueError("synaptic efficacy width must be positive")
         if not 0.0 <= self.output_export_fraction <= 1.0:
             raise ValueError("output export fraction must be in [0, 1]")
         if self.minimum_neuron_steps_per_second <= 0:
@@ -332,7 +335,7 @@ class PopulationInferenceProfile:
         ):
             raise ValueError("measured throughput must clear the profile floor")
         if self.measured_voltage_sera_mv2 <= 0:
-            raise ValueError("measured squared voltage SERA must be positive")
+            raise ValueError("measured voltage SERA must be positive")
         if self.measured_voltage_root_sera_mv <= 0:
             raise ValueError("measured voltage Root-SERA must be positive")
         if abs(
@@ -340,7 +343,7 @@ class PopulationInferenceProfile:
             - self.measured_voltage_root_sera_mv**2
         ) > max(1e-9, 1e-9 * self.measured_voltage_sera_mv2):
             raise ValueError(
-                "measured squared SERA and Root-SERA must be consistent"
+                "measured SERA and Root-SERA must be consistent"
             )
         if not 0.0 <= self.measured_spike_mean_f1 <= 1.0:
             raise ValueError("measured spike Mean F1 must be in [0, 1]")
@@ -372,15 +375,15 @@ MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
     lossless_ordered_temporal_io=True,
     causal_block_feedback_required=True,
     minimum_routing_delay_steps=4,
-    synaptic_efficacy_values_per_neuron=320,
+    synaptic_efficacy_values_per_neuron=362,
     adaptation_storage_bits=8,
     activation_storage_bits=16,
     recurrent_state_storage_bits=16,
     external_drive_storage_bits=8,
     morphology_classes=5,
     firing_rate=0.003869090909090909,
-    fanout=1_278,
-    recurrent_contact_fraction=0.25,
+    fanout=1_448,
+    recurrent_contact_fraction=1.0 / 4.0,
     excitatory_fraction=0.8,
     local_connection_fraction=0.9,
     spatial_tile_neurons=4_096,
@@ -401,8 +404,8 @@ MILLION_NEURON_REALTIME_CONTRACT = LargePopulationSimulationContract(
     adaptation_reference_envelope_validation_required=True,
 )
 
-AXOSIM_POPULATION_THROUGHPUT_PROFILE = PopulationInferenceProfile(
-    name="axosim-population-throughput",
+AXOSIM_POPULATION_PROFILE = PopulationInferenceProfile(
+    name="axosim-population",
     support_model_id="support_t24_s8_distilled_i600",
     support_token_width=24,
     support_state_width=8,
@@ -410,60 +413,25 @@ AXOSIM_POPULATION_THROUGHPUT_PROFILE = PopulationInferenceProfile(
     support_block_token=32,
     support_block_state=16,
     external_block_width=32,
-    project_block_width=32,
+    project_block_width=64,
     compiled_adaptation_values_per_neuron=88,
     morphology_adapter_values_per_class=88,
-    output_export_fraction=0.001,
+    synaptic_efficacy_values_per_neuron=362,
+    output_export_fraction=0.01,
     primary_metric="neuron_steps_per_second",
-    minimum_neuron_steps_per_second=1_000_000_000.0,
-    measured_median_neuron_steps_per_second=1_392_420_234.5375376,
-    measured_p90_neuron_steps_per_second=1_361_378_268.2786045,
+    minimum_neuron_steps_per_second=(
+        MILLION_NEURON_REALTIME_CONTRACT.target_neuron_steps_per_second
+    ),
+    measured_median_neuron_steps_per_second=1_201_327_144.0976055,
+    measured_p90_neuron_steps_per_second=1_177_454_556.7997348,
     measured_voltage_sera_mv2=225.82762062058336,
     measured_voltage_root_sera_mv=15.02756203183282,
     measured_spike_mean_f1=0.35383167978104685,
-    measured_population_firing_rate_hz=4.562402963638306,
+    measured_population_firing_rate_hz=3.956115245819092,
     population_adaptation_initialization=(
         "five_fitted_morphology_rows_plus_direct_w8_behavior_residuals"
     ),
     population_adaptation_individually_fitted=False,
     individual_behavior_adaptation_supported=True,
     individual_synaptic_adaptation_supported=True,
-)
-
-AXOSIM_POPULATION_ACCURATE_PROFILE = PopulationInferenceProfile(
-    name="axosim-population-accurate",
-    support_model_id="support_t58_s32_distilled_i600",
-    support_token_width=58,
-    support_state_width=32,
-    support_block_rows=32,
-    support_block_token=64,
-    support_block_state=32,
-    external_block_width=64,
-    project_block_width=64,
-    compiled_adaptation_values_per_neuron=228,
-    morphology_adapter_values_per_class=228,
-    output_export_fraction=0.001,
-    primary_metric="voltage_sera_mv2",
-    minimum_neuron_steps_per_second=1_000_000_000.0,
-    measured_median_neuron_steps_per_second=1_163_362_640.9015515,
-    measured_p90_neuron_steps_per_second=1_145_868_452.1765864,
-    measured_voltage_sera_mv2=219.128715540414,
-    measured_voltage_root_sera_mv=14.802996843221104,
-    measured_spike_mean_f1=0.3789423022478908,
-    measured_population_firing_rate_hz=3.968414068222046,
-    population_adaptation_initialization=(
-        "five_fitted_morphology_rows_plus_direct_w8_behavior_residuals"
-    ),
-    population_adaptation_individually_fitted=False,
-    individual_behavior_adaptation_supported=True,
-    individual_synaptic_adaptation_supported=True,
-)
-
-# Compatibility aliases for experiment scripts and serialized reports created
-# before the public profile names were fixed.
-MILLION_NEURON_MAX_THROUGHPUT_PROFILE = (
-    AXOSIM_POPULATION_THROUGHPUT_PROFILE
-)
-MILLION_NEURON_BEST_QUALITY_REALTIME_PROFILE = (
-    AXOSIM_POPULATION_ACCURATE_PROFILE
 )
