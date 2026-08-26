@@ -9,7 +9,11 @@ from axosim.mamba_official import BranchOfficialMamba, BranchOfficialMambaConfig
 
 
 AXOMAMBA_MODEL_KIND = "axomamba"
-AXOMAMBA_DEFAULT_CONFIG = "configs/axomamba_45x64.json"
+AXOMAMBA_DEFAULT_CONFIG = "configs/axomamba.json"
+AXOMAMBA_STRUCTURED_COMPACT_CONFIG = "configs/axomamba-structured-compact.json"
+AXOMAMBA_REGRESSION_CONFIG = "configs/axomamba-regression.json"
+AXOMAMBA_POPULATION_CONFIG = "configs/axomamba-population.json"
+AXOMAMBA_SPIKE_CONFIG = "configs/axomamba-spike.json"
 
 
 @dataclass(frozen=True)
@@ -18,41 +22,121 @@ class AxoMambaConfig(BranchOfficialMambaConfig):
 
 
 def default_axomamba_config(**overrides: Any) -> AxoMambaConfig:
-    """Return the promoted compact Mamba config.
+    """Return the promoted full dual-objective Mamba config.
 
-    This is the best retained Mamba mechanism stack from the AxoSim notes:
-    branch gain, fixed branch-current saturation, pre-Mamba short/long
-    temporal mixing, and a multiplicative soma gate.
+    This is the practical-gate ablation-retained compact stack: 118 routed
+    branches, morphology-conditioned synaptic efficacy, a learned route-
+    occupancy operator, branch-current saturation, separate task readouts,
+    and a post-Mamba causal TCN correction at dilations 1, 4, and 16. The
+    post-I200 300k ablation removed shared efficacy, the soma gate, and
+    bilinear interaction for a robust inference-speed win without a material
+    task-metric regression.
     """
 
     values: dict[str, Any] = {
         "num_input": 1278,
         "num_output": 2,
-        "num_branch": 45,
-        "num_synapse_per_branch": 100,
+        "num_branch": 118,
+        "num_synapse_per_branch": 11,
         "input_to_synapse_routing": "neuronio_routing",
-        "model_dim": 64,
+        "model_dim": 58,
         "num_layers": 2,
         "block_repeats": 1,
-        "state_dim": 16,
+        "state_dim": 23,
         "conv_kernel": 4,
         "expansion": 2,
         "block_type": "mamba1",
         "dropout": 0.0,
+        "morphology_ids": [
+            "specimen_479770916",
+            "specimen_487664663",
+            "specimen_488679042",
+            "specimen_488683425",
+            "specimen_589427435",
+        ],
+        "morphology_embedding_scale": 0.15,
         "residual_scale_init": 0.1,
-        "branch_gain": True,
+        "synapse_gain_scale": None,
+        "morphology_synapse_gain_scale": 1.0,
+        "morphology_synapse_feature_dim": 9,
+        "morphology_synapse_feature_hidden": 16,
+        "morphology_synapse_feature_scale": 1.0,
+        "branch_gain": False,
         "branch_nonlinearity": "tanh",
         "branch_nonlinearity_scale_init": 0.1,
-        "soma_multiplicative_gate": True,
+        "branch_bilinear_rank": 0,
+        "branch_bilinear_scale": None,
+        "separate_heads": True,
+        "soma_multiplicative_gate": False,
         "soma_multiplicative_scale_init": 0.1,
-        "integrative_mixer": True,
+        "spike_voltage_coupling_scale": 4.0,
+        "integrative_mixer": False,
         "integrative_mixer_short_kernel": 9,
         "integrative_mixer_long_kernel": 65,
         "integrative_mixer_position": "pre",
         "integrative_mixer_long_path_bias": 0.5,
+        "local_tcn_scale": 1.0,
+        "local_tcn_mode": "dilated",
+        "local_tcn_position": "post",
     }
     values.update(overrides)
     return AxoMambaConfig(**values)
+
+
+def structured_compact_axomamba_config(**overrides: Any) -> AxoMambaConfig:
+    """Return the 300k-gated parameter-efficient AxoMamba variant."""
+
+    values: dict[str, Any] = {
+        "mamba_projection_rank": 16,
+        "state_dim": 2,
+        "share_local_tcn_pointwise": True,
+        "local_tcn_pointwise_adapter_rank": 2,
+    }
+    values.update(overrides)
+    return default_axomamba_config(**values)
+
+
+def regression_axomamba_config(**overrides: Any) -> AxoMambaConfig:
+    """Return the 300k-gated voltage-regression population lead."""
+
+    values: dict[str, Any] = {
+        "share_morphology_synapse_gain": True,
+        "local_tcn_pointwise_rank": 4,
+        "local_tcn_output_rank": 4,
+    }
+    values.update(overrides)
+    return structured_compact_axomamba_config(**values)
+
+
+def population_axomamba_config(**overrides: Any) -> AxoMambaConfig:
+    """Return the role-correct population-trained AxoSim-Mamba recipe."""
+
+    values: dict[str, Any] = {
+        "morphology_ids": [
+            "specimen_479770916",
+            "specimen_487664663",
+            "specimen_488679042",
+            "specimen_488683425",
+            "specimen_589427435",
+            "allen_sst_specimen_482690728",
+        ],
+    }
+    values.update(overrides)
+    return default_axomamba_config(**values)
+
+
+def spike_axomamba_config(**overrides: Any) -> AxoMambaConfig:
+    """Return the 300k-gated F1 population lead."""
+
+    values: dict[str, Any] = {
+        "mamba_projection_rank": 16,
+        "state_dim": 2,
+        "share_local_tcn_pointwise": True,
+        "local_tcn_pointwise_adapter_rank": 4,
+        "morphology_synapse_gain_rank": 1,
+    }
+    values.update(overrides)
+    return default_axomamba_config(**values)
 
 
 def load_axomamba_config(path: str | Path | None = None, **overrides: Any) -> AxoMambaConfig:

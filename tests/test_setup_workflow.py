@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from axosim.setup_workflow import DatasetSpec, SetupOptions, build_setup_plan
+from axosim.setup_workflow import DatasetSpec, SetupOptions, build_setup_plan, main
 
 
 def test_setup_plan_uses_safe_default_without_large_downloads():
@@ -48,3 +48,13 @@ def test_setup_plan_can_include_conversion_command_for_raw_dir():
 
     assert "convert-neuronio" in command_text
     assert "--shard-size 64" in command_text
+
+
+def test_setup_cli_dry_run_uses_requested_project_root(tmp_path, capsys):
+    result = main(["--project-root", str(tmp_path), "--dry-run"])
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert f"mkdir {tmp_path / 'data'}" in output
+    assert f"mkdir {tmp_path / 'runs'}" in output
+    assert "pip install -e" in output

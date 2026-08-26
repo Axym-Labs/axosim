@@ -1,10 +1,17 @@
 # AxoSim
 
-AxoSim is a deterministic NeuronIO training and evaluation harness for
-biologically inspired surrogate models, including the official ELM /
-Branch-ELM family, recurrent comparison cells, and the promoted `AxoMamba`
-sequence surrogate. The small legacy BranchELM path remains available for
-toy-data smoke tests.
+AxoSim trains and executes feed-forward surrogates of biological neurons, from
+single-neuron AxoBench evaluation to connected million-neuron populations. The
+project has three public neuron models:
+
+- **AxoSim-Mamba** is the accuracy-oriented sequence model.
+- **AxoSim-GRU** is the recurrent full model.
+- **AxoSim-Lite** is the compact adaptive P4 model used by large populations.
+
+**AxoSim Population** combines neuron execution, threshold firing, delayed
+connectome routing, external drive, and population state. **AxoRuntime** is the
+lower-level compute layer: fused kernels, sparse event rings, delay queues,
+quantization, memory layouts, and scheduling.
 
 ## Install
 
@@ -12,31 +19,168 @@ toy-data smoke tests.
 python -m pip install -e .[dev]
 ```
 
-For a new machine, use the setup script. The default creates local directories
-and installs the package without downloading the large public datasets:
+Released AxoSim-Mamba checkpoints require the fused official backend:
 
 ```bash
-python scripts/setup.py
+python -m pip install -e '.[mamba]'
 ```
 
-To inspect the full public-data workflow before running it:
+The dependency-free `AxoPyTorchMamba` backend is intended for tests and smoke
+runs; official Mamba checkpoints use a different learned-timestep rank and are
+not state-dict compatible with that fallback.
+
+The setup command creates local directories without downloading the large
+public datasets:
 
 ```bash
-python scripts/setup.py --dry-run --install-kaggle --download-data --convert-raw
+axosim-setup
 ```
 
-To download the public NeuronIO Kaggle data, configure Kaggle credentials first
-with `~/.kaggle/kaggle.json` or `KAGGLE_USERNAME` / `KAGGLE_KEY`, then run:
+Inspect the complete public-data setup before running it:
 
 ```bash
-python scripts/setup.py --install-kaggle --download-data
+axosim-setup --dry-run --install-kaggle --download-data --convert-raw
 ```
 
-The dataset download uses a resumable `.zip.part` file. If a large transfer is
-interrupted, rerun the same command and it will continue from the partial file
-when Kaggle's server honors byte ranges.
+## Python Interface
 
-## Recommended Workflow
+The public imports use the stable model names. Historical internal class names
+remain checkpoint-compatible.
+
+```python
+from axosim import (
+    AXOSIM_POPULATION_PROFILE,
+    AxoSimGRU,
+    AxoSimLite,
+    AxoSimMamba,
+    AxoSimPopulation,
+    CudaGraphAdaptationStep,
+    HomeostaticThresholdController,
+)
+```
+
+`AxoSimPopulation` is an ordinary `torch.nn.Module`. It keeps three adaptation
+mechanisms separate:
+
+- a direct behavior adapter for each neuron;
+- a morphology adapter shared only within a morphology class; and
+- a positive efficacy for every retained incoming contact.
+
+For AxoSim-Lite, the behavior group acts at seven explicit sites: encoded-input
+offset/gain, state-decay delta, recurrent-proposal offset/gain, and native
+output offset/gain. It specializes temporal response and readout calibration;
+the separate homeostatic threshold controller regulates firing rates.
+
+```python
+population = AxoSimPopulation(
+    lite_neuron,
+    morphology_indices=morphology_indices,
+    contact_branch_indices=contact_branch_indices,
+)
+population.enable_adaptation_training(
+    behavior=True,
+    morphology=False,
+    synaptic=True,
+)
+
+prediction = population(contact_inputs)
+loss = objective(prediction, target)
+loss.backward()
+```
+
+`contact_inputs` has shape `(population, time, contacts)`.
+`forward_batch()` accepts
+`(batch, persistent_population, time, contacts)` when independent examples
+share the same neuron population and adaptation parameters. Both paths
+preserve full temporal gradients. `forward_tokens()` and
+`forward_token_batch()` expose pre-encoded P4 paths for full-BPTT adaptation
+without rebuilding exact contact inputs.
+
+Fixed-shape online or test-time updates can capture the complete forward,
+loss, backward, gradient transform, and optimizer step:
+
+```python
+optimizer = torch.optim.Adam(
+    population.trainable_adaptation_parameters(),
+    lr=1e-3,
+    capturable=True,
+)
+step = CudaGraphAdaptationStep.capture(
+    population,
+    optimizer,
+    example_inputs,
+    example_targets,
+    objective,
+    gradient_transform=lambda: torch.nn.utils.clip_grad_norm_(
+        list(population.trainable_adaptation_parameters()),
+        1.0,
+    ),
+)
+loss = step(next_inputs, next_targets, synchronize=True)
+```
+
+Capture does not consume an optimizer update. Replays require the same tensor
+shapes and dtypes as the examples used for capture.
+
+Connected simulations can also apply causal firing-rate homeostasis without
+changing the shared neuron model. The controller observes thresholded events
+and returns one bounded threshold offset per declared population group:
+
+```python
+controller = HomeostaticThresholdController(
+    group_ids=role_morphology_group_ids,
+    target_rates_hz=role_morphology_target_rates_hz,
+    dt_ms=1.0,
+    update_interval_ms=100.0,
+    time_constant_ms=500.0,
+    learning_rate=0.07,
+    max_abs_offset=3.0,
+)
+if controller.observe(firing):
+    effective_thresholds = (
+        fixed_thresholds + controller.threshold_offsets_per_neuron()
+    )
+```
+
+The update is causal, group-stratified, and bounded. Its response time is a
+simulation setting; compressed validation settings are not biological
+timescale estimates.
+
+## Population Runtime
+
+The authoritative workload is `MILLION_NEURON_REALTIME_CONTRACT`. It fixes
+1,048,576 neurons, exact native 1 ms inputs and outputs, causal P4 forecasting,
+threshold firing without a quota or top-k, 80/20 E/I roles, delayed
+morphology-aware routing, and complete-stack timing on an RTX 5090.
+
+`AXOSIM_POPULATION_PROFILE` uses the compact 24-token, 8-state population
+model and 88 W8 behavior values per neuron. Its densest directly measured
+real-time operating point retains 362 independently mutable contact
+efficacies per neuron. Across three isolated, target-rate-valid runs, its
+median p90 throughput is 1.177B neuron-steps/s and its slowest run reaches
+1.174B. The same model provides a measured contact/throughput frontier: its
+replicated maximum-throughput point reaches a median 2.339B at 100 contacts,
+while target-rate observations at 376, 400, and 426 contacts do not establish
+a denser reproducible real-time operating point.
+
+For the exact 1,048,576-neuron population, real time is 1.048576B
+neuron-steps/s. The publication curve uses a monotone fit through replicated
+target-rate medians and stops at 362 contacts. It does not extrapolate an
+unmeasured crossing through the activity-unstable and resource-limited
+region; 362 contacts is the densest conservative replicated exact pass.
+
+These measurements include native-voltage telemetry for 1% of neurons to
+pinned host memory. Full GPU-resident output remains available.
+Durably recording every FP16 voltage to the measured local NVMe device is
+outside the real-time contract because its bandwidth is insufficient.
+
+The benchmark initializes five fitted morphology classes and deterministic
+per-neuron behavior residuals. It proves that unique adaptation rows execute;
+it does not claim that one million neurons were fitted independently. The
+population connectome is procedural and biologically structured, not an
+empirical connectome.
+
+## Train And Evaluate
 
 List the named presets:
 
@@ -44,21 +188,7 @@ List the named presets:
 axosim list-presets
 ```
 
-Train with the current recommended setup:
-
-```bash
-axosim train \
-  --preset paper-random-fulltrace \
-  --data data/full-trace-shards/nmda-train \
-  --val-data data/full-trace-shards/nmda-val \
-  --epochs 10 \
-  --epoch-samples 80000 \
-  --shard-reuse-batches 58 \
-  --checkpoint runs/paper-like.pt \
-  --metrics runs/paper-like-metrics.json
-```
-
-Train the promoted AxoMamba configuration:
+Train AxoSim-Mamba on full-trace shards:
 
 ```bash
 axosim train \
@@ -68,57 +198,77 @@ axosim train \
   --epochs 10 \
   --epoch-samples 80000 \
   --shard-reuse-batches 58 \
-  --checkpoint runs/axomamba.pt \
-  --metrics runs/axomamba-metrics.json
+  --checkpoint runs/axosim-mamba.pt \
+  --metrics runs/axosim-mamba-metrics.json
 ```
 
-Evaluate with the corrected full-trace metric path:
+Evaluate with the AxoBench full-trace metric path:
 
 ```bash
 axosim evaluate \
   --preset fulltrace-paper-metric \
   --data data/full-trace-shards/nmda-val \
-  --checkpoint runs/paper-like.pt \
-  --output runs/paper-like-val.json
+  --checkpoint runs/axosim-mamba.pt \
+  --output runs/axosim-mamba-val.json
 ```
 
-Each `train` and `evaluate` run writes a tiny `experiment-registry.jsonl` next
-to the metrics file by default. Disable that with `--no-registry`.
-
-For model iteration, print the bounded AxoBench core metrics and 24-row
-attention panel directly in the terminal:
+Run the bounded AxoBench diagnostic panel:
 
 ```bash
-axosim-evaluate-model runs/paper-like.pt \
+axosim-evaluate-model runs/axosim-mamba.pt \
   --dataset-root data/v1-neuronio-like-gpu-20260611 \
   --device cuda
 ```
 
-The command works with every checkpoint written by AxoSim's standard
-checkpoint loader. AxoBench remains responsible for metric and diagnostic
-definitions; this repository supplies only checkpoint loading and GPU
-prediction. Install the current AxoBench package in the same environment
-before using the command.
-
-The measured default evaluates one morphology with 120 ordinary traces, 40
-paired traces per intervention, GPU batches of 128, and four concurrent CPU
-intervention loaders. Add `--multiple-morphologies` to distribute the same
-120/40 profile across the five morphologies, or use
-`--morphology-id specimen_...` to select a specific morphology. The command
-only prints to the terminal unless `--output report.json` or
-`--output report.csv` is supplied.
-
-## Smoke Workflow
-
-Create deterministic demo NeuronIO-style shards:
+Compare a candidate and frozen baseline on exactly paired traces:
 
 ```bash
-axosim make-demo-data --output runs/demo-data --samples 8 --time-steps 32 --input-dim 64
+axosim-evaluate-model runs/candidate.pt \
+  --baseline-checkpoint runs/baseline.pt \
+  --dataset-root data/axobench-v1 \
+  --device cuda \
+  --output runs/candidate-vs-baseline.json
 ```
 
-Train the small legacy smoke path on toy data:
+AxoBench owns metric and diagnostic definitions. AxoSim supplies checkpoint
+loading, training, adaptation, and GPU prediction.
+
+The role-correct development-corpus AxoSim-Mamba uses
+`configs/axomamba-population.json` and
+`checkpoints/axomamba-population.pt`. It was trained on the 7,500-trace
+development corpus, retains all six excitatory/inhibitory morphology IDs, and
+is separate from the compact SERA-only and spike-focused checkpoints. It is
+not presented as a checkpoint trained on the completed 50,000-trace release.
+
+## Data
+
+Public NeuronIO assets are not included. Configure Kaggle credentials through
+its standard credential file or environment variables, then run:
 
 ```bash
+axosim-setup --install-kaggle --download-data
+```
+
+Raw NeuronIO files matching the upstream `*sim__*` naming convention can be
+converted into deterministic AxoSim shards:
+
+```bash
+axosim convert-neuronio \
+  --input path/to/raw-neuronio-folder \
+  --output runs/neuronio-shards
+```
+
+## Smoke Test
+
+Create toy data, train the small compatibility baseline, and evaluate it:
+
+```bash
+axosim make-demo-data \
+  --output runs/demo-data \
+  --samples 8 \
+  --time-steps 32 \
+  --input-dim 64
+
 axosim train \
   --preset legacy-baseline-smoke \
   --data runs/demo-data \
@@ -128,29 +278,7 @@ axosim train \
   --epochs 1 \
   --checkpoint runs/branch-elm.pt \
   --metrics runs/train-metrics.json
-```
 
-Train the official paper-repo ELM shape on toy data:
-
-```bash
-axosim make-demo-data --output runs/official-demo-data --samples 2 --time-steps 8 --input-dim 1278
-
-axosim train \
-  --preset paper-random-fulltrace \
-  --data runs/official-demo-data \
-  --model-config configs/branch_elm_30_official.json \
-  --window-size 8 \
-  --ignore-start 0 \
-  --burn-in 0 \
-  --epoch-samples 2 \
-  --epochs 1 \
-  --checkpoint runs/official-elm.pt \
-  --metrics runs/official-train-metrics.json
-```
-
-Evaluate a checkpoint:
-
-```bash
 axosim evaluate \
   --preset legacy-baseline-smoke \
   --data runs/demo-data \
@@ -158,76 +286,23 @@ axosim evaluate \
   --output runs/eval-metrics.json
 ```
 
-Evaluate a raw upstream official checkpoint state dict by pairing it with its
-model config:
+The Branch-ELM implementation remains as a baseline and checkpoint-compatibility
+path. It is not one of the AxoSim deployment models.
+
+## Verify the package
 
 ```bash
-axosim evaluate \
-  --preset fulltrace-paper-metric \
-  --data runs/neuronio-shards \
-  --model-config configs/branch_elm_30_official.json \
-  --checkpoint .external/elmneuron/models/num_memory_30/neuronio_best_model_state.pt \
-  --output runs/official-eval-metrics.json
+python -m pytest -q
 ```
 
-Benchmark recurrent forward latency:
+## Evidence boundaries
 
-```bash
-axosim benchmark \
-  --input-dim 1278 \
-  --memory-units 30 \
-  --branches 32 \
-  --batch-size 1 \
-  --time-steps 500 \
-  --runs 10 \
-  --output runs/benchmark.json
-```
-
-## Implemented From The Report
-
-- Deterministic pre-sharded loader for NeuronIO-style `(samples, time, channels)` inputs and two-output spike/soma targets.
-- Official paper-repo ELM / Branch-ELM runtime, routing, synaptic trace state, memory state, and spike/soma readout.
-- `AxoMamba`, the reusable promoted Mamba surrogate configuration.
-- Legacy simplified BranchELM path kept for smoke tests.
-- BCE + MSE training loop with burn-in support.
-- Checkpoint save/load with model config metadata.
-- Iteration evaluation through AxoBench: Voltage SERA, exact and 5 ms spike F1,
-  F1 area over 0--5 ms, Response SERA, compatibility RMSE/AUC, and 24 bounded
-  attention diagnostics.
-- Benchmark command with optional `torch.compile`.
-- Named train/evaluate presets and tiny JSONL experiment registry.
-
-## Not Included
-
-The public NeuronIO Kaggle assets are large and are not downloaded by this
-scaffold. Convert those files into `.npz` shards containing `inputs`, `targets`,
-and optionally `sample_ids`, then point `train` or `evaluate` at that directory.
-
-Raw NeuronIO pickle files matching the upstream `*sim__*` naming pattern can be
-converted directly:
-
-```bash
-axosim convert-neuronio --input path/to/raw-neuronio-folder --output runs/neuronio-shards
-```
-
-The recommended training path is the preset-based full-trace workflow above. If
-you need the older fixed-window path for a compatibility check:
-
-```bash
-axosim train \
-  --data runs/neuronio-shards \
-  --model-kind official \
-  --model-config configs/branch_elm_30_official.json \
-  --window-size 500 \
-  --window-stride 350 \
-  --ignore-start 500 \
-  --burn-in 150 \
-  --shuffle-mode shard \
-  --cache-shards 1 \
-  --checkpoint runs/branch-elm-30.pt \
-  --metrics runs/branch-elm-30-train.json
-```
-
-`--shuffle-mode shard` keeps training deterministic while shuffling shard order
-and within-shard sample order. Pair it with `--cache-shards 1` for compressed
-NeuronIO shards so each shard is inflated once while its local samples are used.
+The million-neuron rates are hardware- and contract-specific complete-stack
+measurements, not inferred speedups over Arbor, CoreNEURON, or another
+biophysical simulator. AxoSim's trainable behavior, morphology, threshold, and
+contact-efficacy coordinates are learned operational state; they are not
+interpretable ion-channel or compartment parameters. The population-context
+dataset uses biophysical teachers on connected-model input histories rather
+than a fully biophysical closed loop. A matched fixed-recipe run on the
+completed 50,000-trace corpus improved held-out trace metrics but did not
+improve the connected objective, so that checkpoint is not promoted here.

@@ -4,13 +4,18 @@ __pycache__/
 build/
 dist/
 runs/
-data/
+data
 checkpoints/
 *.pt
 .external/
 
 # Agent/local experiment state.
 .codex/
+.codex-autoresearch.md
+.untracked/
+notes/
+progress.md
+deep-research-report.md
 docs/ta1/
 docs/verify-arbor-simulator/
 
@@ -19,6 +24,7 @@ docs/verify-arbor-simulator/
 *.pyc
 *.npz
 *.svg
+*.so
 docs/**/artifacts/**/__pycache__/
 docs/**/artifacts/**/x86_64/
 docs/**/artifacts/**/plots/
