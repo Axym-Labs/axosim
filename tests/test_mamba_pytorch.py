@@ -11,8 +11,104 @@ from axosim.axomamba import (
     structured_compact_axomamba_config,
 )
 from axosim.checkpoint import load_checkpoint, save_checkpoint
-from axosim.mamba_official import BranchOfficialMambaConfig, BranchPyTorchMamba
+from axosim.mamba_official import (
+    BranchOfficialMamba,
+    BranchOfficialMambaConfig,
+    BranchPyTorchMamba,
+    _OfficialMambaResidualBlock,
+)
 from axosim.mamba_pytorch import SimpleMambaModel
+
+
+class _ExplosiveUpdate(torch.nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * 1e20
+
+
+class _ConstantScaleUpdate(torch.nn.Module):
+    def __init__(self, scale: float) -> None:
+        super().__init__()
+        self.scale = scale
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.ones_like(x) * self.scale
+
+
+def test_fixed_rms_mamba_update_keeps_residual_delta_bounded() -> None:
+    block = _OfficialMambaResidualBlock(
+        _ExplosiveUpdate(),
+        model_dim=4,
+        dropout=0.0,
+        residual_scale_init=0.1,
+        update_normalization="fixed_rms",
+    )
+    x = torch.tensor(
+        [
+            [
+                [1.0, -2.0, 3.0, -4.0],
+                [-0.5, 0.25, 1.5, -1.25],
+            ]
+        ]
+    )
+
+    output = block(x)
+    delta_rms = (output - x).double().square().mean(dim=-1).sqrt()
+
+    assert torch.isfinite(output).all()
+    torch.testing.assert_close(
+        delta_rms,
+        torch.full_like(delta_rms, 0.1),
+    )
+
+
+def test_branch_mamba_propagates_fixed_rms_update_configuration() -> None:
+    config = BranchOfficialMambaConfig(
+        num_input=8,
+        num_output=2,
+        num_branch=2,
+        num_synapse_per_branch=4,
+        model_dim=4,
+        num_layers=1,
+        state_dim=2,
+        conv_kernel=2,
+        expansion=2,
+        mamba_update_normalization="fixed_rms",
+    )
+    model = BranchOfficialMamba(
+        config,
+        mamba_classes=(_ExplosiveUpdate, None),
+    )
+    x = torch.tensor([[[1.0, -2.0, 3.0, -4.0]]])
+
+    output = model.blocks[0](x)
+    delta_rms = (output - x).double().square().mean(dim=-1).sqrt()
+
+    torch.testing.assert_close(
+        delta_rms,
+        torch.full_like(delta_rms, 0.1),
+    )
+
+
+@pytest.mark.parametrize("update_scale", [1e-12, 1e20])
+def test_fixed_rms_mamba_update_is_scale_invariant(update_scale: float) -> None:
+    block = _OfficialMambaResidualBlock(
+        _ConstantScaleUpdate(update_scale),
+        model_dim=4,
+        dropout=0.0,
+        residual_scale_init=0.1,
+        update_normalization="fixed_rms",
+    )
+    x = torch.zeros(1, 2, 4)
+
+    delta_rms = block(x).double().square().mean(dim=-1).sqrt()
+
+    torch.testing.assert_close(
+        delta_rms,
+        torch.full_like(delta_rms, 0.1),
+    )
 
 
 def test_simple_mamba_trunk_parameters_receive_gradients():
@@ -1090,6 +1186,13 @@ def test_branch_subunit_configuration_is_strict():
         )
     with pytest.raises(ValueError, match="branch_subunit_scale"):
         AxoPyTorchMamba(AxoMambaConfig(**common, branch_subunits=2, branch_subunit_scale=-1.0))
+    with pytest.raises(ValueError, match="mamba_update_normalization"):
+        AxoPyTorchMamba(
+            AxoMambaConfig(
+                **common,
+                mamba_update_normalization="invalid",
+            )
+        )
 
 
 def test_axomamba_pytorch_checkpoint_round_trips(tmp_path):
@@ -1102,6 +1205,7 @@ def test_axomamba_pytorch_checkpoint_round_trips(tmp_path):
         num_layers=1,
         state_dim=2,
         conv_kernel=2,
+        mamba_update_normalization="fixed_rms",
         integrative_mixer_short_kernel=2,
         integrative_mixer_long_kernel=3,
     )
@@ -1200,6 +1304,7 @@ def test_streaming_step_matches_full_sequence_for_population_model_path():
             state_dim=2,
             conv_kernel=2,
             expansion=2,
+            mamba_update_normalization="fixed_rms",
             morphology_ids=["morph-a", "morph-b"],
             morphology_embedding_scale=0.15,
             morphology_synapse_gain_scale=1.0,

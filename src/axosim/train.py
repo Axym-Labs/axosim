@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import json
-from pathlib import Path
+import math
 import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 from axosim.checkpoint import save_checkpoint
 from axosim.data import ShardedNeuronIODataset
-from axosim.evaluate import evaluate_dataset, _tensor_from_numpy
+from axosim.evaluate import _tensor_from_numpy, evaluate_dataset
 from axosim.model import BranchELM
 
 
@@ -95,7 +96,9 @@ def train_dataset(
     optimizer = _build_optimizer(model, optimizer_name, learning_rate, weight_decay)
     batches_per_epoch = _batches_per_epoch(len(dataset), batch_size, max_train_batches)
     total_train_steps = epochs * batches_per_epoch
-    scheduler = _build_scheduler(optimizer, lr_schedule, lr_schedule_steps or total_train_steps)
+    scheduler = _build_scheduler(
+        optimizer, lr_schedule, lr_schedule_steps or total_train_steps
+    )
     bce = nn.BCEWithLogitsLoss()
     mse = nn.MSELoss()
     last_loss = 0.0
@@ -129,8 +132,12 @@ def train_dataset(
                 max_train_batches,
                 prefetch_batches=prefetch_batches,
             ):
-                x = _tensor_from_numpy(x_np, device, pin_memory=pin_memory, non_blocking=non_blocking)
-                y = _tensor_from_numpy(y_np, device, pin_memory=pin_memory, non_blocking=non_blocking)
+                x = _tensor_from_numpy(
+                    x_np, device, pin_memory=pin_memory, non_blocking=non_blocking
+                )
+                y = _tensor_from_numpy(
+                    y_np, device, pin_memory=pin_memory, non_blocking=non_blocking
+                )
 
                 pred = model(x)
                 pred_trimmed = pred[:, burn_in:, :]
@@ -174,7 +181,9 @@ def train_dataset(
                     )
                     loss = loss + sera_soma_loss_weight * sera_soma_loss
                     sera_soma_loss_value = float(sera_soma_loss.detach().cpu())
-                    sera_soma_relevance_mean_value = float(sera_relevance_mean.detach().cpu())
+                    sera_soma_relevance_mean_value = float(
+                        sera_relevance_mean.detach().cpu()
+                    )
                     last_sera_soma_loss = sera_soma_loss_value
                     last_sera_soma_relevance_mean = sera_soma_relevance_mean_value
                 if soma_slope_loss_weight and pred_soma.shape[1] > 1:
@@ -186,7 +195,9 @@ def train_dataset(
                     last_soma_slope_loss = soma_slope_loss_value
                 l1_loss_value: float | None = None
                 if l1_lambda:
-                    l1_loss = sum(parameter.abs().sum() for parameter in model.parameters())
+                    l1_loss = sum(
+                        parameter.abs().sum() for parameter in model.parameters()
+                    )
                     loss = loss + l1_lambda * l1_loss
                     l1_loss_value = float(l1_loss.detach().cpu())
 
@@ -201,7 +212,10 @@ def train_dataset(
                 global_step += 1
                 epoch_batches += 1
 
-                if update_log_file is not None and global_step % update_log_interval == 0:
+                if (
+                    update_log_file is not None
+                    and global_step % update_log_interval == 0
+                ):
                     elapsed_seconds = time.perf_counter() - total_start_time
                     update_row: dict[str, float | int] = {
                         "global_step": global_step,
@@ -213,14 +227,21 @@ def train_dataset(
                         "soma_loss": float(soma_loss.detach().cpu()),
                         "learning_rate": float(optimizer.param_groups[0]["lr"]),
                         "elapsed_seconds": elapsed_seconds,
-                        "train_samples_per_second": (global_step * batch_size) / elapsed_seconds if elapsed_seconds > 0 else float("inf"),
+                        "train_samples_per_second": (global_step * batch_size)
+                        / elapsed_seconds
+                        if elapsed_seconds > 0
+                        else float("inf"),
                     }
                     if sparse_soma_loss_value is not None:
                         update_row["sparse_soma_loss"] = sparse_soma_loss_value
-                        update_row["sparse_soma_fraction"] = sparse_soma_fraction_value or 0.0
+                        update_row["sparse_soma_fraction"] = (
+                            sparse_soma_fraction_value or 0.0
+                        )
                     if sera_soma_loss_value is not None:
                         update_row["sera_soma_loss"] = sera_soma_loss_value
-                        update_row["sera_soma_relevance_mean"] = sera_soma_relevance_mean_value or 0.0
+                        update_row["sera_soma_relevance_mean"] = (
+                            sera_soma_relevance_mean_value or 0.0
+                        )
                     if soma_slope_loss_value is not None:
                         update_row["soma_slope_loss"] = soma_slope_loss_value
                     if l1_loss_value is not None:
@@ -237,15 +258,21 @@ def train_dataset(
                 "train_samples": train_samples,
                 "train_batches": epoch_batches,
                 "epoch_seconds": epoch_seconds,
-                "train_samples_per_second": train_samples / epoch_seconds if epoch_seconds > 0 else float("inf"),
+                "train_samples_per_second": train_samples / epoch_seconds
+                if epoch_seconds > 0
+                else float("inf"),
                 "learning_rate": float(optimizer.param_groups[0]["lr"]),
             }
             if last_sparse_soma_loss is not None:
                 epoch_metrics["train_last_sparse_soma_loss"] = last_sparse_soma_loss
-                epoch_metrics["train_last_sparse_soma_fraction"] = last_sparse_soma_fraction or 0.0
+                epoch_metrics["train_last_sparse_soma_fraction"] = (
+                    last_sparse_soma_fraction or 0.0
+                )
             if last_sera_soma_loss is not None:
                 epoch_metrics["train_last_sera_soma_loss"] = last_sera_soma_loss
-                epoch_metrics["train_last_sera_soma_relevance_mean"] = last_sera_soma_relevance_mean or 0.0
+                epoch_metrics["train_last_sera_soma_relevance_mean"] = (
+                    last_sera_soma_relevance_mean or 0.0
+                )
             if last_soma_slope_loss is not None:
                 epoch_metrics["train_last_soma_slope_loss"] = last_soma_slope_loss
             if validation_dataset is not None:
@@ -269,12 +296,22 @@ def train_dataset(
                 epoch_metrics.update(
                     {
                         "validation_samples": int(validation_metrics["samples"]),
-                        "validation_metric_ignore_start": int(validation_metrics["metric_ignore_start"]),
-                        "validation_metric_mask_mode": str(validation_metrics["metric_mask_mode"]),
-                        "validation_metric_stitch_burn_in": validation_metrics["metric_stitch_burn_in"],
-                        "validation_soma_affine_calibration": bool(validation_metrics["soma_affine_calibration"]),
+                        "validation_metric_ignore_start": int(
+                            validation_metrics["metric_ignore_start"]
+                        ),
+                        "validation_metric_mask_mode": str(
+                            validation_metrics["metric_mask_mode"]
+                        ),
+                        "validation_metric_stitch_burn_in": validation_metrics[
+                            "metric_stitch_burn_in"
+                        ],
+                        "validation_soma_affine_calibration": bool(
+                            validation_metrics["soma_affine_calibration"]
+                        ),
                         "validation_soma_rmse": float(validation_metrics["soma_rmse"]),
-                        "validation_soma_rmse_units": str(validation_metrics["soma_rmse_units"]),
+                        "validation_soma_rmse_units": str(
+                            validation_metrics["soma_rmse_units"]
+                        ),
                         "validation_spike_auc": float(validation_metrics["spike_auc"]),
                     }
                 )
@@ -282,7 +319,9 @@ def train_dataset(
                     best_validation_soma_rmse = float(validation_metrics["soma_rmse"])
                     best_epoch = epoch
                     if best_checkpoint_path is not None:
-                        save_checkpoint(model, best_checkpoint_path, metadata=epoch_metrics)
+                        save_checkpoint(
+                            model, best_checkpoint_path, metadata=epoch_metrics
+                        )
             history.append(epoch_metrics)
     finally:
         if update_log_file is not None:
@@ -317,21 +356,38 @@ def train_dataset(
         "soma_slope_loss_weight": soma_slope_loss_weight,
         "grad_clip_norm": grad_clip_norm,
         "update_log_interval": update_log_interval,
-        "update_log_path": str(update_log_path) if update_log_path is not None else None,
+        "update_log_path": str(update_log_path)
+        if update_log_path is not None
+        else None,
         "prefetch_batches": prefetch_batches,
         "pin_memory": pin_memory,
         "non_blocking": non_blocking,
         "max_train_batches": max_train_batches,
         "device": device,
         "total_seconds": total_seconds,
-        "train_samples_per_second": sum(int(row["train_samples"]) for row in history) / total_seconds if total_seconds > 0 else float("inf"),
+        "train_samples_per_second": sum(int(row["train_samples"]) for row in history)
+        / total_seconds
+        if total_seconds > 0
+        else float("inf"),
         "best_epoch": best_epoch,
-        "best_validation_soma_rmse": best_validation_soma_rmse if validation_dataset is not None else None,
-        "validation_soma_units": validation_soma_units if validation_dataset is not None else None,
-        "validation_metric_ignore_start": validation_metric_ignore_start if validation_dataset is not None else None,
-        "validation_metric_mask_mode": validation_metric_mask_mode if validation_dataset is not None else None,
-        "validation_metric_stitch_burn_in": validation_metric_stitch_burn_in if validation_dataset is not None else None,
-        "validation_soma_affine_calibration": validation_soma_affine_calibration if validation_dataset is not None else None,
+        "best_validation_soma_rmse": best_validation_soma_rmse
+        if validation_dataset is not None
+        else None,
+        "validation_soma_units": validation_soma_units
+        if validation_dataset is not None
+        else None,
+        "validation_metric_ignore_start": validation_metric_ignore_start
+        if validation_dataset is not None
+        else None,
+        "validation_metric_mask_mode": validation_metric_mask_mode
+        if validation_dataset is not None
+        else None,
+        "validation_metric_stitch_burn_in": validation_metric_stitch_burn_in
+        if validation_dataset is not None
+        else None,
+        "validation_soma_affine_calibration": validation_soma_affine_calibration
+        if validation_dataset is not None
+        else None,
         "history": history,
     }
 
@@ -383,7 +439,9 @@ def train_and_save(
 ) -> dict[str, Any]:
     if update_log_interval and update_log_path is None:
         metrics_path_for_log = Path(metrics_path)
-        update_log_path = metrics_path_for_log.with_name(f"{metrics_path_for_log.stem}-updates.jsonl")
+        update_log_path = metrics_path_for_log.with_name(
+            f"{metrics_path_for_log.stem}-updates.jsonl"
+        )
     metrics = train_dataset(
         model,
         dataset,
@@ -429,7 +487,9 @@ def train_and_save(
     save_checkpoint(model, checkpoint_path, metadata=metrics)
     metrics_path = Path(metrics_path)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    metrics_path.write_text(
+        json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return metrics
 
 
@@ -476,14 +536,19 @@ def _sparse_soma_weighted_mse(
     auxiliary loss gives those selected timesteps their own normalized MSE
     term, so the objective can attend to them without changing the target.
     """
-    if prediction_soma.shape != target_soma.shape or prediction_soma.shape != sparse_mask.shape:
+    if (
+        prediction_soma.shape != target_soma.shape
+        or prediction_soma.shape != sparse_mask.shape
+    ):
         raise ValueError(
             "prediction_soma, target_soma, and sparse_mask must have matching shapes, "
             f"got {prediction_soma.shape}, {target_soma.shape}, {sparse_mask.shape}"
         )
     sparse_weight = sparse_mask.to(dtype=prediction_soma.dtype)
     squared_error = (prediction_soma - target_soma).square()
-    sparse_loss = (squared_error * sparse_weight).sum() / sparse_weight.sum().clamp_min(1.0)
+    sparse_loss = (squared_error * sparse_weight).sum() / sparse_weight.sum().clamp_min(
+        1.0
+    )
     sparse_fraction = sparse_weight.mean()
     return sparse_loss, sparse_fraction
 
@@ -503,7 +568,9 @@ def _sera_soma_weighted_mse(
     of being represented only by its empirical frequency.
     """
     if targets.ndim < 3 or targets.shape[-1] < 2:
-        raise ValueError(f"targets must have shape (..., time, channels>=2), got {targets.shape}")
+        raise ValueError(
+            f"targets must have shape (..., time, channels>=2), got {targets.shape}"
+        )
     target_soma = targets[..., 1]
     if prediction_soma.shape != target_soma.shape:
         raise ValueError(
@@ -517,7 +584,9 @@ def _sera_soma_weighted_mse(
     relevance = _sera_soma_relevance(targets)
     weights = min_weight + relevance.pow(relevance_power)
     squared_error = (prediction_soma - target_soma).square()
-    loss = (squared_error * weights).sum() / weights.sum().clamp_min(torch.finfo(weights.dtype).eps)
+    loss = (squared_error * weights).sum() / weights.sum().clamp_min(
+        torch.finfo(weights.dtype).eps
+    )
     return loss, relevance.mean()
 
 
@@ -525,16 +594,28 @@ def _sera_soma_relevance(targets: torch.Tensor) -> torch.Tensor:
     soma = targets[..., 1].detach()
     spikes = targets[..., 0].detach() > 0.5
     relevance = torch.zeros_like(soma, dtype=soma.dtype)
-    relevance = torch.maximum(relevance, _dilate_time_mask(spikes, 5, causal=False).to(dtype=soma.dtype))
-    relevance = torch.maximum(relevance, _tail_relevance_torch(soma, start_quantile=0.80, stop_quantile=0.995))
-    relevance = torch.maximum(relevance, _tail_relevance_torch(-soma, start_quantile=0.90, stop_quantile=0.995))
+    relevance = torch.maximum(
+        relevance, _dilate_time_mask(spikes, 5, causal=False).to(dtype=soma.dtype)
+    )
+    relevance = torch.maximum(
+        relevance, _tail_relevance_torch(soma, start_quantile=0.80, stop_quantile=0.995)
+    )
+    relevance = torch.maximum(
+        relevance,
+        _tail_relevance_torch(-soma, start_quantile=0.90, stop_quantile=0.995),
+    )
     dvdt = torch.zeros_like(soma)
     dvdt[..., 1:] = soma[..., 1:] - soma[..., :-1]
-    relevance = torch.maximum(relevance, _tail_relevance_torch(dvdt.abs(), start_quantile=0.85, stop_quantile=0.995))
+    relevance = torch.maximum(
+        relevance,
+        _tail_relevance_torch(dvdt.abs(), start_quantile=0.85, stop_quantile=0.995),
+    )
     return relevance.clamp(0.0, 1.0)
 
 
-def _tail_relevance_torch(values: torch.Tensor, *, start_quantile: float, stop_quantile: float) -> torch.Tensor:
+def _tail_relevance_torch(
+    values: torch.Tensor, *, start_quantile: float, stop_quantile: float
+) -> torch.Tensor:
     flat = values.flatten()
     if flat.numel() == 0:
         return torch.zeros_like(values)
@@ -550,9 +631,13 @@ def _dilate_time_mask(mask: torch.Tensor, window: int, *, causal: bool) -> torch
         return mask
     values = mask.to(dtype=torch.float32).unsqueeze(1)
     if causal:
-        dilated = F.max_pool1d(F.pad(values, (window, 0)), kernel_size=window + 1, stride=1)
+        dilated = F.max_pool1d(
+            F.pad(values, (window, 0)), kernel_size=window + 1, stride=1
+        )
     else:
-        dilated = F.max_pool1d(values, kernel_size=2 * window + 1, stride=1, padding=window)
+        dilated = F.max_pool1d(
+            values, kernel_size=2 * window + 1, stride=1, padding=window
+        )
     return dilated.squeeze(1) > 0
 
 
@@ -561,7 +646,9 @@ def _synchronize_device(device: str) -> None:
         torch.cuda.synchronize()
 
 
-def _stack_batch(dataset: ShardedNeuronIODataset, indices: range) -> tuple[np.ndarray, np.ndarray]:
+def _stack_batch(
+    dataset: ShardedNeuronIODataset, indices: range
+) -> tuple[np.ndarray, np.ndarray]:
     samples = [dataset[i] for i in indices]
     return (
         np.stack([sample.inputs for sample in samples]).astype(np.float32, copy=False),
@@ -569,7 +656,9 @@ def _stack_batch(dataset: ShardedNeuronIODataset, indices: range) -> tuple[np.nd
     )
 
 
-def _effective_validation_ignore_start(dataset: ShardedNeuronIODataset, ignore_start: int) -> int:
+def _effective_validation_ignore_start(
+    dataset: ShardedNeuronIODataset, ignore_start: int
+) -> int:
     if ignore_start <= 0:
         return ignore_start
     if len(dataset) == 0:
@@ -578,8 +667,14 @@ def _effective_validation_ignore_start(dataset: ShardedNeuronIODataset, ignore_s
     return 0 if ignore_start >= sequence_length else ignore_start
 
 
-def _load_batch(dataset: ShardedNeuronIODataset, indices: range) -> tuple[np.ndarray, np.ndarray]:
-    return dataset.get_batch(indices) if hasattr(dataset, "get_batch") else _stack_batch(dataset, indices)
+def _load_batch(
+    dataset: ShardedNeuronIODataset, indices: range
+) -> tuple[np.ndarray, np.ndarray]:
+    return (
+        dataset.get_batch(indices)
+        if hasattr(dataset, "get_batch")
+        else _stack_batch(dataset, indices)
+    )
 
 
 def _iter_epoch_batches(
@@ -605,21 +700,49 @@ def _iter_epoch_batches(
         for batch_index in range(len(ranges)):
             x_np, y_np = future.result()
             next_index = batch_index + 1
-            future = executor.submit(_load_batch, dataset, ranges[next_index]) if next_index < len(ranges) else None
+            future = (
+                executor.submit(_load_batch, dataset, ranges[next_index])
+                if next_index < len(ranges)
+                else None
+            )
             yield batch_index, x_np, y_np
 
 
-def _batches_per_epoch(dataset_size: int, batch_size: int, max_train_batches: int | None) -> int:
+def _batches_per_epoch(
+    dataset_size: int, batch_size: int, max_train_batches: int | None
+) -> int:
     available = (dataset_size + batch_size - 1) // batch_size
-    return min(available, max_train_batches) if max_train_batches is not None else available
+    return (
+        min(available, max_train_batches)
+        if max_train_batches is not None
+        else available
+    )
 
 
-def _build_scheduler(optimizer: torch.optim.Optimizer, lr_schedule: str, total_train_steps: int):
+def _build_scheduler(
+    optimizer: torch.optim.Optimizer, lr_schedule: str, total_train_steps: int
+):
     if lr_schedule == "constant":
         return None
     if lr_schedule == "cosine":
-        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(total_train_steps, 1))
-    raise ValueError("lr_schedule must be 'constant' or 'cosine'")
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(total_train_steps, 1)
+        )
+    if lr_schedule == "warmup_cosine_5pct":
+        total_steps = max(total_train_steps, 1)
+        warmup_steps = max(1, math.ceil(0.05 * total_steps))
+        decay_steps = max(total_steps - warmup_steps, 1)
+
+        def multiplier(step: int) -> float:
+            if step < warmup_steps:
+                return (step + 1) / warmup_steps
+            progress = min((step - warmup_steps + 1) / decay_steps, 1.0)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, multiplier)
+    raise ValueError(
+        "lr_schedule must be 'constant', 'cosine', or 'warmup_cosine_5pct'"
+    )
 
 
 def _build_optimizer(
@@ -629,7 +752,11 @@ def _build_optimizer(
     weight_decay: float,
 ) -> torch.optim.Optimizer:
     if optimizer_name == "adam":
-        return torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        return torch.optim.Adam(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
     if optimizer_name == "adamw":
-        return torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        return torch.optim.AdamW(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
     raise ValueError("optimizer_name must be 'adam' or 'adamw'")

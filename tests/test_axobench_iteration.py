@@ -15,8 +15,16 @@ from axosim.model import BranchELM, BranchELMConfig
 
 def test_checkpoint_predictor_is_batch_callable_and_returns_numpy(tmp_path) -> None:
     checkpoint = tmp_path / "model.pt"
+    model = BranchELM(
+        BranchELMConfig(
+            input_dim=4,
+            memory_units=3,
+            num_branches=2,
+            hidden_units=4,
+        )
+    )
     save_checkpoint(
-        BranchELM(BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4)),
+        model,
         checkpoint,
     )
 
@@ -27,6 +35,9 @@ def test_checkpoint_predictor_is_batch_callable_and_returns_numpy(tmp_path) -> N
     assert output.dtype == np.float32
     assert metadata["model_kind"] == "baseline"
     assert metadata["inference_dtype"] == "float32"
+    assert metadata["resident_parameter_count"] == sum(
+        parameter.numel() for parameter in model.parameters()
+    )
 
 
 def test_checkpoint_predictor_supports_explicit_inference_dtype(tmp_path) -> None:

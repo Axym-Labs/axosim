@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Literal
 
 from torch import nn
 
@@ -31,6 +32,7 @@ class AxoSimModelProfile:
     state_dim: int
     num_layers: int
     head_dim: int
+    mamba_update_normalization: Literal["none", "fixed_rms"] = "none"
 
 
 _PROFILES = (
@@ -47,10 +49,10 @@ _PROFILES = (
         "axosim-gru-medium",
         "AxoSim-GRU Medium",
         "gru",
-        model_dim=58,
-        state_dim=23,
+        model_dim=128,
+        state_dim=32,
         num_layers=2,
-        head_dim=64,
+        head_dim=128,
     ),
     AxoSimModelProfile(
         "axosim-mamba-small",
@@ -65,19 +67,19 @@ _PROFILES = (
         "axosim-mamba-medium",
         "AxoSim-Mamba Medium",
         "mamba",
-        model_dim=58,
-        state_dim=23,
-        num_layers=2,
-        head_dim=64,
+        model_dim=176,
+        state_dim=44,
+        num_layers=4,
+        head_dim=88,
     ),
     AxoSimModelProfile(
         "axosim-mamba-large",
         "AxoSim-Mamba Large",
         "mamba",
-        model_dim=256,
-        state_dim=64,
-        num_layers=6,
-        head_dim=64,
+        model_dim=488,
+        state_dim=124,
+        num_layers=8,
+        head_dim=124,
     ),
 )
 
@@ -104,6 +106,7 @@ def create_axosim_profile(
         state_dim=profile.state_dim,
         num_layers=profile.num_layers,
         head_dim=profile.head_dim,
+        mamba_update_normalization=profile.mamba_update_normalization,
     )
     backbone = create_axomamba(
         AxoMambaConfig(**values),

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
 import sys
 import threading
+from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from axosim.autoresearch import (
@@ -15,13 +16,15 @@ from axosim.autoresearch import (
     STANDARD_PRESENTATIONS,
     FrozenWindowDataset,
     PanelCandidate,
-    practical_candidate_gate,
+    TrainingObjective,
+    _iter_shared_batches,
+    _write_panel_resume,
+    axomamba_training_objective,
     benchmark_model_inference,
     benchmark_model_training_step,
-    TrainingObjective,
-    axomamba_training_objective,
     create_frozen_window_schedule,
     default_axomamba_training_objective,
+    differentiable_near_spike_voltage_loss,
     freeze_named_parameters,
     initialize_morphology_parameter_rows_from_mean,
     initialize_named_parameters,
@@ -30,15 +33,14 @@ from axosim.autoresearch import (
     model_resident_state_metrics,
     offset_named_parameters,
     output_distillation_loss,
+    practical_candidate_gate,
     resolve_presentation_budget,
     set_trainable_parameter_names,
     train_candidate_panel,
     training_objective_loss,
-    differentiable_near_spike_voltage_loss,
-    _iter_shared_batches,
 )
-from axosim.data import ShardedNeuronIODataset
 from axosim.axomamba import AxoMambaConfig, AxoPyTorchMamba
+from axosim.data import ShardedNeuronIODataset
 from axosim.model import BranchELM, BranchELMConfig
 from axosim.rnn_variants import BranchTraceRNN, BranchTraceRNNConfig
 
@@ -60,7 +62,9 @@ def test_resident_state_metrics_count_all_parameters_and_buffers_once() -> None:
     }
 
 
-def test_population_memory_metrics_separate_trainable_shared_and_streaming_state() -> None:
+def test_population_memory_metrics_separate_trainable_shared_and_streaming_state() -> (
+    None
+):
     config = AxoMambaConfig(
         num_input=8,
         num_output=2,
@@ -149,15 +153,50 @@ def test_shared_batch_prefetch_fills_requested_queue_depth() -> None:
     batches.close()
 
 
+def test_shared_batch_iteration_can_resume_without_reloading_prior_batches() -> None:
+    class Dataset:
+        def __init__(self) -> None:
+            self.loaded: list[int] = []
+
+        def __len__(self) -> int:
+            return 5
+
+        def get_batch(self, indices: range) -> tuple[np.ndarray, np.ndarray]:
+            index = int(indices.start)
+            self.loaded.append(index)
+            values = np.asarray([[index]], dtype=np.float32)
+            return values, values
+
+    dataset = Dataset()
+
+    batches = list(
+        _iter_shared_batches(
+            dataset,
+            1,
+            prefetch_batches=0,
+            start_batch=2,
+        )
+    )
+
+    assert [batch[0] for batch in batches] == [2, 3, 4]
+    assert dataset.loaded == [2, 3, 4]
+
+
 def _write_morphology_dataset(root) -> None:
     root.mkdir(parents=True)
-    for shard_index, morphology in enumerate(("specimen_a", "specimen_b", "specimen_a", "specimen_b")):
+    for shard_index, morphology in enumerate(
+        ("specimen_a", "specimen_b", "specimen_a", "specimen_b")
+    ):
         rng = np.random.default_rng(shard_index)
-        inputs = rng.choice([-1.0, 0.0, 1.0], size=(4, 24, 4), p=[0.05, 0.9, 0.05]).astype(np.float32)
+        inputs = rng.choice(
+            [-1.0, 0.0, 1.0], size=(4, 24, 4), p=[0.05, 0.9, 0.05]
+        ).astype(np.float32)
         targets = np.zeros((4, 24, 2), dtype=np.float32)
         targets[..., 1] = inputs.sum(axis=-1) * 0.01
         soma_mv = targets[..., 1] / 0.1 - 67.7
-        sample_ids = np.asarray([f"{morphology}:trace_{shard_index}_{index}" for index in range(4)])
+        sample_ids = np.asarray(
+            [f"{morphology}:trace_{shard_index}_{index}" for index in range(4)]
+        )
         np.savez_compressed(
             root / f"shard_{shard_index}.npz",
             inputs=inputs,
@@ -188,17 +227,17 @@ def test_task_objective_recipes_keep_replicated_regression_objective_separate() 
 def test_practical_gate_rejects_tiny_metric_only_changes() -> None:
     gate = practical_candidate_gate(
         {
-            "voltage_sera_mv": -0.099,
-            "dynamics_sera_mv_per_ms": -0.02,
-            "response_sera_mv": 0.01,
+            "voltage_root_sera_mv": -0.099,
+            "dynamics_root_sera_mv_per_ms": -0.02,
+            "response_root_sera_mv": 0.01,
             "spike_f1_area_0_5ms": 0.0199,
             "spike_f1_exact": 0.0,
             "spike_f1_5ms": 0.0,
         },
         assessments={
-            "voltage_sera_mv": "improved",
-            "dynamics_sera_mv_per_ms": "improved",
-            "response_sera_mv": "uncertain",
+            "voltage_root_sera_mv": "improved",
+            "dynamics_root_sera_mv_per_ms": "improved",
+            "response_root_sera_mv": "uncertain",
             "spike_f1_area_0_5ms": "improved",
             "spike_f1_exact": "uncertain",
             "spike_f1_5ms": "uncertain",
@@ -219,18 +258,18 @@ def test_practical_gate_rejects_tiny_metric_only_changes() -> None:
 
 def test_practical_gate_retains_material_or_efficiency_changes() -> None:
     metric_gate = practical_candidate_gate(
-        {"voltage_sera_mv": -0.1, "spike_f1_area_0_5ms": 0.0},
+        {"voltage_root_sera_mv": -0.1, "spike_f1_area_0_5ms": 0.0},
         assessments={
-            "voltage_sera_mv": "improved",
+            "voltage_root_sera_mv": "improved",
             "spike_f1_area_0_5ms": "uncertain",
         },
         baseline_training={"parameter_count": 100_000},
         candidate_training={"parameter_count": 100_000},
     )
     efficiency_gate = practical_candidate_gate(
-        {"voltage_sera_mv": -0.01, "spike_f1_area_0_5ms": 0.001},
+        {"voltage_root_sera_mv": -0.01, "spike_f1_area_0_5ms": 0.001},
         assessments={
-            "voltage_sera_mv": "uncertain",
+            "voltage_root_sera_mv": "uncertain",
             "spike_f1_area_0_5ms": "uncertain",
         },
         baseline_training={"parameter_count": 100_000},
@@ -245,8 +284,8 @@ def test_practical_gate_retains_material_or_efficiency_changes() -> None:
 
 def test_practical_gate_counts_resident_state_memory_as_efficiency() -> None:
     gate = practical_candidate_gate(
-        {"voltage_sera_mv": 0.0},
-        assessments={"voltage_sera_mv": "uncertain"},
+        {"voltage_root_sera_mv": 0.0},
+        assessments={"voltage_root_sera_mv": "uncertain"},
         baseline_training={
             "resident_parameter_count": 100,
             "resident_state_bytes": 1_000,
@@ -266,8 +305,8 @@ def test_practical_gate_counts_resident_state_memory_as_efficiency() -> None:
 
 def test_practical_gate_counts_per_neuron_streaming_state_as_efficiency() -> None:
     gate = practical_candidate_gate(
-        {"voltage_sera_mv": 0.02},
-        assessments={"voltage_sera_mv": "uncertain"},
+        {"voltage_root_sera_mv": 0.02},
+        assessments={"voltage_root_sera_mv": "uncertain"},
         baseline_training={
             "trainable_parameter_count": 100,
             "per_neuron_streaming_state_bytes": 10_000,
@@ -287,8 +326,8 @@ def test_practical_gate_counts_per_neuron_streaming_state_as_efficiency() -> Non
 
 def test_practical_gate_counts_population_capacity_as_efficiency() -> None:
     gate = practical_candidate_gate(
-        {"voltage_sera_mv": 0.0},
-        assessments={"voltage_sera_mv": "uncertain"},
+        {"voltage_root_sera_mv": 0.0},
+        assessments={"voltage_root_sera_mv": "uncertain"},
         baseline_training={"maximum_population_size": 32_768},
         candidate_training={"maximum_population_size": 1_048_576},
         metric_families=("sera",),
@@ -302,8 +341,8 @@ def test_practical_gate_counts_population_capacity_as_efficiency() -> None:
 
 def test_practical_gate_counts_robust_population_speed_and_peak_memory() -> None:
     gate = practical_candidate_gate(
-        {"voltage_sera_mv": 0.0},
-        assessments={"voltage_sera_mv": "uncertain"},
+        {"voltage_root_sera_mv": 0.0},
+        assessments={"voltage_root_sera_mv": "uncertain"},
         baseline_training={
             "trainable_parameter_count": 100,
             "population_neuron_steps_per_second": 1_000_000,
@@ -328,9 +367,9 @@ def test_practical_gate_counts_robust_population_speed_and_peak_memory() -> None
 
 def test_practical_gate_requires_robust_training_speed_separation() -> None:
     common = {
-        "voltage_sera_mv": 0.0,
+        "voltage_root_sera_mv": 0.0,
     }
-    assessments = {"voltage_sera_mv": "uncertain"}
+    assessments = {"voltage_root_sera_mv": "uncertain"}
     noisy = practical_candidate_gate(
         common,
         assessments=assessments,
@@ -375,10 +414,12 @@ def test_practical_gate_rejects_large_but_uncertain_metric_delta() -> None:
     assert gate["automatically_rejected"] is True
 
 
-def test_practical_gate_labels_efficiency_with_material_regression_as_tradeoff() -> None:
+def test_practical_gate_labels_efficiency_with_material_regression_as_tradeoff() -> (
+    None
+):
     gate = practical_candidate_gate(
-        {"voltage_sera_mv": 0.11},
-        assessments={"voltage_sera_mv": "regressed"},
+        {"voltage_root_sera_mv": 0.11},
+        assessments={"voltage_root_sera_mv": "regressed"},
         baseline_training={
             "parameter_count": 100_000,
             "inference_presentations_per_second": 1_000,
@@ -393,18 +434,18 @@ def test_practical_gate_labels_efficiency_with_material_regression_as_tradeoff()
 
     assert gate["automatically_rejected"] is False
     assert gate["decision"] == "review_efficiency_tradeoff"
-    assert gate["material_regressions"] == ["voltage_sera_mv"]
+    assert gate["material_regressions"] == ["voltage_root_sera_mv"]
 
 
 def test_practical_gate_ignores_metrics_outside_the_declared_task_family() -> None:
     gate = practical_candidate_gate(
         {
-            "voltage_sera_mv": 0.01,
+            "voltage_root_sera_mv": 0.01,
             "spike_f1_area_0_5ms": -0.08,
             "spike_f1_5ms": -0.09,
         },
         assessments={
-            "voltage_sera_mv": "uncertain",
+            "voltage_root_sera_mv": "uncertain",
             "spike_f1_area_0_5ms": "regressed",
             "spike_f1_5ms": "regressed",
         },
@@ -419,8 +460,8 @@ def test_practical_gate_ignores_metrics_outside_the_declared_task_family() -> No
 
 
 def test_practical_gate_requires_robust_inference_speed_separation() -> None:
-    common_deltas = {"voltage_sera_mv": 0.0}
-    common_assessments = {"voltage_sera_mv": "uncertain"}
+    common_deltas = {"voltage_root_sera_mv": 0.0}
+    common_assessments = {"voltage_root_sera_mv": "uncertain"}
     noisy = practical_candidate_gate(
         common_deltas,
         assessments=common_assessments,
@@ -466,7 +507,9 @@ def test_output_distillation_matches_teacher_probabilities_and_voltage() -> None
 
     assert torch.isfinite(loss)
     assert student.grad is not None
-    torch.testing.assert_close(student.grad[:, 1:, :], torch.zeros_like(student.grad[:, 1:, :]))
+    torch.testing.assert_close(
+        student.grad[:, 1:, :], torch.zeros_like(student.grad[:, 1:, :])
+    )
 
 
 def test_inference_benchmark_records_repeated_latency():
@@ -565,7 +608,9 @@ def test_training_benchmark_records_repeated_latency():
     assert result["training_step_presentations_per_second"] > 0
 
 
-def test_frozen_window_schedule_is_deterministic_and_morphology_balanced(tmp_path) -> None:
+def test_frozen_window_schedule_is_deterministic_and_morphology_balanced(
+    tmp_path,
+) -> None:
     data_root = tmp_path / "train"
     _write_morphology_dataset(data_root)
     base = ShardedNeuronIODataset(data_root, cache_shards=1)
@@ -632,7 +677,9 @@ def test_frozen_window_schedule_can_exclude_held_out_morphology(tmp_path) -> Non
         )
 
 
-def test_frozen_schedule_does_not_decompress_shards_to_read_sequence_lengths(tmp_path) -> None:
+def test_frozen_schedule_does_not_decompress_shards_to_read_sequence_lengths(
+    tmp_path,
+) -> None:
     data_root = tmp_path / "train"
     _write_morphology_dataset(data_root)
     base = ShardedNeuronIODataset(data_root, cache_shards=1)
@@ -700,12 +747,19 @@ class _CountingDataset:
         return inputs, targets, raw_soma
 
     def get_sample_ids(self, indices) -> list[str]:
-        return [f"specimen_{'a' if int(index) % 2 == 0 else 'b'}:trace_{index}" for index in indices]
+        return [
+            f"specimen_{'a' if int(index) % 2 == 0 else 'b'}:trace_{index}"
+            for index in indices
+        ]
 
 
-def test_candidate_panel_shares_loads_but_preserves_candidate_optimizer_steps(tmp_path) -> None:
+def test_candidate_panel_shares_loads_but_preserves_candidate_optimizer_steps(
+    tmp_path,
+) -> None:
     dataset = _CountingDataset()
-    config = BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4)
+    config = BranchELMConfig(
+        input_dim=4, memory_units=3, num_branches=2, hidden_units=4
+    )
     candidates = [
         PanelCandidate(
             candidate_id="batch2",
@@ -736,16 +790,324 @@ def test_candidate_panel_shares_loads_but_preserves_candidate_optimizer_steps(tm
     assert dataset.calls == 2
     assert results["batch2"]["optimizer_steps"] == 4
     assert results["batch4"]["optimizer_steps"] == 2
+    assert results["batch2"]["loss_observations"] == 4
+    assert results["batch4"]["loss_observations"] == 2
     assert results["batch2"]["train_presentations"] == 8
     assert results["batch4"]["train_presentations"] == 8
     assert results["batch2"]["burn_in"] == 2
     assert results["batch4"]["burn_in"] == 1
-    assert json.loads((tmp_path / "batch2.json").read_text())["candidate_id"] == "batch2"
+    assert (
+        json.loads((tmp_path / "batch2.json").read_text())["candidate_id"] == "batch2"
+    )
     assert (tmp_path / "batch2.pt").exists()
     assert (tmp_path / "batch4.pt").exists()
 
 
-def test_candidate_panel_passes_morphology_context_to_conditioned_model(tmp_path) -> None:
+def test_candidate_panel_stops_before_nonfinite_optimizer_step(
+    tmp_path,
+) -> None:
+    dataset = _CountingDataset(samples=2)
+    dataset.targets[..., 1] = np.nan
+    candidate = PanelCandidate(
+        candidate_id="nonfinite",
+        model=BranchELM(
+            BranchELMConfig(
+                input_dim=4,
+                memory_units=3,
+                num_branches=2,
+                hidden_units=4,
+            )
+        ),
+        batch_size=2,
+        checkpoint_path=tmp_path / "nonfinite.pt",
+        metrics_path=tmp_path / "nonfinite.json",
+        burn_in=1,
+    )
+
+    with pytest.raises(
+        FloatingPointError,
+        match="non-finite training loss.*before optimizer step 1",
+    ):
+        train_candidate_panel(
+            [candidate],
+            dataset,
+            objective=TrainingObjective(
+                spike_loss_weight=0.25,
+                soma_loss_weight=0.75,
+            ),
+            device="cpu",
+            seed=11,
+        )
+
+    assert not (tmp_path / "nonfinite.pt").exists()
+
+
+def test_panel_checkpoint_rejects_nonfinite_state_before_replacing_resume(
+    tmp_path,
+) -> None:
+    model = torch.nn.Linear(2, 1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    candidate = PanelCandidate(
+        candidate_id="model",
+        model=model,
+        batch_size=1,
+        checkpoint_path=tmp_path / "model.pt",
+        metrics_path=tmp_path / "model.json",
+    )
+    resume = tmp_path / "resume.pt"
+    resume.write_bytes(b"last-good-resume")
+    with torch.no_grad():
+        model.weight.fill_(float("nan"))
+    states = {
+        "model": {
+            "candidate": candidate,
+            "model": model,
+            "optimizer": optimizer,
+            "scheduler": None,
+            "steps": 1,
+            "presentations": 1,
+            "last_components": {},
+            "loss_sum": 0.1,
+            "loss_observations": 1,
+            "compute_seconds": 0.0,
+        }
+    }
+
+    with pytest.raises(FloatingPointError, match="checkpoint.*model"):
+        _write_panel_resume(
+            resume,
+            states,
+            next_shared_batch=1,
+            total_shared_batches=2,
+            cumulative_panel_seconds=1.0,
+            cumulative_teacher_seconds=0.0,
+        )
+
+    assert resume.read_bytes() == b"last-good-resume"
+
+
+def test_candidate_panel_resume_matches_uninterrupted_training(tmp_path) -> None:
+    dataset = _CountingDataset(samples=8)
+    config = BranchELMConfig(
+        input_dim=4,
+        memory_units=3,
+        num_branches=2,
+        hidden_units=4,
+    )
+    objective = TrainingObjective(
+        spike_loss_weight=0.25,
+        soma_loss_weight=0.75,
+    )
+    torch.manual_seed(29)
+    initial = BranchELM(config).state_dict()
+
+    full_model = BranchELM(config)
+    full_model.load_state_dict(initial)
+    full_candidate = PanelCandidate(
+        candidate_id="model",
+        model=full_model,
+        batch_size=2,
+        checkpoint_path=tmp_path / "full.pt",
+        metrics_path=tmp_path / "full.json",
+        burn_in=1,
+    )
+    full_result = train_candidate_panel(
+        [full_candidate],
+        dataset,
+        objective=objective,
+        device="cpu",
+        seed=31,
+    )["model"]
+
+    staged_model = BranchELM(config)
+    staged_model.load_state_dict(initial)
+    staged_candidate = PanelCandidate(
+        candidate_id="model",
+        model=staged_model,
+        batch_size=2,
+        checkpoint_path=tmp_path / "staged.pt",
+        metrics_path=tmp_path / "staged.json",
+        burn_in=1,
+    )
+    resume_path = tmp_path / "panel-resume.pt"
+    partial = train_candidate_panel(
+        [staged_candidate],
+        dataset,
+        objective=objective,
+        device="cpu",
+        seed=31,
+        resume_path=resume_path,
+        checkpoint_every_super_batches=1,
+        snapshot_every_super_batches=1,
+        snapshot_root=tmp_path / "snapshots",
+        max_super_batches=1,
+    )["model"]
+    assert partial["training_complete"] is False
+    assert partial["processed_shared_batches"] == 1
+    assert (tmp_path / "snapshots/batch-0000001/model.pt").is_file()
+
+    resumed_candidate = PanelCandidate(
+        candidate_id="model",
+        model=BranchELM(config),
+        batch_size=2,
+        checkpoint_path=tmp_path / "staged.pt",
+        metrics_path=tmp_path / "staged.json",
+        # The serialized optimizer and scheduler, rather than constructor
+        # defaults, must control every post-resume update.
+        learning_rate=0.123,
+        burn_in=1,
+    )
+    resumed = train_candidate_panel(
+        [resumed_candidate],
+        dataset,
+        objective=objective,
+        device="cpu",
+        seed=31,
+        resume_path=resume_path,
+        checkpoint_every_super_batches=1,
+    )["model"]
+
+    assert resumed["training_complete"] is True
+    assert resumed["optimizer_steps"] == full_result["optimizer_steps"]
+    full_state = torch.load(
+        tmp_path / "full.pt",
+        map_location="cpu",
+        weights_only=False,
+    )["state_dict"]
+    resumed_state = torch.load(
+        tmp_path / "staged.pt",
+        map_location="cpu",
+        weights_only=False,
+    )["state_dict"]
+    for name in full_state:
+        torch.testing.assert_close(resumed_state[name], full_state[name])
+
+
+def test_candidate_panel_records_preclip_gradient_norms_across_resume(
+    tmp_path,
+) -> None:
+    dataset = _CountingDataset(samples=4)
+    dataset.targets[..., 1] = 10.0
+    config = BranchELMConfig(
+        input_dim=4,
+        memory_units=3,
+        num_branches=2,
+        hidden_units=4,
+    )
+    resume_path = tmp_path / "gradient-panel-resume.pt"
+    partial_candidate = PanelCandidate(
+        candidate_id="model",
+        model=BranchELM(config),
+        batch_size=2,
+        checkpoint_path=tmp_path / "partial.pt",
+        metrics_path=tmp_path / "partial.json",
+        grad_clip_norm=1e-8,
+        burn_in=1,
+    )
+    train_candidate_panel(
+        [partial_candidate],
+        dataset,
+        objective=TrainingObjective(
+            spike_loss_weight=0.25,
+            soma_loss_weight=0.75,
+        ),
+        device="cpu",
+        seed=41,
+        resume_path=resume_path,
+        checkpoint_every_super_batches=1,
+        max_super_batches=1,
+    )
+    resumed_candidate = PanelCandidate(
+        candidate_id="model",
+        model=BranchELM(config),
+        batch_size=2,
+        checkpoint_path=tmp_path / "resumed.pt",
+        metrics_path=tmp_path / "resumed.json",
+        grad_clip_norm=1e-8,
+        burn_in=1,
+    )
+
+    result = train_candidate_panel(
+        [resumed_candidate],
+        dataset,
+        objective=TrainingObjective(
+            spike_loss_weight=0.25,
+            soma_loss_weight=0.75,
+        ),
+        device="cpu",
+        seed=41,
+        resume_path=resume_path,
+        checkpoint_every_super_batches=1,
+    )["model"]
+
+    assert result["gradient_norm_observations"] == result["optimizer_steps"] == 2
+    assert result["preclip_gradient_norm_mean"] > 1e-8
+    assert result["preclip_gradient_norm_max"] >= result[
+        "preclip_gradient_norm_mean"
+    ]
+    assert result["gradient_clipped_steps"] == result["optimizer_steps"]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_candidate_panel_can_restore_cuda_rng_state_from_resume(tmp_path) -> None:
+    dataset = _CountingDataset(samples=4)
+    config = BranchELMConfig(
+        input_dim=4,
+        memory_units=3,
+        num_branches=2,
+        hidden_units=4,
+    )
+    objective = TrainingObjective(
+        spike_loss_weight=0.25,
+        soma_loss_weight=0.75,
+    )
+    resume_path = tmp_path / "cuda-panel-resume.pt"
+    partial_candidate = PanelCandidate(
+        candidate_id="model",
+        model=BranchELM(config),
+        batch_size=2,
+        checkpoint_path=tmp_path / "partial.pt",
+        metrics_path=tmp_path / "partial.json",
+        burn_in=1,
+    )
+    partial = train_candidate_panel(
+        [partial_candidate],
+        dataset,
+        objective=objective,
+        device="cuda",
+        seed=37,
+        resume_path=resume_path,
+        checkpoint_every_super_batches=1,
+        max_super_batches=1,
+        warmup_cuda=False,
+    )["model"]
+    assert partial["training_complete"] is False
+
+    resumed_candidate = PanelCandidate(
+        candidate_id="model",
+        model=BranchELM(config),
+        batch_size=2,
+        checkpoint_path=tmp_path / "resumed.pt",
+        metrics_path=tmp_path / "resumed.json",
+        burn_in=1,
+    )
+    resumed = train_candidate_panel(
+        [resumed_candidate],
+        dataset,
+        objective=objective,
+        device="cuda",
+        seed=37,
+        resume_path=resume_path,
+        checkpoint_every_super_batches=1,
+        warmup_cuda=False,
+    )["model"]
+
+    assert resumed["training_complete"] is True
+
+
+def test_candidate_panel_passes_morphology_context_to_conditioned_model(
+    tmp_path,
+) -> None:
     dataset = _CountingDataset(samples=4)
     model = AxoPyTorchMamba(
         AxoMambaConfig(
@@ -806,6 +1168,7 @@ def test_candidate_panel_defaults_to_promoted_axomamba_recipe(tmp_path) -> None:
         "base_soma_sera_loss_weight": 0.0,
         "base_soma_target_mix": 1.0,
         "direct_sera_loss_weight": 0.01,
+        "dynamics_sera_loss_weight": 0.0,
         "f1_curve_loss_weight": 0.05,
         "f1_tolerances_steps": (0, 1, 2, 3, 4, 5),
         "near_spike_radius_steps": 5,
@@ -860,7 +1223,9 @@ def test_candidate_panel_runs_one_shared_distillation_teacher(tmp_path) -> None:
 
 
 def test_named_parameter_initialization_changes_only_requested_tensors() -> None:
-    model = BranchELM(BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4))
+    model = BranchELM(
+        BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4)
+    )
     before = {name: value.detach().clone() for name, value in model.named_parameters()}
     requested = {"readout.bias": 0.25}
 
@@ -878,7 +1243,9 @@ def test_named_parameter_initialization_changes_only_requested_tensors() -> None
 
 
 def test_named_parameter_offsets_apply_after_common_initialization() -> None:
-    model = BranchELM(BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4))
+    model = BranchELM(
+        BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4)
+    )
     before = {name: value.detach().clone() for name, value in model.named_parameters()}
 
     changed = offset_named_parameters(model, {"readout.bias": 0.4})
@@ -895,7 +1262,9 @@ def test_named_parameter_offsets_apply_after_common_initialization() -> None:
 
 
 def test_named_parameter_freeze_changes_only_requested_tensors() -> None:
-    model = BranchELM(BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4))
+    model = BranchELM(
+        BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4)
+    )
 
     frozen = freeze_named_parameters(model, ["readout.bias"])
 
@@ -911,7 +1280,9 @@ def test_named_parameter_freeze_changes_only_requested_tensors() -> None:
 
 
 def test_named_trainable_subset_freezes_every_other_tensor() -> None:
-    model = BranchELM(BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4))
+    model = BranchELM(
+        BranchELMConfig(input_dim=4, memory_units=3, num_branches=2, hidden_units=4)
+    )
 
     frozen = set_trainable_parameter_names(model, ["readout.bias"])
 
@@ -942,7 +1313,9 @@ def test_morphology_parameter_rows_can_be_mean_initialized() -> None:
         )
     )
     with torch.no_grad():
-        model.morphology_synapse_gain_context[:, 0].copy_(torch.tensor([2.0, 4.0, 99.0]))
+        model.morphology_synapse_gain_context[:, 0].copy_(
+            torch.tensor([2.0, 4.0, 99.0])
+        )
         model.morphology_embedding.weight[0].fill_(1.0)
         model.morphology_embedding.weight[1].fill_(3.0)
         model.morphology_embedding.weight[2].fill_(99.0)
@@ -967,7 +1340,9 @@ def test_morphology_parameter_rows_can_be_mean_initialized() -> None:
     )
 
 
-def test_named_buffer_artifact_loads_tensor_and_checks_morphology_order(tmp_path) -> None:
+def test_named_buffer_artifact_loads_tensor_and_checks_morphology_order(
+    tmp_path,
+) -> None:
     morphology_ids = ("cell_a", "cell_b")
     model = AxoPyTorchMamba(
         AxoMambaConfig(
@@ -1000,7 +1375,9 @@ def test_named_buffer_artifact_loads_tensor_and_checks_morphology_order(tmp_path
         expected_morphology_ids=morphology_ids,
     )
 
-    torch.testing.assert_close(model.morphology_synapse_features, torch.from_numpy(values))
+    torch.testing.assert_close(
+        model.morphology_synapse_features, torch.from_numpy(values)
+    )
     assert metadata["shape"] == [2, 4, 3]
     assert len(metadata["sha256"]) == 64
 
@@ -1015,9 +1392,17 @@ def test_named_buffer_artifact_loads_tensor_and_checks_morphology_order(tmp_path
 
 
 def test_every_tenth_iteration_uses_long_budget() -> None:
-    assert resolve_presentation_budget(iteration=1, force_long=False) == STANDARD_PRESENTATIONS
-    assert resolve_presentation_budget(iteration=10, force_long=False) == LONG_PRESENTATIONS
-    assert resolve_presentation_budget(iteration=3, force_long=True) == LONG_PRESENTATIONS
+    assert (
+        resolve_presentation_budget(iteration=1, force_long=False)
+        == STANDARD_PRESENTATIONS
+    )
+    assert (
+        resolve_presentation_budget(iteration=10, force_long=False)
+        == LONG_PRESENTATIONS
+    )
+    assert (
+        resolve_presentation_budget(iteration=3, force_long=True) == LONG_PRESENTATIONS
+    )
 
 
 def test_metric_aligned_objective_is_zero_for_perfect_voltage_and_spikes() -> None:
@@ -1042,6 +1427,42 @@ def test_metric_aligned_objective_is_zero_for_perfect_voltage_and_spikes() -> No
     assert float(components["direct_sera"]) == 0.0
     assert float(components["f1_curve_loss"]) < 1e-6
     assert float(loss) < 1e-6
+
+
+def test_dynamics_sera_loss_responds_to_transition_error_not_voltage_bias() -> None:
+    target = torch.zeros(1, 12, 2)
+    target[:, (4, 9), 0] = 1.0
+    target[..., 1] = torch.linspace(-0.2, 0.4, 12)
+    biased = target.clone()
+    biased[..., 1] += 0.5
+    wrong_slope = target.clone()
+    wrong_slope[..., 1] *= 2.0
+
+    bias_loss, bias_components = training_objective_loss(
+        biased,
+        target,
+        objective=TrainingObjective(
+            spike_loss_weight=0.0,
+            soma_loss_weight=0.0,
+            dynamics_sera_loss_weight=1.0,
+        ),
+        burn_in=0,
+    )
+    slope_loss, slope_components = training_objective_loss(
+        wrong_slope,
+        target,
+        objective=TrainingObjective(
+            spike_loss_weight=0.0,
+            soma_loss_weight=0.0,
+            dynamics_sera_loss_weight=1.0,
+        ),
+        burn_in=0,
+    )
+
+    assert float(bias_components["dynamics_sera"]) < 1e-6
+    assert float(bias_loss) < 1e-6
+    assert float(slope_components["dynamics_sera"]) > 0.0
+    assert float(slope_loss) > 0.0
 
 
 def test_near_spike_voltage_loss_ignores_errors_outside_event_neighborhood() -> None:
@@ -1172,7 +1593,9 @@ def test_promoted_axomamba_objective_weights_each_f1_tolerance_once() -> None:
     assert AXOMAMBA_DEFAULT_BURN_IN == 50
 
 
-def test_experiment_runner_dry_run_has_small_manifest_driven_interface(tmp_path) -> None:
+def test_experiment_runner_dry_run_has_small_manifest_driven_interface(
+    tmp_path,
+) -> None:
     manifest = tmp_path / "iteration.json"
     manifest.write_text(
         json.dumps(

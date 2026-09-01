@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from axosim.axomamba import AxoMamba
@@ -56,9 +57,7 @@ def test_population_initializes_pretrained_morphology_adapters() -> None:
         torch.randn(2, 6, 3),
     )
     assert neuron.behavior_adaptation_bank is not None
-    expected = neuron.compile_adaptation(
-        neuron.behavior_adaptation_bank
-    ).detach()
+    expected = neuron.compile_adaptation(neuron.behavior_adaptation_bank).detach()
 
     population = AxoSimPopulation(
         neuron,
@@ -98,8 +97,7 @@ def test_population_adaptation_mode_freezes_shared_neuron_weights() -> None:
     }
     assert all(parameter.requires_grad for parameter in adapted)
     assert all(
-        not parameter.requires_grad
-        for parameter in population.neuron.parameters()
+        not parameter.requires_grad for parameter in population.neuron.parameters()
     )
 
 
@@ -186,6 +184,73 @@ def test_population_batch_path_matches_independent_examples() -> None:
     torch.testing.assert_close(batched, independent)
 
 
+def test_sparse_contact_events_match_dense_contact_execution() -> None:
+    population = _population()
+    contacts = torch.zeros(3, 12, 4)
+    contacts[0, 0, 1] = 1.0
+    contacts[0, 7, 3] = -0.5
+    contacts[1, 4, 2] = 0.75
+    contacts[2, 11, 0] = 0.25
+    locations = contacts.nonzero()
+    summary_indices = locations[:, 0] * 12 + locations[:, 1]
+    contact_indices = locations[:, 0] * 4 + locations[:, 2]
+    values = contacts[
+        locations[:, 0],
+        locations[:, 1],
+        locations[:, 2],
+    ]
+
+    sparse = population.forward_sparse_contacts(
+        summary_indices,
+        contact_indices,
+        values,
+        time_steps=12,
+    )
+    dense = population(contacts)
+
+    torch.testing.assert_close(sparse, dense)
+
+
+def test_sparse_contact_events_preserve_value_and_efficacy_gradients() -> None:
+    population = _population()
+    population.enable_adaptation_training(
+        behavior=False,
+        morphology=False,
+        synaptic=True,
+    )
+    summary_indices = torch.tensor([0, 7, 16, 35])
+    contact_indices = torch.tensor([1, 3, 6, 8])
+    values = torch.tensor(
+        [1.0, -0.5, 0.75, 0.25],
+        requires_grad=True,
+    )
+
+    prediction = population.forward_sparse_contacts(
+        summary_indices,
+        contact_indices,
+        values,
+        time_steps=12,
+    )
+    prediction.square().mean().backward()
+
+    assert values.grad is not None
+    assert values.grad.abs().sum() > 0
+    assert population.synaptic_log_efficacy.grad is not None
+    assert population.synaptic_log_efficacy.grad.abs().sum() > 0
+
+
+def test_sparse_contact_events_reject_nonfloating_values() -> None:
+    population = _population()
+
+    with pytest.raises(TypeError, match="floating"):
+        population.forward_sparse_contacts(
+            torch.tensor([0]),
+            torch.tensor([0]),
+            torch.tensor([1]),
+            time_steps=12,
+        )
+
+
 def test_population_batched_tokens_preserve_full_bptt() -> None:
     population = _population()
     population.enable_adaptation_training()
@@ -221,9 +286,7 @@ def test_synaptic_efficacies_are_positive_and_contact_specific() -> None:
     baseline = population(contacts)
 
     with torch.no_grad():
-        population.synaptic_log_efficacy[0, 0] = torch.log(
-            torch.tensor(2.0)
-        )
+        population.synaptic_log_efficacy[0, 0] = torch.log(torch.tensor(2.0))
     changed = population(contacts)
 
     assert torch.all(population.synaptic_efficacies() > 0)

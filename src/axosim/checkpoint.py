@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -197,7 +198,12 @@ def save_checkpoint(
         "state_dict": model.state_dict(),
         "metadata": metadata_payload,
     }
-    torch.save(payload, path)
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        torch.save(payload, temporary)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def load_checkpoint(

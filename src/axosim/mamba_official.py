@@ -15,6 +15,16 @@ from axosim.official.modeling_utils import (
 DEFAULT_STREAMING_CHUNK_SIZE = 32_768
 
 
+def _fixed_rms_normalize(update: torch.Tensor) -> torch.Tensor:
+    """Return unit-RMS branch updates without squaring the original scale."""
+
+    minimum = torch.finfo(update.dtype).tiny
+    absolute_maximum = update.abs().amax(dim=-1, keepdim=True)
+    scaled = update / absolute_maximum.clamp_min(minimum)
+    rms = scaled.square().mean(dim=-1, keepdim=True).sqrt() * absolute_maximum
+    return update / rms.clamp_min(minimum)
+
+
 @dataclass(frozen=True)
 class BranchOfficialMambaConfig:
     num_input: int = 1278
@@ -36,6 +46,7 @@ class BranchOfficialMambaConfig:
     final_norm: bool = True
     dropout: float = 0.0
     residual_scale_init: float = 0.1
+    mamba_update_normalization: str = "none"
     separate_heads: bool = False
     soma_filter: bool = False
     soma_filter_tau: float = 25.0
@@ -145,6 +156,10 @@ class BranchOfficialMamba(nn.Module):
             raise ValueError("num_groups must be positive")
         if config.chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
+        if config.mamba_update_normalization not in {"none", "fixed_rms"}:
+            raise ValueError(
+                "mamba_update_normalization must be 'none' or 'fixed_rms'"
+            )
         if config.morphology_ids is None and config.morphology_embedding_scale is not None:
             raise ValueError("morphology_embedding_scale requires morphology_ids")
         if config.morphology_ids is not None:
@@ -606,6 +621,7 @@ class BranchOfficialMamba(nn.Module):
             model_dim=self.config.model_dim,
             dropout=self.config.dropout,
             residual_scale_init=self.config.residual_scale_init,
+            update_normalization=self.config.mamba_update_normalization,
             use_norm=self.config.block_norm,
         )
 
@@ -1175,7 +1191,10 @@ class BranchOfficialMamba(nn.Module):
                 ssm_state,
             )
             state.mamba_states[block_index] = (conv_state, ssm_state)
-            hidden = hidden + block.residual_scale.view(1, 1, -1) * block.dropout(update)
+            update = block.dropout(update)
+            if block.update_normalization == "fixed_rms":
+                update = _fixed_rms_normalize(update)
+            hidden = hidden + block.residual_scale.view(1, 1, -1) * update
 
         hidden = hidden + self._stream_local_tcn_correction(
             hidden,
@@ -1807,6 +1826,7 @@ class _OfficialMambaResidualBlock(nn.Module):
         model_dim: int,
         dropout: float,
         residual_scale_init: float,
+        update_normalization: str = "none",
         use_norm: bool = True,
     ) -> None:
         super().__init__()
@@ -1814,9 +1834,12 @@ class _OfficialMambaResidualBlock(nn.Module):
         self.mamba = mamba
         self.dropout = nn.Dropout(dropout)
         self.residual_scale = nn.Parameter(torch.full((model_dim,), float(residual_scale_init)))
+        self.update_normalization = update_normalization
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         update = self.dropout(self.mamba(self.norm(x)))
+        if self.update_normalization == "fixed_rms":
+            update = _fixed_rms_normalize(update)
         return x + self.residual_scale.view(1, 1, -1) * update
 
 

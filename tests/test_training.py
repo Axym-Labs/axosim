@@ -1,10 +1,37 @@
 import json
 
+import pytest
 import torch
 
-from axosim.cli import main
 from axosim.checkpoint import load_checkpoint
-from axosim.train import _sera_soma_weighted_mse, _sparse_soma_weighted_mse
+from axosim.cli import main
+from axosim.train import (
+    _build_scheduler,
+    _sera_soma_weighted_mse,
+    _sparse_soma_weighted_mse,
+)
+
+
+def test_warmup_cosine_scheduler_reaches_base_lr_then_decays():
+    parameter = torch.nn.Parameter(torch.tensor(0.0))
+    optimizer = torch.optim.AdamW([parameter], lr=2e-4)
+    scheduler = _build_scheduler(
+        optimizer,
+        "warmup_cosine_5pct",
+        total_train_steps=100,
+    )
+
+    rates = [optimizer.param_groups[0]["lr"]]
+    for _ in range(100):
+        optimizer.step()
+        scheduler.step()
+        rates.append(optimizer.param_groups[0]["lr"])
+
+    assert rates[0] == pytest.approx(0.2 * 2e-4)
+    assert rates[3] < rates[4]
+    assert rates[4] == pytest.approx(2e-4)
+    assert rates[5] < rates[4]
+    assert rates[-1] < rates[5]
 
 
 def test_sparse_soma_weighted_mse_uses_only_selected_timesteps():
@@ -73,7 +100,19 @@ def test_cli_train_writes_checkpoint_and_metrics(tmp_path):
     checkpoint_path = tmp_path / "checkpoint.pt"
     metrics_path = tmp_path / "train_metrics.json"
 
-    main(["make-demo-data", "--output", str(data_dir), "--samples", "4", "--time-steps", "6", "--input-dim", "8"])
+    main(
+        [
+            "make-demo-data",
+            "--output",
+            str(data_dir),
+            "--samples",
+            "4",
+            "--time-steps",
+            "6",
+            "--input-dim",
+            "8",
+        ]
+    )
 
     result = main(
         [
@@ -114,7 +153,19 @@ def test_cli_train_with_validation_writes_best_checkpoint(tmp_path):
     best_checkpoint_path = tmp_path / "best.pt"
     metrics_path = tmp_path / "train_metrics.json"
 
-    main(["make-demo-data", "--output", str(data_dir), "--samples", "4", "--time-steps", "6", "--input-dim", "8"])
+    main(
+        [
+            "make-demo-data",
+            "--output",
+            str(data_dir),
+            "--samples",
+            "4",
+            "--time-steps",
+            "6",
+            "--input-dim",
+            "8",
+        ]
+    )
 
     result = main(
         [
@@ -243,7 +294,19 @@ def test_cli_train_supports_official_full_trace_sampling(tmp_path):
     checkpoint_path = tmp_path / "checkpoint.pt"
     metrics_path = tmp_path / "train_metrics.json"
 
-    main(["make-demo-data", "--output", str(data_dir), "--samples", "8", "--time-steps", "12", "--input-dim", "8"])
+    main(
+        [
+            "make-demo-data",
+            "--output",
+            str(data_dir),
+            "--samples",
+            "8",
+            "--time-steps",
+            "12",
+            "--input-dim",
+            "8",
+        ]
+    )
 
     result = main(
         [

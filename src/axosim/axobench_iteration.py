@@ -3,13 +3,84 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import torch
 
 from axosim.checkpoint import load_checkpoint
+from axosim.official import (
+    create_official_elm,
+    load_official_elm_config,
+    load_official_state_dict,
+)
+
+
+def make_official_elm_predictor(
+    config_path: str | Path,
+    checkpoint_path: str | Path,
+    *,
+    device: str = "auto",
+    dtype: str | torch.dtype = "float32",
+) -> tuple[Callable[[np.ndarray], np.ndarray], dict[str, Any]]:
+    """Load an upstream Branch-ELM checkpoint on the shared AxoBench contract."""
+    resolved_device = _resolve_device(device)
+    resolved_dtype = _resolve_dtype(dtype)
+    config_file = Path(config_path)
+    checkpoint_file = Path(checkpoint_path)
+    config = load_official_elm_config(config_file)
+    model = create_official_elm(config)
+    state = load_official_state_dict(checkpoint_file, map_location="cpu")
+    model.load_state_dict(state, strict=True)
+    model = model.to(device=resolved_device, dtype=resolved_dtype).eval()
+
+    def predict(
+        inputs: np.ndarray,
+        *,
+        morphology_ids: list[str] | np.ndarray | None = None,
+    ) -> np.ndarray:
+        del morphology_ids
+        array = np.ascontiguousarray(inputs, dtype=np.float32)
+        tensor = torch.from_numpy(array).to(
+            device=resolved_device,
+            dtype=resolved_dtype,
+            non_blocking=resolved_device.startswith("cuda"),
+        )
+        with torch.inference_mode():
+            # AxoBench consumes the training target contract: spike logits and
+            # centered normalized voltage. ``neuronio_eval_forward`` is the
+            # upstream presentation helper and would sigmoid/invert the
+            # voltage scale before AxoBench applies its own conversion.
+            output = model(tensor)
+        return output.detach().to(dtype=torch.float32).cpu().numpy()
+
+    predict.supports_morphology_ids = False
+    return predict, {
+        "model_family": "official-branch-elm",
+        "config": config,
+        "config_path": str(config_file.resolve()),
+        "checkpoint_path": str(checkpoint_file.resolve()),
+        "checkpoint_sha256": hashlib.sha256(checkpoint_file.read_bytes()).hexdigest(),
+        "parameter_count": sum(
+            parameter.numel()
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        ),
+        "resident_parameter_count": sum(
+            parameter.numel() for parameter in model.parameters()
+        ),
+        "inference_dtype": str(resolved_dtype).removeprefix("torch."),
+        "output_semantics": {
+            "spike": "logit on the shared AxoBench target contract",
+            "voltage": (
+                "centered normalized voltage on the shared AxoBench target "
+                "contract"
+            ),
+        },
+    }
 
 
 def make_checkpoint_predictor(
@@ -25,8 +96,13 @@ def make_checkpoint_predictor(
     resolved_dtype = _resolve_dtype(dtype)
     model, metadata = load_checkpoint(checkpoint, map_location=resolved_device)
     model = model.to(device=resolved_device, dtype=resolved_dtype).eval()
-    use_no_grad = bool(getattr(model, "learn_memory_tau", False) or hasattr(model, "branch_gain_enabled"))
-    configured_morphologies = getattr(getattr(model, "config", None), "morphology_ids", None)
+    use_no_grad = bool(
+        getattr(model, "learn_memory_tau", False)
+        or hasattr(model, "branch_gain_enabled")
+    )
+    configured_morphologies = getattr(
+        getattr(model, "config", None), "morphology_ids", None
+    )
     morphology_mapping = (
         {str(name): index for index, name in enumerate(configured_morphologies)}
         if configured_morphologies is not None
@@ -47,7 +123,9 @@ def make_checkpoint_predictor(
         morphology_indices = None
         if morphology_mapping is not None:
             if morphology_ids is None or len(morphology_ids) != tensor.shape[0]:
-                raise ValueError("conditioned checkpoint requires one morphology ID per input sample")
+                raise ValueError(
+                    "conditioned checkpoint requires one morphology ID per input sample"
+                )
             names = [_morphology_id(value) for value in morphology_ids]
             unknown = sorted(set(names) - set(morphology_mapping))
             if unknown:
@@ -64,7 +142,9 @@ def make_checkpoint_predictor(
                     model,
                     "streaming_step",
                 ):
-                    raise ValueError("checkpoint model does not support streaming inference")
+                    raise ValueError(
+                        "checkpoint model does not support streaming inference"
+                    )
                 state = model.allocate_streaming_state(
                     tensor.shape[0],
                     device=tensor.device,
@@ -95,6 +175,14 @@ def make_checkpoint_predictor(
     predict.supports_morphology_ids = morphology_mapping is not None
     return predict, {
         **metadata,
+        "parameter_count": sum(
+            parameter.numel()
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        ),
+        "resident_parameter_count": sum(
+            parameter.numel() for parameter in model.parameters()
+        ),
         "inference_dtype": str(resolved_dtype).removeprefix("torch."),
         "streaming_inference": streaming,
         "streaming_chunk_size": streaming_chunk_size,
@@ -127,7 +215,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-intervention-samples", type=int)
     parser.add_argument("--max-interventions", type=int, default=8)
     parser.add_argument("--intervention-workers", type=int, default=4)
-    parser.add_argument("--interventions", help="comma-separated intervention names; default discovers all")
+    parser.add_argument(
+        "--interventions",
+        help="comma-separated intervention names; default discovers all",
+    )
     parser.add_argument(
         "--multiple-morphologies",
         action="store_true",
@@ -156,8 +247,8 @@ def main(argv: list[str] | None = None) -> int:
             format_evaluation_report,
             format_model_comparison,
             write_evaluation_report,
-            write_model_evaluation_cache,
             write_model_comparison,
+            write_model_evaluation_cache,
         )
     except ImportError as error:
         raise RuntimeError(
@@ -168,7 +259,9 @@ def main(argv: list[str] | None = None) -> int:
     model_id = args.model_id or Path(args.checkpoint).stem
     interventions = None
     if args.interventions:
-        interventions = tuple(name.strip() for name in args.interventions.split(",") if name.strip())
+        interventions = tuple(
+            name.strip() for name in args.interventions.split(",") if name.strip()
+        )
     config = EvaluationConfig(
         ignore_start=args.ignore_start,
         calibration_fraction=args.calibration_fraction,

@@ -29,6 +29,26 @@ The dependency-free `AxoPyTorchMamba` backend is intended for tests and smoke
 runs; official Mamba checkpoints use a different learned-timestep rank and are
 not state-dict compatible with that fallback.
 
+Deep AxoSim-Mamba configurations can condition each temporal-branch update to
+unit RMS before the learned residual multiplier:
+
+```python
+from axosim.axomamba import default_axomamba_config
+
+config = default_axomamba_config(
+    model_dim=400,
+    state_dim=100,
+    num_layers=12,
+    head_dim=100,
+    mamba_update_normalization="fixed_rms",
+)
+```
+
+This is an optimization-stability option.
+ The default is `"none"` so existing checkpoint behavior is unchanged;
+the selected mode is stored in new checkpoint configurations and is applied
+identically in full-sequence and streaming execution.
+
 The setup command creates local directories without downloading the large
 public datasets:
 
@@ -95,6 +115,25 @@ share the same neuron population and adaptation parameters. Both paths
 preserve full temporal gradients. `forward_tokens()` and
 `forward_token_batch()` expose pre-encoded P4 paths for full-BPTT adaptation
 without rebuilding exact contact inputs.
+
+When contact histories are sparse, `forward_sparse_contacts()` avoids a dense
+`population × time × contacts` tensor while retaining one independently
+trainable efficacy per contact:
+
+```python
+prediction = population.forward_sparse_contacts(
+    event_summary_indices,
+    event_contact_indices,
+    event_values,
+    time_steps=256,
+)
+```
+
+`event_summary_indices` address flattened `(population, time)` rows;
+`event_contact_indices` address flattened `(population, contact)` rows. Each
+paired index must identify the same target neuron. Gradients propagate through
+event values, behavior and morphology adapters, and selected contact
+efficacies.
 
 Fixed-shape online or test-time updates can capture the complete forward,
 loss, backward, gradient transform, and optimizer step:
@@ -305,4 +344,5 @@ interpretable ion-channel or compartment parameters. The population-context
 dataset uses biophysical teachers on connected-model input histories rather
 than a fully biophysical closed loop. A matched fixed-recipe run on the
 completed 50,000-trace corpus improved held-out trace metrics but did not
-improve the connected objective, so that checkpoint is not promoted here.
+pass the morphology-conditioned firing-rate criterion on three held-out
+connectomes, so that checkpoint is not promoted here.
