@@ -308,3 +308,55 @@ def test_population_accepts_differentiable_external_synaptic_values() -> None:
     assert external.grad is not None
     assert external.grad.abs().sum() > 0
     assert population.synaptic_log_efficacy.grad is None
+
+
+def test_sparse_contacts_do_not_allocate_inactive_contact_features() -> None:
+    """A few events must not expand a large contact bank into dense features."""
+    config = SupportP4Config(
+        input_dim=6, route_feature_dim=32, token_dim=4, state_dim=3,
+        morphology_ids=("m0",), behavior_adaptation=False,
+    )
+    neuron = AdaptiveSupportP4Surrogate(config, torch.randn(1, 6, 32))
+    population = AxoSimPopulation(
+        neuron, morphology_indices=torch.zeros(8, dtype=torch.long),
+        contact_branch_indices=torch.zeros(8, 8192, dtype=torch.long),
+    )
+    with torch.no_grad(), torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU], profile_memory=True,
+    ) as profile:
+        result = population.forward_sparse_contacts(
+            torch.tensor([0, 15]), torch.tensor([0, 8192]),
+            torch.tensor([1., 2.]), time_steps=12,
+        )
+    assert torch.isfinite(result).all()
+    largest = max(event.cpu_memory_usage for event in profile.events())
+    # The full contact-feature expansion is 8 MiB. Event-sized routing and the
+    # tiny neuronal state require far less than 1 MiB for any one allocation.
+    assert largest < 1024 * 1024
+
+
+def test_sparse_duplicate_events_match_dense_parameter_and_input_gradients() -> None:
+    import copy
+    dense_population = _population()
+    sparse_population = copy.deepcopy(dense_population)
+    values_dense = torch.tensor([1., .5, -0.25, 2.], requires_grad=True)
+    values_sparse = values_dense.detach().clone().requires_grad_(True)
+    # Duplicate contact/time event, two different neurons, and a negative input.
+    summary = torch.tensor([0, 0, 16, 35])
+    contact = torch.tensor([1, 1, 6, 8])
+    dense_input = torch.zeros(3 * 12 * 4).index_add(
+        0, torch.tensor([1, 1, 66, 140]), values_dense,
+    ).reshape(3, 12, 4)
+    dense = dense_population(dense_input)
+    sparse = sparse_population.forward_sparse_contacts(
+        summary, contact, values_sparse, time_steps=12,
+    )
+    torch.testing.assert_close(sparse, dense)
+    dense.square().sum().backward()
+    sparse.square().sum().backward()
+    torch.testing.assert_close(values_sparse.grad, values_dense.grad)
+    for dense_param, sparse_param in zip(
+        dense_population.parameters(), sparse_population.parameters(), strict=True,
+    ):
+        if dense_param.grad is not None:
+            torch.testing.assert_close(sparse_param.grad, dense_param.grad)

@@ -291,19 +291,32 @@ class AxoSimPopulation(nn.Module):
                     "the same target neuron"
                 )
 
-        efficacy = (
-            self.synaptic_efficacies(synaptic_log_efficacy)
-            .reshape(-1)
-            .index_select(0, event_contact_indices)
+        # Select active contacts before expanding their efficacies/features.
+        # Expanding the entire (population, contacts, features) bank defeats
+        # sparse input and can exhaust memory for high-fan-in connectomes.
+        log_efficacy = (
+            self.synaptic_log_efficacy
+            if synaptic_log_efficacy is None
+            else synaptic_log_efficacy
         )
-        route_features = (
-            self._contact_route_features()
-            .reshape(
-                -1,
-                self.neuron.config.route_feature_dim,
-            )
-            .index_select(0, event_contact_indices)
+        expected = (self.population_size, self.synaptic_efficacies_per_neuron)
+        if tuple(log_efficacy.shape) != expected:
+            raise ValueError(f"synaptic_log_efficacy must have shape {expected}")
+        efficacy = log_efficacy.reshape(-1).index_select(
+            0, event_contact_indices,
+        ).exp()
+        # Summary indices encode the target even for a zero-contact bank and
+        # an empty event list; avoid division by zero in that valid case.
+        event_neurons = torch.div(
+            event_summary_indices, time_steps, rounding_mode="floor",
         )
+        event_morphologies = self.morphology_indices.index_select(0, event_neurons)
+        event_branches = self.contact_branch_indices.reshape(-1).index_select(
+            0, event_contact_indices,
+        )
+        route_features = self.neuron.route_features[
+            event_morphologies, event_branches,
+        ]
         contributions = route_features.to(dtype=event_values.dtype) * (
             event_values * efficacy
         ).to(dtype=event_values.dtype).unsqueeze(-1)
