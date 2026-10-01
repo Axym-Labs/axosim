@@ -1,6 +1,6 @@
 # AxoSim
 
-AxoSim trains and executes feed-forward surrogates of biological neurons, from
+AxoSim trains and executes causal learned surrogates of biological neurons, from
 single-neuron AxoBench evaluation to connected million-neuron populations. The
 project has three public neuron models:
 
@@ -67,6 +67,68 @@ axosim-setup --dry-run --install-kaggle --download-data --convert-raw
 The public imports use the stable model names. Historical internal class names
 remain checkpoint-compatible.
 
+### Connected inference lifecycle
+
+`create_population` constructs an actually connected inference simulator from
+an explicitly supplied Lite model. It owns learned state, thresholds, the
+native clock and delayed recurrent deliveries. Supply the checkpoint's actual
+morphology IDs, input-channel roles/sign convention, and a threshold calibrated
+on development data; the factory never silently selects untrained weights.
+
+```python
+from axosim import create_population
+
+population = create_population(
+    model=trained_lite, n=len(morphology_indices), connectome=connectome,
+    morphology_indices=morphology_indices,
+    input_encoding="channel",  # Only if training used positive E/I channel counts.
+    channel_roles=channel_roles, stream_inputs=external_input_at_time,
+    stream_outputs={"spikes": "all", "soma_target": [0], "hidden_state": [0]},
+    spike_threshold=development_threshold,
+)
+for frame in population.run(duration_ms=100):
+    if frame.valid:
+        consume(frame.time_ms, frame.signals)
+
+saved = population.state_dict()
+population.step()                         # Continue the same native clock/state.
+snapshot = population.observe(neurons=[0], signals=("soma_target", "hidden_state"))
+population.load_state_dict(saved)         # Restore queue, partial patch and time.
+population.reset()                        # Return to construction-time state.
+```
+
+`ExplicitConnectome` preserves ragged degrees, parallel edges and independent
+float32 edge efficacies. `ProceduralConnectome` provides a deterministic
+implicit fan-out topology with exact per-edge efficacies. One native step is
+1 ms; Lite forecasts the next four outputs after each four-step input patch, so
+the first four samples are invalid warmup and recurrent delays must be at least
+4 ms. Invalid graphs are rejected without changing their contacts or delays.
+
+The `reference` backend executes the actual Lite model on CPU or CUDA.
+`backend="fused"` requires an explicitly CUDA FP16 Lite model and Triton, and
+uses the installed fused recurrence/decoder kernel. Exact graph scheduling,
+float32 contact values and queue accumulation remain separate. This facade is
+not the historical specialized tiled/W8 runtime, and published million-neuron
+timings are not performance claims for arbitrary graphs passed to it.
+
+Frames contain owned selected tensors and matching neuron IDs on the simulation
+device. `soma_target` uses the model coordinate; requesting `soma_mv` requires a
+validated affine `soma_transform`. Learned state is updated at timestamps
+3, 7, 11, ... and held between them, whereas spike and soma samples follow the
+native 1-ms forecast cadence. `run` advances when consumed and copies only at
+its requested sampling timestamps, without retaining an unbounded history.
+Coarse sampling does not accumulate skipped spike events.
+
+See the [complete connected lifecycle guide](https://axo.axym.org/connected-populations/)
+and [downloadable CPU wiring example](https://axo.axym.org/examples/connected_population_example.py).
+The latter is explicitly a hand-set functional oracle, not biological evidence.
+The [connected API reference](https://axo.axym.org/api/connected-population/)
+documents graph bounds, encoding, signal units, output ownership and saved-state
+replay. A deterministic native-time input callback must reproduce its input
+when replaying a saved timestamp; arbitrary callback state is not serialized.
+
+### Fit independently supplied histories
+
 ```python
 from axosim import (
     AXOSIM_POPULATION_PROFILE,
@@ -79,8 +141,10 @@ from axosim import (
 )
 ```
 
-`AxoSimPopulation` is an ordinary `torch.nn.Module`. It keeps three adaptation
-mechanisms separate:
+`AxoSimPopulation` is an ordinary `torch.nn.Module` for independently supplied
+contact histories, with full temporal gradients. It starts sequence state
+afresh and does not route emitted events between neurons. It keeps three
+adaptation mechanisms separate:
 
 - a direct behavior adapter for each neuron;
 - a morphology adapter shared only within a morphology class; and

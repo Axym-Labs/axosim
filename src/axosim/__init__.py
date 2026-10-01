@@ -34,10 +34,33 @@ __all__ = [
     "quantize_synaptic_efficacies",
     "quantize_mixed_neuron_behavior_parameters",
     "create_axosim_profile",
+    "ConnectedPopulation",
+    "ExplicitConnectome",
+    "InputEvents",
+    "PopulationFrame",
+    "ProceduralConnectome",
+    "create_population",
 ]
 
 
 def __getattr__(name: str) -> Any:
+    if name in {
+        "ConnectedPopulation", "ExplicitConnectome", "InputEvents",
+        "PopulationFrame", "ProceduralConnectome", "create_population",
+    }:
+        from axosim.connected_population import (
+            ConnectedPopulation, ExplicitConnectome, InputEvents,
+            PopulationFrame, ProceduralConnectome, create_population,
+        )
+
+        return {
+            "ConnectedPopulation": ConnectedPopulation,
+            "ExplicitConnectome": ExplicitConnectome,
+            "InputEvents": InputEvents,
+            "PopulationFrame": PopulationFrame,
+            "ProceduralConnectome": ProceduralConnectome,
+            "create_population": create_population,
+        }[name]
     if name == "CudaGraphAdaptationStep":
         from axosim.adaptation import CudaGraphAdaptationStep
 
