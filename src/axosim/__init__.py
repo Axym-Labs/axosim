@@ -20,6 +20,8 @@ __all__ = [
     "AxoSimPopulation",
     "CudaGraphAdaptationStep",
     "HomeostaticThresholdController",
+    "HistoryScanBackend",
+    "HistoryScanResult",
     "AXOSIM_MODEL_PROFILES",
     "BranchELM",
     "BranchELMConfig",
@@ -40,10 +42,19 @@ __all__ = [
     "PopulationFrame",
     "ProceduralConnectome",
     "create_population",
+    "scan_histories",
 ]
 
 
 def __getattr__(name: str) -> Any:
+    if name in {"HistoryScanBackend", "HistoryScanResult", "scan_histories"}:
+        from axosim.history_scan import HistoryScanBackend, HistoryScanResult, scan_histories
+
+        return {
+            "HistoryScanBackend": HistoryScanBackend,
+            "HistoryScanResult": HistoryScanResult,
+            "scan_histories": scan_histories,
+        }[name]
     if name in {
         "ConnectedPopulation", "ExplicitConnectome", "InputEvents",
         "PopulationFrame", "ProceduralConnectome", "create_population",
