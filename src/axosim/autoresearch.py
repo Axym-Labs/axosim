@@ -411,6 +411,7 @@ class TrainingObjective:
     direct_sera_loss_weight: float = 0.0
     dynamics_sera_loss_weight: float = 0.0
     f1_curve_loss_weight: float = 0.0
+    one_to_one_f1_loss_weight: float = 0.0
     near_spike_voltage_loss_weight: float = 0.0
     near_spike_radius_steps: int | None = None
     raw_soma_target_mix: float = 0.0
@@ -428,6 +429,7 @@ class TrainingObjective:
             self.direct_sera_loss_weight,
             self.dynamics_sera_loss_weight,
             self.f1_curve_loss_weight,
+            self.one_to_one_f1_loss_weight,
             self.near_spike_voltage_loss_weight,
             self.base_soma_loss_weight,
             self.base_soma_sera_loss_weight,
@@ -1620,6 +1622,14 @@ def training_objective_loss(
         )
         total = total + objective.f1_curve_loss_weight * f1_loss
         components["f1_curve_loss"] = f1_loss
+    if objective.one_to_one_f1_loss_weight:
+        one_to_one = probabilistic_one_to_one_f1_loss(
+            pred[..., 0],
+            tgt[..., 0],
+            tolerances_steps=objective.f1_tolerances_steps,
+        )
+        total = total + objective.one_to_one_f1_loss_weight * one_to_one
+        components["one_to_one_f1_loss"] = one_to_one
     if objective.near_spike_radius_steps is not None:
         near_spike_loss = differentiable_near_spike_voltage_loss(
             pred[..., 1],
@@ -1728,6 +1738,66 @@ def _differentiable_root_sera_from_error(
         torch.finfo(values.dtype).eps
     )
     return (area / span).clamp_min(0.0).sqrt()
+
+
+def probabilistic_one_to_one_f1_loss(
+    spike_logits: torch.Tensor,
+    spike_target: torch.Tensor,
+    *,
+    tolerances_steps: tuple[int, ...] = (0, 1, 2, 3, 4, 5),
+) -> torch.Tensor:
+    """Soft one-to-one F1 loss (1 - trapezoid F1 area over tolerances).
+
+    Every timestep within a tolerance band belongs to its nearest true event;
+    each event is hit with probability 1 - prod(1 - p) over its zone, and
+    probability beyond that hit or outside all zones counts as false-positive
+    mass, so duplicate predictions are penalized (ported from I130).
+    """
+    probability = torch.sigmoid(spike_logits)
+    exact = spike_target > 0.5
+    event_ids = exact.reshape(-1).to(torch.long).cumsum(0).reshape_as(exact)
+    event_ids = event_ids * exact.to(torch.long)
+    event_count = exact.sum().to(probability.dtype)
+    epsilon = torch.finfo(probability.dtype).eps
+    f1_values = []
+    for radius in tolerances_steps:
+        zones = event_ids.clone()
+        unassigned = zones == 0
+        for distance in range(1, radius + 1):
+            earlier = torch.zeros_like(event_ids)
+            earlier[:, distance:] = event_ids[:, :-distance]
+            take = unassigned & (earlier > 0)
+            zones = torch.where(take, earlier, zones)
+            unassigned = unassigned & ~take
+            later = torch.zeros_like(event_ids)
+            later[:, :-distance] = event_ids[:, distance:]
+            take = unassigned & (later > 0)
+            zones = torch.where(take, later, zones)
+            unassigned = unassigned & ~take
+        flat_zone = zones.reshape(-1)
+        flat_probability = probability.reshape(-1)
+        masses = torch.zeros(probability.numel() + 1, dtype=probability.dtype, device=probability.device)
+        masses = masses.scatter_add(0, flat_zone, flat_probability)
+        log_misses = torch.zeros_like(masses).scatter_add(
+            0, flat_zone, torch.log1p(-flat_probability.clamp(max=1.0 - epsilon))
+        )
+        hits = 1.0 - torch.exp(log_misses[1:])
+        true_positive = hits.sum()
+        false_negative = event_count - true_positive
+        false_positive = masses[0] + (masses[1:] - hits).clamp_min(0.0).sum()
+        f1_values.append(
+            2.0 * true_positive / (2.0 * true_positive + false_positive + false_negative).clamp_min(epsilon)
+        )
+    values = torch.as_tensor(tolerances_steps, dtype=probability.dtype, device=probability.device)
+    if len(tolerances_steps) == 1 or tolerances_steps[-1] == tolerances_steps[0]:
+        weights = torch.ones_like(values) / values.numel()
+    else:
+        widths = values[1:] - values[:-1]
+        weights = torch.zeros_like(values)
+        weights[:-1] += 0.5 * widths
+        weights[1:] += 0.5 * widths
+        weights = weights / (values[-1] - values[0])
+    return 1.0 - (weights * torch.stack(f1_values)).sum()
 
 
 def differentiable_f1_curve_loss(

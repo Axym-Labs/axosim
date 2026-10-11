@@ -59,6 +59,7 @@ class BranchOfficialMambaConfig:
     soma_highpass_correction: bool = False
     soma_highpass_correction_scale_init: float = 0.1
     spike_voltage_coupling_scale: float = 0.0
+    spike_voltage_coupling_detach: bool = False
     morphology_ids: list[str] | None = None
     morphology_embedding_scale: float | None = None
     population_adapter_morphology_id: str | None = None
@@ -1579,6 +1580,10 @@ class BranchOfficialMamba(nn.Module):
         return soma
 
     def _couple_spike_voltage(self, spike: torch.Tensor, soma: torch.Tensor) -> torch.Tensor:
+        # Optionally keep the forward coupling but stop spike-loss gradients
+        # from reaching the voltage path through it.
+        if self.config.spike_voltage_coupling_detach:
+            soma = soma.detach()
         return spike + self.config.spike_voltage_coupling_scale * soma
 
     def _filter_soma(self, soma: torch.Tensor) -> torch.Tensor:

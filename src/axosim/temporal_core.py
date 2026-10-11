@@ -36,6 +36,7 @@ class AxoTemporalCoreConfig:
     branch_memory_decay: float = 0.90
     residual_scale_init: float = 0.1
     keep_local_tcn: bool = False
+    gru_layers: int = 1
     patch_size: int = 1
     behavior_adapter_morphology_id: str | None = None
     behavior_adapter_rank: int = 0
@@ -203,6 +204,24 @@ class NeuronBehaviorAdapter(nn.Module):
     @property
     def parameter_count(self) -> int:
         return sum(self.parameter_counts.values())
+
+
+class StackedResidualGRUTemporalCore(nn.Module):
+    """Several residual GRU layers applied in sequence (full-sequence use).
+
+    Adapter deltas, if any, apply to the first layer only. Streaming
+    inference is not supported for stacked cores.
+    """
+
+    def __init__(self, layers: list[nn.Module]) -> None:
+        super().__init__()
+        self.layers = nn.ModuleList(layers)
+        self.width = layers[0].width
+
+    def forward(self, hidden: torch.Tensor, **kwargs) -> torch.Tensor:
+        for index, layer in enumerate(self.layers):
+            hidden = layer(hidden, **(kwargs if index == 0 else {}))
+        return hidden
 
 
 class ResidualGRUTemporalCore(nn.Module):
@@ -476,8 +495,19 @@ class AxoTemporalModel(nn.Module):
             self.backbone.local_tcn_blocks = nn.ModuleList()
             self.backbone.local_tcn_out = None
         width = int(self.backbone.config.model_dim)
-        if temporal_config.kind == "gru":
-            temporal_core: nn.Module = ResidualGRUTemporalCore(
+        if temporal_config.kind == "gru" and temporal_config.gru_layers > 1:
+            temporal_core: nn.Module = StackedResidualGRUTemporalCore(
+                [
+                    ResidualGRUTemporalCore(
+                        width,
+                        hidden_units=temporal_config.gru_hidden_units,
+                        residual_scale_init=temporal_config.residual_scale_init,
+                    )
+                    for _ in range(temporal_config.gru_layers)
+                ]
+            )
+        elif temporal_config.kind == "gru":
+            temporal_core = ResidualGRUTemporalCore(
                 width,
                 hidden_units=temporal_config.gru_hidden_units,
                 residual_scale_init=temporal_config.residual_scale_init,
