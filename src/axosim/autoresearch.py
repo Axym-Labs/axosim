@@ -530,6 +530,9 @@ class PanelCandidate:
     objective: TrainingObjective | None = None
     burn_in: int | None = None
     output_distillation_weight: float = 0.0
+    # Train with the model in eval mode (no dropout), e.g. to refit readout
+    # heads on the features the frozen backbone produces at inference.
+    eval_mode: bool = False
 
     def __post_init__(self) -> None:
         if not self.candidate_id:
@@ -681,6 +684,26 @@ def freeze_named_parameters(model: nn.Module, names: Iterable[str]) -> list[str]
     for name in requested:
         parameters[name].requires_grad_(False)
     return sorted(requested)
+
+
+READOUT_HEAD_SUFFIXES = (
+    "spike_readout.weight",
+    "spike_readout.bias",
+    "soma_readout.weight",
+    "soma_readout.bias",
+)
+
+
+def readout_head_parameter_names(model: nn.Module) -> list[str]:
+    """Names of the spike and soma readout heads of a GRU or Mamba profile."""
+    names = [
+        name
+        for name, _ in model.named_parameters()
+        if name.endswith(READOUT_HEAD_SUFFIXES)
+    ]
+    if len(names) != len(READOUT_HEAD_SUFFIXES):
+        raise ValueError(f"expected one spike and one soma readout head, found {names}")
+    return names
 
 
 def set_trainable_parameter_names(model: nn.Module, names: Iterable[str]) -> list[str]:
@@ -974,7 +997,8 @@ def train_candidate_panel(
         else None
     )
     for candidate in candidates:
-        model = candidate.model.to(device).train()
+        model = candidate.model.to(device)
+        model.train(not candidate.eval_mode)
         optimizer = _build_optimizer(
             model,
             candidate.optimizer_name,
