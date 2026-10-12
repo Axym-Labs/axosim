@@ -72,14 +72,17 @@ _PROFILES = (
         num_layers=4,
         head_dim=88,
     ),
+    # The published Large checkpoint: 20 layers with fixed-RMS branch updates.
+    # The earlier 8 x 488 configuration diverged at the shared learning rate.
     AxoSimModelProfile(
         "axosim-mamba-large",
         "AxoSim-Mamba Large",
         "mamba",
-        model_dim=488,
-        state_dim=124,
-        num_layers=8,
-        head_dim=124,
+        model_dim=314,
+        state_dim=80,
+        num_layers=20,
+        head_dim=80,
+        mamba_update_normalization="fixed_rms",
     ),
 )
 

@@ -23,9 +23,10 @@ def test_named_model_family_has_two_gru_and_three_mamba_profiles() -> None:
         "AxoSim-Mamba Large",
     ]
     assert {
-        profile.mamba_update_normalization
-        for profile in AXOSIM_MODEL_PROFILES.values()
-    } == {"none"}
+        profile_id: profile.mamba_update_normalization
+        for profile_id, profile in AXOSIM_MODEL_PROFILES.items()
+        if profile.mamba_update_normalization != "none"
+    } == {"axosim-mamba-large": "fixed_rms"}
 
 
 def test_profile_factory_builds_the_declared_temporal_family() -> None:

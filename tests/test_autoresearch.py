@@ -1170,6 +1170,7 @@ def test_candidate_panel_defaults_to_promoted_axomamba_recipe(tmp_path) -> None:
         "direct_sera_loss_weight": 0.01,
         "dynamics_sera_loss_weight": 0.0,
         "f1_curve_loss_weight": 0.05,
+        "one_to_one_f1_loss_weight": 0.0,
         "f1_tolerances_steps": (0, 1, 2, 3, 4, 5),
         "near_spike_radius_steps": 5,
         "near_spike_voltage_loss_weight": 0.002,
