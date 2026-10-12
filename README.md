@@ -104,6 +104,35 @@ implicit fan-out topology with exact per-edge efficacies. One native step is
 the first four samples are invalid warmup and recurrent delays must be at least
 4 ms. Invalid graphs are rejected without changing their contacts or delays.
 
+#### Build graphs from connectivity patterns
+
+PyNN-style builders return an ordinary `ExplicitConnectome`: `all_to_all`,
+`one_to_one`, `fixed_probability`, `fixed_indegree` and `from_list`, plus
+`concatenate` to join projections between neuron subsets (`pre`/`post`):
+
+```python
+import torch
+from axosim import concatenate, fixed_indegree, fixed_probability
+
+roles = torch.ones(100, dtype=torch.long)
+roles[80:] = -1                                    # Neurons 80-99 are inhibitory.
+shared = dict(neuron_roles=roles, channel_roles=channel_roles)
+excitatory = fixed_indegree(                       # 10 E sources per neuron.
+    100, 10, pre=range(80), seed=0, **shared,
+    delays=lambda s, t, g: torch.randint(4, 8, (len(s),), generator=g),
+)
+inhibitory = fixed_probability(                    # Distance-dependent p.
+    100, lambda s, t: 0.5 * torch.exp(-(s - t).abs() / 10.0),
+    pre=range(80, 100), efficacies=2.0, seed=1, **shared,
+)
+connectome = concatenate(excitatory, inhibitory)   # Then create_population(...).
+```
+
+Each edge takes its source neuron's role and a destination channel drawn from
+the checkpoint channels with that role (or explicit `channels`). Efficacies and
+delays are constants, per-edge arrays or seeded callables; delays below 4 ms are
+rejected. A seed reproduces the exact graph, and edge IDs follow its order.
+
 The `reference` backend executes the actual Lite model on CPU or CUDA.
 `backend="fused"` requires an explicitly CUDA FP16 Lite model and Triton, and
 uses the installed fused recurrence/decoder kernel. Exact graph scheduling,

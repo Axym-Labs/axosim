@@ -43,10 +43,24 @@ __all__ = [
     "ProceduralConnectome",
     "create_population",
     "scan_histories",
+    "all_to_all",
+    "concatenate",
+    "fixed_indegree",
+    "fixed_probability",
+    "from_list",
+    "one_to_one",
 ]
 
 
 def __getattr__(name: str) -> Any:
+    if name in {
+        "all_to_all", "concatenate", "connectors", "fixed_indegree",
+        "fixed_probability", "from_list", "one_to_one",
+    }:
+        import importlib
+
+        connectors = importlib.import_module("axosim.connectors")
+        return connectors if name == "connectors" else getattr(connectors, name)
     if name in {"HistoryScanBackend", "HistoryScanResult", "scan_histories"}:
         from axosim.history_scan import HistoryScanBackend, HistoryScanResult, scan_histories
 
