@@ -37,6 +37,9 @@ class AxoTemporalCoreConfig:
     residual_scale_init: float = 0.1
     keep_local_tcn: bool = False
     gru_layers: int = 1
+    # Dropout on the GRU residual correction during training, as AxoMamba
+    # blocks apply it to their residual update.
+    dropout: float = 0.0
     patch_size: int = 1
     behavior_adapter_morphology_id: str | None = None
     behavior_adapter_rank: int = 0
@@ -57,6 +60,8 @@ class AxoTemporalCoreConfig:
             raise ValueError("branch_memory_decay must be in [0, 1)")
         if self.residual_scale_init < 0:
             raise ValueError("residual_scale_init must be non-negative")
+        if not 0.0 <= self.dropout < 1.0:
+            raise ValueError("dropout must be in [0, 1)")
         if self.patch_size <= 0:
             raise ValueError("patch_size must be positive")
         if self.kind == "mamba" and self.patch_size != 1:
@@ -233,11 +238,13 @@ class ResidualGRUTemporalCore(nn.Module):
         *,
         hidden_units: int | None = None,
         residual_scale_init: float,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.width = width
         self.hidden_units = hidden_units or width
         self.pre_norm = nn.LayerNorm(width)
+        self.dropout = nn.Dropout(dropout)
         self.gru = nn.GRU(
             width,
             self.hidden_units,
@@ -299,7 +306,7 @@ class ResidualGRUTemporalCore(nn.Module):
                 device=recurrent.device,
             ).view(-1, 1, 1)
             recurrent = recurrent + mask * (adapted - recurrent)
-        return (
+        return self.dropout(
             self.residual_scale.view(1, 1, -1)
             * self.output_projection(recurrent)
         )
@@ -502,6 +509,7 @@ class AxoTemporalModel(nn.Module):
                         width,
                         hidden_units=temporal_config.gru_hidden_units,
                         residual_scale_init=temporal_config.residual_scale_init,
+                        dropout=temporal_config.dropout,
                     )
                     for _ in range(temporal_config.gru_layers)
                 ]
@@ -511,6 +519,7 @@ class AxoTemporalModel(nn.Module):
                 width,
                 hidden_units=temporal_config.gru_hidden_units,
                 residual_scale_init=temporal_config.residual_scale_init,
+                dropout=temporal_config.dropout,
             )
         else:
             temporal_core = BranchELMTemporalCore(

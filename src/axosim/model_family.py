@@ -120,6 +120,7 @@ def create_axosim_profile(
             kind="gru",
             gru_hidden_units=profile.model_dim,
             keep_local_tcn=False,
+            dropout=values["dropout"],
         ),
     )
     assert isinstance(model, AxoTemporalModel)
