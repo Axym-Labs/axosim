@@ -1,11 +1,22 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "axosim"
 version = "0.1.0"
-description = "AxoSim surrogate-model harness for biologically inspired neural simulation."
+description = "Learned single-neuron surrogates and connected neuron populations, trained on AxoBench."
+readme = "README.md"
+license = "Apache-2.0 AND MIT"
+license-files = ["LICENSE", "NOTICE", "LICENSES/*"]
+authors = [{ name = "Axym Labs" }]
+keywords = ["neuroscience", "neuron model", "surrogate model", "spiking neural network", "mamba"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24",
@@ -21,6 +32,13 @@ mamba = [
   "causal-conv1d>=1.6.2,<2",
   "mamba-ssm>=2.3.2,<3",
 ]
+bench = [
+  "axobench>=0.2.0",
+]
+
+[project.urls]
+Homepage = "https://axo.axym.org"
+Documentation = "https://axo.axym.org"
 
 [project.scripts]
 axosim = "axosim.cli:main"

@@ -16,13 +16,14 @@ quantization, memory layouts, and scheduling.
 ## Install
 
 ```bash
-python -m pip install -e .[dev]
+python -m pip install axosim            # or, from a checkout: python -m pip install -e .[dev]
 ```
 
-Released AxoSim-Mamba checkpoints require the fused official backend:
+Released AxoSim-Mamba checkpoints require the fused official backend, and
+AxoBench evaluation (`axosim-evaluate-model`) requires the `bench` extra:
 
 ```bash
-python -m pip install -e '.[mamba]'
+python -m pip install 'axosim[mamba,bench]'
 ```
 
 The dependency-free `AxoPyTorchMamba` backend is intended for tests and smoke

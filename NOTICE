@@ -1,0 +1,16 @@
+axosim
+Copyright 2026 Axym Labs
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE),
+except for the files listed below.
+
+The following files are licensed under the MIT License
+(LICENSES/ELM-MIT.txt). They are derived from the Expressive Leaky Memory
+(ELM) neuron reference implementation, Copyright (c) 2023 Aaron Spieler
+(https://github.com/AaronSpieler/elmneuron); modifications Copyright (c) 2026,
+Axym Labs:
+
+- src/axosim/official/expressive_leaky_memory_neuron.py and modeling_utils.py:
+  the Branch-ELM model, adapted for checkpoint-compatible inference.
+- src/axosim/official/constants.py and training.py: constants and the training
+  contract of the published NeuronIO models.
