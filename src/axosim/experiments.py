@@ -24,7 +24,7 @@ _PRESETS: dict[str, dict[str, dict[str, Any]]] = {
                 "learning_rate": 5e-4,
                 "lr_schedule": "cosine",
                 "lr_schedule_steps": 342000,
-                "optimizer": "adam",
+                "optimizer": "adam",  # the official Branch-ELM recipe, reproduced unchanged
                 "spike_loss_weight": 0.5,
                 "soma_loss_weight": 0.5,
                 "prefetch_batches": 1,
@@ -47,7 +47,7 @@ _PRESETS: dict[str, dict[str, dict[str, Any]]] = {
                 "learning_rate": 5e-4,
                 "lr_schedule": "cosine",
                 "lr_schedule_steps": 342000,
-                "optimizer": "adam",
+                "optimizer": "adam",  # the official Branch-ELM recipe, reproduced unchanged
                 "spike_loss_weight": 0.5,
                 "soma_loss_weight": 0.5,
                 "prefetch_batches": 1,
